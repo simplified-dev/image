@@ -134,6 +134,39 @@ public enum Compression {
 	private final int @NotNull [] magicBytes;
 
 	/**
+	 * Detects the compression type of the byte array by examining its magic bytes.
+	 *
+	 * @param data the byte array to examine
+	 * @return the detected compression type, or {@link #NONE} if no compression is detected
+	 */
+	public static @NotNull Compression getType(byte[] data) {
+		if (data == null || data.length == 0)
+			return NONE;
+
+		// Try to match against known compression formats
+		for (Compression compression : values()) {
+			if (compression == NONE)
+				continue;
+
+			if (data.length >= compression.magicBytes.length) {
+				boolean matches = true;
+
+				for (int i = 0; i < compression.magicBytes.length; i++) {
+					if ((data[i] & 0xFF) != compression.magicBytes[i]) {
+						matches = false;
+						break;
+					}
+				}
+
+				if (matches)
+					return compression;
+			}
+		}
+
+		return NONE;
+	}
+
+	/**
 	 * Detects the compression type of the input stream by examining its magic bytes.
 	 * <p>
 	 * This method will mark and reset the stream, so the original data can still be read.
@@ -161,27 +194,38 @@ public enum Compression {
 		int bytesRead = inputStream.read(buffer, 0, maxLength);
 		inputStream.reset();
 
-		// Try to match against known compression formats
-		for (Compression compression : values()) {
-			if (compression == NONE)
-				continue;
+		// If we couldn't read enough bytes, return NONE
+		if (bytesRead <= 0)
+			return NONE;
 
-			if (bytesRead >= compression.magicBytes.length) {
-				boolean matches = true;
+		return getType(buffer);
+	}
 
-				for (int i = 0; i < compression.magicBytes.length; i++) {
-					if ((buffer[i] & 0xFF) != compression.magicBytes[i]) {
-						matches = false;
-						break;
-					}
-				}
+	/**
+	 * Decompresses a byte array if it's compressed.
+	 * Returns the original array if no compression is detected.
+	 *
+	 * @param data the potentially compressed data
+	 * @return decompressed data or original if not compressed
+	 * @throws IOException if decompression fails
+	 * @throws UnsupportedOperationException if the detected compression format is not supported
+	 */
+	public static byte[] decompress(byte[] data) throws IOException {
+		Compression type = getType(data);
 
-				if (matches)
-					return compression;
-			}
+		if (type == NONE)
+			return data;
+
+		try (InputStream in = wrap(new ByteArrayDataInput(data));
+			ByteArrayDataOutput out = new ByteArrayDataOutput()) {
+			byte[] buffer = new byte[8192];
+			int length;
+
+			while ((length = in.read(buffer)) > 0)
+				out.write(buffer, 0, length);
+
+			return out.toByteArray();
 		}
-
-		return NONE;
 	}
 
 	/**
