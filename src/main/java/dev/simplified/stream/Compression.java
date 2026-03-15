@@ -1,6 +1,6 @@
 package dev.sbs.api.io.stream;
 
-import dev.sbs.api.io.exception.CompressionException;
+import dev.sbs.api.io.stream.exception.CompressionException;
 import lombok.Cleanup;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
