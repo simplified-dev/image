@@ -31,7 +31,7 @@ public class CompressionException extends IoException {
     /**
      * Constructs a new {@code CompressionException} with the specified cause and detail message.
      *
-     * @param cause   the underlying throwable that caused this exception
+     * @param cause the underlying throwable that caused this exception
      * @param message the detail message
      */
     public CompressionException(@NotNull Throwable cause, @NotNull String message) {
@@ -42,7 +42,7 @@ public class CompressionException extends IoException {
      * Constructs a new {@code CompressionException} with a formatted detail message.
      *
      * @param message the format string
-     * @param args    the format arguments
+     * @param args the format arguments
      */
     public CompressionException(@NotNull @PrintFormat String message, @Nullable Object... args) {
         super(message, args);
@@ -51,9 +51,9 @@ public class CompressionException extends IoException {
     /**
      * Constructs a new {@code CompressionException} with the specified cause and a formatted detail message.
      *
-     * @param cause   the underlying throwable that caused this exception
+     * @param cause the underlying throwable that caused this exception
      * @param message the format string
-     * @param args    the format arguments
+     * @param args the format arguments
      */
     public CompressionException(@NotNull Throwable cause, @NotNull @PrintFormat String message, @Nullable Object... args) {
         super(cause, message, args);
