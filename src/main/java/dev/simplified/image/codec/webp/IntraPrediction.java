@@ -5,8 +5,8 @@ import org.jetbrains.annotations.NotNull;
 /**
  * VP8 intra-frame spatial prediction for luma and chroma blocks.
  * <p>
- * Supports 4 luma 16x16 modes, 10 luma 4x4 sub-block modes,
- * and 4 chroma 8x8 modes.
+ * Supports 5 luma macroblock modes (4 whole-block 16x16 modes plus B_PRED),
+ * 10 luma 4x4 sub-block modes, and 4 chroma 8x8 modes.
  */
 final class IntraPrediction {
 
@@ -15,9 +15,25 @@ final class IntraPrediction {
     static final int V_PRED = 1;
     static final int H_PRED = 2;
     static final int TM_PRED = 3;
+    /** Per-sub-block prediction mode - each 4x4 block has its own mode. */
+    static final int B_PRED = 4;
 
-    /** Number of 16x16 luma modes. */
+    /** 4x4 sub-block prediction modes. */
+    static final int B_DC_PRED = 0;
+    static final int B_TM_PRED = 1;
+    static final int B_VE_PRED = 2;
+    static final int B_HE_PRED = 3;
+    static final int B_LD_PRED = 4;
+    static final int B_RD_PRED = 5;
+    static final int B_VR_PRED = 6;
+    static final int B_VL_PRED = 7;
+    static final int B_HD_PRED = 8;
+    static final int B_HU_PRED = 9;
+
+    /** Number of 16x16 luma modes (excluding B_PRED). */
     static final int NUM_16x16_MODES = 4;
+    /** Number of macroblock luma modes (including B_PRED). */
+    static final int NUM_YMODES = 5;
     /** Number of 4x4 sub-block modes. */
     static final int NUM_4x4_MODES = 10;
     /** Number of 8x8 chroma modes. */
@@ -26,15 +42,163 @@ final class IntraPrediction {
     private IntraPrediction() { }
 
     /**
-     * Fills a 4x4 block with predicted values using the given mode.
+     * Fills a 4x4 block with predicted values using a B_PRED sub-block mode.
      *
      * @param predicted output 16-element predicted block
-     * @param above 4-element row of pixels above the block (null if top row)
+     * @param above 8-element row - 4 above pixels followed by 4 above-right pixels (null if top row)
      * @param left 4-element column of pixels to the left (null if left column)
-     * @param aboveLeft the pixel above-left of the block (0 if unavailable)
-     * @param mode the prediction mode (0-9 for 4x4, 0-3 for 16x16)
+     * @param aboveLeft the pixel above-left of the block (128 if unavailable)
+     * @param mode the sub-block prediction mode (0-9)
      */
     static void predict4x4(
+        short @NotNull [] predicted,
+        short[] above,
+        short[] left,
+        short aboveLeft,
+        int mode
+    ) {
+        switch (mode) {
+            case B_DC_PRED -> {
+                int sum = 0;
+                int count = 0;
+                if (above != null) { for (int i = 0; i < 4; i++) sum += above[i]; count += 4; }
+                if (left != null) { for (short v : left) sum += v; count += 4; }
+                short dc = count > 0 ? (short) ((sum + count / 2) / count) : (short) 128;
+                java.util.Arrays.fill(predicted, dc);
+            }
+            case B_TM_PRED -> {
+                for (int y = 0; y < 4; y++)
+                    for (int x = 0; x < 4; x++) {
+                        int a = above != null ? above[x] : 127;
+                        int l = left != null ? left[y] : 129;
+                        predicted[y * 4 + x] = (short) clamp(a + l - aboveLeft);
+                    }
+            }
+            case B_VE_PRED -> {
+                if (above == null) { java.util.Arrays.fill(predicted, (short) 127); return; }
+                short c0 = avg3(aboveLeft, above[0], above[1]);
+                short c1 = avg3(above[0], above[1], above[2]);
+                short c2 = avg3(above[1], above[2], above[3]);
+                short c3 = avg3(above[2], above[3], above[4]);
+                for (int y = 0; y < 4; y++) {
+                    predicted[y * 4] = c0;
+                    predicted[y * 4 + 1] = c1;
+                    predicted[y * 4 + 2] = c2;
+                    predicted[y * 4 + 3] = c3;
+                }
+            }
+            case B_HE_PRED -> {
+                if (left == null) { java.util.Arrays.fill(predicted, (short) 129); return; }
+                short r0 = avg3(aboveLeft, left[0], left[1]);
+                short r1 = avg3(left[0], left[1], left[2]);
+                short r2 = avg3(left[1], left[2], left[3]);
+                short r3 = avg3(left[2], left[3], left[3]);
+                for (int x = 0; x < 4; x++) {
+                    predicted[x] = r0;
+                    predicted[4 + x] = r1;
+                    predicted[8 + x] = r2;
+                    predicted[12 + x] = r3;
+                }
+            }
+            case B_LD_PRED -> {
+                if (above == null) { java.util.Arrays.fill(predicted, (short) 128); return; }
+                predicted[0] = avg3(above[0], above[1], above[2]);
+                predicted[1] = predicted[4] = avg3(above[1], above[2], above[3]);
+                predicted[2] = predicted[5] = predicted[8] = avg3(above[2], above[3], above[4]);
+                predicted[3] = predicted[6] = predicted[9] = predicted[12] = avg3(above[3], above[4], above[5]);
+                predicted[7] = predicted[10] = predicted[13] = avg3(above[4], above[5], above[6]);
+                predicted[11] = predicted[14] = avg3(above[5], above[6], above[7]);
+                predicted[15] = avg3(above[6], above[7], above[7]);
+            }
+            case B_RD_PRED -> {
+                int P = aboveLeft;
+                int A = above != null ? above[0] : 128, B = above != null ? above[1] : 128;
+                int C = above != null ? above[2] : 128, D = above != null ? above[3] : 128;
+                int I = left != null ? left[0] : 128, J = left != null ? left[1] : 128;
+                int K = left != null ? left[2] : 128, L = left != null ? left[3] : 128;
+                predicted[12] = avg3(J, K, L);
+                predicted[8] = predicted[13] = avg3(I, J, K);
+                predicted[4] = predicted[9] = predicted[14] = avg3(P, I, J);
+                predicted[0] = predicted[5] = predicted[10] = predicted[15] = avg3(I, P, A);
+                predicted[1] = predicted[6] = predicted[11] = avg3(P, A, B);
+                predicted[2] = predicted[7] = avg3(A, B, C);
+                predicted[3] = avg3(B, C, D);
+            }
+            case B_VR_PRED -> {
+                int P = aboveLeft;
+                int A = above != null ? above[0] : 128, B = above != null ? above[1] : 128;
+                int C = above != null ? above[2] : 128, D = above != null ? above[3] : 128;
+                int I = left != null ? left[0] : 128, J = left != null ? left[1] : 128;
+                int K = left != null ? left[2] : 128;
+                predicted[12] = avg3(K, J, I);
+                predicted[8] = avg3(J, I, P);
+                predicted[4] = predicted[13] = avg3(I, P, A);
+                predicted[0] = predicted[9] = avg2(P, A);
+                predicted[5] = predicted[14] = avg3(P, A, B);
+                predicted[1] = predicted[10] = avg2(A, B);
+                predicted[6] = predicted[15] = avg3(A, B, C);
+                predicted[2] = predicted[11] = avg2(B, C);
+                predicted[7] = avg3(B, C, D);
+                predicted[3] = avg2(C, D);
+            }
+            case B_VL_PRED -> {
+                if (above == null) { java.util.Arrays.fill(predicted, (short) 128); return; }
+                int A = above[0], B = above[1], C = above[2], D = above[3];
+                int E = above[4], F = above[5], G = above[6];
+                predicted[0] = avg2(A, B);
+                predicted[4] = avg3(A, B, C);
+                predicted[1] = predicted[8] = avg2(B, C);
+                predicted[5] = predicted[12] = avg3(B, C, D);
+                predicted[2] = predicted[9] = avg2(C, D);
+                predicted[6] = predicted[13] = avg3(C, D, E);
+                predicted[3] = predicted[10] = avg2(D, E);
+                predicted[7] = predicted[14] = avg3(D, E, F);
+                predicted[11] = avg2(E, F);
+                predicted[15] = avg3(E, F, G);
+            }
+            case B_HD_PRED -> {
+                int P = aboveLeft;
+                int A = above != null ? above[0] : 128, B = above != null ? above[1] : 128;
+                int C = above != null ? above[2] : 128;
+                int I = left != null ? left[0] : 128, J = left != null ? left[1] : 128;
+                int K = left != null ? left[2] : 128, L = left != null ? left[3] : 128;
+                predicted[12] = avg2(L, K);
+                predicted[13] = avg3(L, K, J);
+                predicted[8] = predicted[14] = avg2(K, J);
+                predicted[9] = predicted[15] = avg3(K, J, I);
+                predicted[4] = predicted[10] = avg2(J, I);
+                predicted[5] = predicted[11] = avg3(J, I, P);
+                predicted[0] = predicted[6] = avg2(I, P);
+                predicted[1] = predicted[7] = avg3(I, P, A);
+                predicted[2] = avg3(P, A, B);
+                predicted[3] = avg3(A, B, C);
+            }
+            case B_HU_PRED -> {
+                if (left == null) { java.util.Arrays.fill(predicted, (short) 128); return; }
+                int I = left[0], J = left[1], K = left[2], L = left[3];
+                predicted[0] = avg2(I, J);
+                predicted[1] = avg3(I, J, K);
+                predicted[2] = predicted[4] = avg2(J, K);
+                predicted[3] = predicted[5] = avg3(J, K, L);
+                predicted[6] = predicted[8] = avg2(K, L);
+                predicted[7] = predicted[9] = avg3(K, L, L);
+                predicted[10] = predicted[11] = predicted[12] = predicted[13] =
+                    predicted[14] = predicted[15] = (short) L;
+            }
+            default -> java.util.Arrays.fill(predicted, (short) 128);
+        }
+    }
+
+    /**
+     * Fills an 8x8 block with predicted values using the given mode.
+     *
+     * @param predicted output 64-element predicted block
+     * @param above 8-element row of pixels above the block (null if top row)
+     * @param left 8-element column of pixels to the left (null if left column)
+     * @param aboveLeft the pixel above-left of the block (128 if unavailable)
+     * @param mode the prediction mode (0-3)
+     */
+    static void predict8x8(
         short @NotNull [] predicted,
         short[] above,
         short[] left,
@@ -45,28 +209,76 @@ final class IntraPrediction {
             case DC_PRED -> {
                 int sum = 0;
                 int count = 0;
-                if (above != null) { for (short v : above) sum += v; count += 4; }
-                if (left != null) { for (short v : left) sum += v; count += 4; }
+                if (above != null) { for (short v : above) sum += v; count += 8; }
+                if (left != null) { for (short v : left) sum += v; count += 8; }
                 short dc = count > 0 ? (short) ((sum + count / 2) / count) : (short) 128;
                 java.util.Arrays.fill(predicted, dc);
             }
             case V_PRED -> {
                 if (above == null) { java.util.Arrays.fill(predicted, (short) 127); return; }
-                for (int y = 0; y < 4; y++)
-                    System.arraycopy(above, 0, predicted, y * 4, 4);
+                for (int y = 0; y < 8; y++)
+                    System.arraycopy(above, 0, predicted, y * 8, 8);
             }
             case H_PRED -> {
                 if (left == null) { java.util.Arrays.fill(predicted, (short) 129); return; }
-                for (int y = 0; y < 4; y++)
-                    for (int x = 0; x < 4; x++)
-                        predicted[y * 4 + x] = left[y];
+                for (int y = 0; y < 8; y++)
+                    for (int x = 0; x < 8; x++)
+                        predicted[y * 8 + x] = left[y];
             }
             case TM_PRED -> {
-                for (int y = 0; y < 4; y++)
-                    for (int x = 0; x < 4; x++) {
+                for (int y = 0; y < 8; y++)
+                    for (int x = 0; x < 8; x++) {
                         int a = above != null ? above[x] : 127;
                         int l = left != null ? left[y] : 129;
-                        predicted[y * 4 + x] = (short) clamp(a + l - aboveLeft);
+                        predicted[y * 8 + x] = (short) clamp(a + l - aboveLeft);
+                    }
+            }
+            default -> java.util.Arrays.fill(predicted, (short) 128);
+        }
+    }
+
+    /**
+     * Fills a 16x16 block with predicted values using the given mode.
+     *
+     * @param predicted output 256-element predicted block
+     * @param above 16-element row of pixels above the block (null if top row)
+     * @param left 16-element column of pixels to the left (null if left column)
+     * @param aboveLeft the pixel above-left of the block (128 if unavailable)
+     * @param mode the prediction mode (0-3)
+     */
+    static void predict16x16(
+        short @NotNull [] predicted,
+        short[] above,
+        short[] left,
+        short aboveLeft,
+        int mode
+    ) {
+        switch (mode) {
+            case DC_PRED -> {
+                int sum = 0;
+                int count = 0;
+                if (above != null) { for (short v : above) sum += v; count += 16; }
+                if (left != null) { for (short v : left) sum += v; count += 16; }
+                short dc = count > 0 ? (short) ((sum + count / 2) / count) : (short) 128;
+                java.util.Arrays.fill(predicted, dc);
+            }
+            case V_PRED -> {
+                if (above == null) { java.util.Arrays.fill(predicted, (short) 127); return; }
+                for (int y = 0; y < 16; y++)
+                    System.arraycopy(above, 0, predicted, y * 16, 16);
+            }
+            case H_PRED -> {
+                if (left == null) { java.util.Arrays.fill(predicted, (short) 129); return; }
+                for (int y = 0; y < 16; y++)
+                    for (int x = 0; x < 16; x++)
+                        predicted[y * 16 + x] = left[y];
+            }
+            case TM_PRED -> {
+                for (int y = 0; y < 16; y++)
+                    for (int x = 0; x < 16; x++) {
+                        int a = above != null ? above[x] : 127;
+                        int l = left != null ? left[y] : 129;
+                        predicted[y * 16 + x] = (short) clamp(a + l - aboveLeft);
                     }
             }
             default -> java.util.Arrays.fill(predicted, (short) 128);
@@ -87,6 +299,14 @@ final class IntraPrediction {
             ssd += (long) diff * diff;
         }
         return ssd;
+    }
+
+    private static short avg2(int a, int b) {
+        return (short) ((a + b + 1) >> 1);
+    }
+
+    private static short avg3(int a, int b, int c) {
+        return (short) ((a + 2 * b + c + 2) >> 2);
     }
 
     private static int clamp(int value) {

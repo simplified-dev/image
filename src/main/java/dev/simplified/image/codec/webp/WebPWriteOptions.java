@@ -67,7 +67,7 @@ public class WebPWriteOptions implements ImageWriteOptions {
          * @return this builder for chaining
          */
         public @NotNull Builder withQuality(float quality) {
-            this.quality = Math.max(0.0f, Math.min(1.0f, quality));
+            this.quality = Math.clamp(quality, 0.0f, 1.0f);
             return this;
         }
 

@@ -92,13 +92,10 @@ public class WebPImageWriter implements ImageWriter {
 
         // Encode all frames (optionally in parallel)
         ConcurrentList<byte[]> encodedPayloads;
-        boolean finalLossless = lossless;
-        float finalQuality = quality;
-
         if (multithreaded) {
             var futures = frames.stream()
                 .map(frame -> CompletableFuture.supplyAsync(
-                    () -> encodeFrame(frame, finalLossless, finalQuality),
+                    () -> encodeFrame(frame, lossless, quality),
                     SimplifiedApi.getScheduler()
                 ))
                 .collect(Concurrent.toList());
@@ -107,7 +104,7 @@ public class WebPImageWriter implements ImageWriter {
                 .collect(Concurrent.toList());
         } else {
             encodedPayloads = frames.stream()
-                .map(frame -> encodeFrame(frame, finalLossless, finalQuality))
+                .map(frame -> encodeFrame(frame, lossless, quality))
                 .collect(Concurrent.toList());
         }
 

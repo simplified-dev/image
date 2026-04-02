@@ -98,6 +98,28 @@ final class BooleanDecoder {
     }
 
     /**
+     * Decodes a value from a VP8 probability tree.
+     * <p>
+     * The tree is a flat array of pairs. Starting at index 0, a bit is decoded
+     * using the probability at {@code probs[index >> 1]}. If the resulting
+     * tree entry is positive, it is the next index; if zero or negative, its
+     * negation is the decoded leaf value.
+     *
+     * @param tree the tree array (2 entries per internal node)
+     * @param probs one probability per internal node
+     * @return the decoded leaf value
+     */
+    int decodeTree(int @NotNull [] tree, int @NotNull [] probs) {
+        int i = 0;
+
+        do {
+            i = tree[i + decodeBit(probs[i >> 1])];
+        } while (i > 0);
+
+        return -i;
+    }
+
+    /**
      * Decodes a signed integer of the given bit width.
      *
      * @param bits the number of bits (excluding sign)

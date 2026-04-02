@@ -75,8 +75,8 @@ public class WebPImageReader implements ImageReader {
         int canvasWidth = 1 + ((payload[4] & 0xFF) | ((payload[5] & 0xFF) << 8) | ((payload[6] & 0xFF) << 16));
         int canvasHeight = 1 + ((payload[7] & 0xFF) | ((payload[8] & 0xFF) << 8) | ((payload[9] & 0xFF) << 16));
 
-        if (canvasWidth <= 0 || canvasHeight <= 0)
-            throw new ImageDecodeException("Invalid VP8X canvas dimensions: %dx%d", canvasWidth, canvasHeight);
+        if (canvasWidth > 16383 || canvasHeight > 16383)
+            throw new ImageDecodeException("VP8X canvas dimensions exceed spec maximum: %dx%d", canvasWidth, canvasHeight);
 
         if (!hasAnimation) {
             // Static extended image (may have alpha + VP8 or VP8L)
@@ -84,7 +84,7 @@ public class WebPImageReader implements ImageReader {
             if (vp8l != null) return decodeVP8L(vp8l);
 
             WebPChunk vp8 = findChunk(chunks, WebPChunkType.VP8);
-            WebPChunk alph = findChunk(chunks, WebPChunkType.ALPH);
+            WebPChunk alph = hasAlpha ? findChunk(chunks, WebPChunkType.ALPH) : null;
 
             if (vp8 != null)
                 return decodeVP8WithAlpha(vp8, alph);
@@ -132,6 +132,13 @@ public class WebPImageReader implements ImageReader {
             System.arraycopy(anmf, 16, frameBitstream, 0, frameBitstream.length);
 
             BufferedImage frameImage = decodeFrameBitstream(frameBitstream);
+
+            if (frameImage.getWidth() != frameW || frameImage.getHeight() != frameH)
+                throw new ImageDecodeException(
+                    "ANMF frame size mismatch: declared %dx%d but decoded %dx%d",
+                    frameW, frameH, frameImage.getWidth(), frameImage.getHeight()
+                );
+
             frames.add(ImageFrame.of(frameImage, durationMs, frameX, frameY, disposal, blend));
         }
 
@@ -211,7 +218,7 @@ public class WebPImageReader implements ImageReader {
             .orElse(null);
     }
 
-    private static int readLE32(byte[] data, int offset) {
+    private static int readLE32(byte @NotNull [] data, int offset) {
         return (data[offset] & 0xFF)
             | ((data[offset + 1] & 0xFF) << 8)
             | ((data[offset + 2] & 0xFF) << 16)

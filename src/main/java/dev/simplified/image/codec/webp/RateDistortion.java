@@ -94,8 +94,7 @@ final class RateDistortion {
             predict8x8(predCb, aboveCb, leftCb, aboveLeftCb, mode);
             predict8x8(predCr, aboveCr, leftCr, aboveLeftCr, mode);
 
-            long ssd = IntraPrediction.computeSSD(cbSamples, predCb) + IntraPrediction.computeSSD(crSamples, predCr);
-            double cost = ssd;
+            double cost = (double) IntraPrediction.computeSSD(cbSamples, predCb) + IntraPrediction.computeSSD(crSamples, predCr);
 
             if (cost < bestCost) {
                 bestCost = cost;
