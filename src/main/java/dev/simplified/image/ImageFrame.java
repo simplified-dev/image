@@ -19,8 +19,8 @@ public class ImageFrame {
     private final int delayMs;
     private final int offsetX;
     private final int offsetY;
-    private final @NotNull FrameDisposal disposal;
-    private final @NotNull FrameBlend blend;
+    private final @NotNull Disposal disposal;
+    private final @NotNull Blend blend;
 
     /**
      * Creates a frame with the given image and delay, using default offset and disposal.
@@ -30,7 +30,7 @@ public class ImageFrame {
      * @return a new image frame
      */
     public static @NotNull ImageFrame of(@NotNull BufferedImage image, int delayMs) {
-        return new ImageFrame(image, delayMs, 0, 0, FrameDisposal.NONE, FrameBlend.SOURCE);
+        return new ImageFrame(image, delayMs, 0, 0, Disposal.NONE, Blend.SOURCE);
     }
 
     /**
@@ -49,8 +49,8 @@ public class ImageFrame {
         int delayMs,
         int offsetX,
         int offsetY,
-        @NotNull FrameDisposal disposal,
-        @NotNull FrameBlend blend
+        @NotNull Disposal disposal,
+        @NotNull ImageFrame.Blend blend
     ) {
         return new ImageFrame(image, delayMs, offsetX, offsetY, disposal, blend);
     }
@@ -60,7 +60,7 @@ public class ImageFrame {
      */
     @Getter
     @RequiredArgsConstructor
-    public enum FrameDisposal {
+    public enum Disposal {
 
         /** No disposal action specified. */
         NONE(0, "none"),
@@ -80,7 +80,7 @@ public class ImageFrame {
          * @param value the disposal method identifier
          * @return the matching disposal method, or {@link #NONE} if unrecognized
          */
-        public static @NotNull FrameDisposal of(int value) {
+        public static @NotNull Disposal of(int value) {
             return Arrays.stream(values())
                 .filter(disposal -> disposal.getValue() == value)
                 .findFirst()
@@ -93,7 +93,7 @@ public class ImageFrame {
          * @param value the disposal method identifier
          * @return the matching disposal method, or {@link #NONE} if unrecognized
          */
-        public static @NotNull FrameDisposal of(@NotNull String value) {
+        public static @NotNull Disposal of(@NotNull String value) {
             return Arrays.stream(values())
                 .filter(disposal -> disposal.getMethod().equalsIgnoreCase(value))
                 .findFirst()
@@ -107,7 +107,7 @@ public class ImageFrame {
      */
     @Getter
     @RequiredArgsConstructor
-    public enum FrameBlend {
+    public enum Blend {
 
         /** Replace the canvas region with this frame's pixels. */
         SOURCE(0),
@@ -122,7 +122,7 @@ public class ImageFrame {
          * @param value the blend mode identifier
          * @return the matching blend mode, or {@link #SOURCE} if unrecognized
          */
-        public static @NotNull FrameBlend of(int value) {
+        public static @NotNull Blend of(int value) {
             return Arrays.stream(values())
                 .filter(blend -> blend.getValue() == value)
                 .findFirst()

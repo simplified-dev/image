@@ -6,8 +6,8 @@ import dev.sbs.api.io.image.AnimatedImageData;
 import dev.sbs.api.io.image.ImageData;
 import dev.sbs.api.io.image.ImageFormat;
 import dev.sbs.api.io.image.ImageFrame;
-import dev.sbs.api.io.image.ImageFrame.FrameBlend;
-import dev.sbs.api.io.image.ImageFrame.FrameDisposal;
+import dev.sbs.api.io.image.ImageFrame.Blend;
+import dev.sbs.api.io.image.ImageFrame.Disposal;
 import dev.sbs.api.io.image.StaticImageData;
 import dev.sbs.api.io.image.codec.ImageReadOptions;
 import dev.sbs.api.io.image.codec.ImageReader;
@@ -63,7 +63,7 @@ public class GifImageReader implements ImageReader {
             int delayMs = 100;
             int offsetX = 0;
             int offsetY = 0;
-            FrameDisposal disposal = FrameDisposal.NONE;
+            Disposal disposal = Disposal.NONE;
 
             if (metadata != null) {
                 String formatName = metadata.getNativeMetadataFormatName();
@@ -78,7 +78,7 @@ public class GifImageReader implements ImageReader {
 
                     String disposalAttr = gce.getAttribute("disposalMethod");
                     if (StringUtil.isNotEmpty(disposalAttr))
-                        disposal = FrameDisposal.of(disposalAttr);
+                        disposal = Disposal.of(disposalAttr);
                 }
 
                 // Extract ImageDescriptor for offsets
@@ -98,7 +98,7 @@ public class GifImageReader implements ImageReader {
                 }
             }
 
-            frames.add(ImageFrame.of(image, delayMs, offsetX, offsetY, disposal, FrameBlend.SOURCE));
+            frames.add(ImageFrame.of(image, delayMs, offsetX, offsetY, disposal, Blend.SOURCE));
         }
 
         reader.dispose();

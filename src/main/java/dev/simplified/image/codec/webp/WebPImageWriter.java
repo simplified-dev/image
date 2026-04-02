@@ -194,8 +194,8 @@ public class WebPImageWriter implements ImageWriter {
         payload[14] = (byte) ((dur >> 16) & 0xFF);
 
         int flags = 0;
-        if (frame.getDisposal() == ImageFrame.FrameDisposal.RESTORE_TO_BACKGROUND) flags |= 0x01;
-        if (frame.getBlend() == ImageFrame.FrameBlend.SOURCE) flags |= 0x02;
+        if (frame.getDisposal() == ImageFrame.Disposal.RESTORE_TO_BACKGROUND) flags |= 0x01;
+        if (frame.getBlend() == ImageFrame.Blend.SOURCE) flags |= 0x02;
         payload[15] = (byte) flags;
 
         System.arraycopy(frameBitstream, 0, payload, 16, frameBitstream.length);

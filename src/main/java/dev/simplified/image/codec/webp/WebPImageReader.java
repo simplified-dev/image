@@ -6,8 +6,8 @@ import dev.sbs.api.io.image.AnimatedImageData;
 import dev.sbs.api.io.image.ImageData;
 import dev.sbs.api.io.image.ImageFormat;
 import dev.sbs.api.io.image.ImageFrame;
-import dev.sbs.api.io.image.ImageFrame.FrameBlend;
-import dev.sbs.api.io.image.ImageFrame.FrameDisposal;
+import dev.sbs.api.io.image.ImageFrame.Blend;
+import dev.sbs.api.io.image.ImageFrame.Disposal;
 import dev.sbs.api.io.image.PixelBuffer;
 import dev.sbs.api.io.image.StaticImageData;
 import dev.sbs.api.io.image.codec.ImageReadOptions;
@@ -120,12 +120,12 @@ public class WebPImageReader implements ImageReader {
             int durationMs = (anmf[12] & 0xFF) | ((anmf[13] & 0xFF) << 8) | ((anmf[14] & 0xFF) << 16);
             int flagsByte = anmf[15] & 0xFF;
 
-            FrameDisposal disposal = (flagsByte & 0x01) != 0
-                ? FrameDisposal.RESTORE_TO_BACKGROUND
-                : FrameDisposal.DO_NOT_DISPOSE;
-            FrameBlend blend = (flagsByte & 0x02) != 0
-                ? FrameBlend.SOURCE
-                : FrameBlend.OVER;
+            Disposal disposal = (flagsByte & 0x01) != 0
+                ? Disposal.RESTORE_TO_BACKGROUND
+                : Disposal.DO_NOT_DISPOSE;
+            Blend blend = (flagsByte & 0x02) != 0
+                ? Blend.SOURCE
+                : Blend.OVER;
 
             // Frame bitstream starts at offset 16
             byte[] frameBitstream = new byte[anmf.length - 16];
