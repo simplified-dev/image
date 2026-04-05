@@ -2,8 +2,7 @@ package dev.sbs.api.io.image;
 
 import dev.sbs.api.collection.concurrent.Concurrent;
 import dev.sbs.api.collection.concurrent.ConcurrentList;
-import dev.sbs.api.util.builder.BuildFlag;
-import dev.sbs.api.util.builder.ClassBuilder;
+import dev.sbs.api.reflection.builder.BuildFlag;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
@@ -103,7 +102,7 @@ public class AnimatedImageData implements ImageData {
     /**
      * Builds {@link AnimatedImageData} instances with configurable animation parameters.
      */
-    public static class Builder implements ClassBuilder<AnimatedImageData> {
+    public static class Builder {
 
         @BuildFlag(nonNull = true, notEmpty = true)
         private ConcurrentList<ImageFrame> frames = Concurrent.newList();
@@ -182,7 +181,6 @@ public class AnimatedImageData implements ImageData {
             return this;
         }
 
-        @Override
         public @NotNull AnimatedImageData build() {
             ImageFrame first = this.frames.getFirst();
             int w = this.width > 0 ? this.width : first.getImage().getWidth();

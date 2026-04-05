@@ -1,7 +1,6 @@
 package dev.sbs.api.io.image.codec.gif;
 
 import dev.sbs.api.io.image.codec.ImageWriteOptions;
-import dev.sbs.api.util.builder.ClassBuilder;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
@@ -30,7 +29,7 @@ public class GifWriteOptions implements ImageWriteOptions {
     /**
      * Builds {@link GifWriteOptions} instances.
      */
-    public static class Builder implements ClassBuilder<GifWriteOptions> {
+    public static class Builder {
 
         private int loopCount = 0;
         private boolean transparent = false;
@@ -78,7 +77,6 @@ public class GifWriteOptions implements ImageWriteOptions {
             return this;
         }
 
-        @Override
         public @NotNull GifWriteOptions build() {
             return new GifWriteOptions(this.loopCount, this.transparent, this.transparentColorIndex);
         }

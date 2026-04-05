@@ -1,7 +1,6 @@
 package dev.sbs.api.io.image.codec.jpeg;
 
 import dev.sbs.api.io.image.codec.ImageWriteOptions;
-import dev.sbs.api.util.builder.ClassBuilder;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
@@ -28,7 +27,7 @@ public class JpegWriteOptions implements ImageWriteOptions {
     /**
      * Builds {@link JpegWriteOptions} instances.
      */
-    public static class Builder implements ClassBuilder<JpegWriteOptions> {
+    public static class Builder {
 
         private float quality = 0.75f;
 
@@ -39,11 +38,10 @@ public class JpegWriteOptions implements ImageWriteOptions {
          * @return this builder for chaining
          */
         public @NotNull Builder withQuality(float quality) {
-            this.quality = Math.max(0.0f, Math.min(1.0f, quality));
+            this.quality = Math.clamp(quality, 0.0f, 1.0f);
             return this;
         }
 
-        @Override
         public @NotNull JpegWriteOptions build() {
             return new JpegWriteOptions(this.quality);
         }

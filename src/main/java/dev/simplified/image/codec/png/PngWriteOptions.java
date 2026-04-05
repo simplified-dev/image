@@ -2,7 +2,6 @@ package dev.sbs.api.io.image.codec.png;
 
 import dev.sbs.api.io.image.codec.ImageWriteOptions;
 import dev.sbs.api.util.NumberUtil;
-import dev.sbs.api.util.builder.ClassBuilder;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
@@ -29,7 +28,7 @@ public class PngWriteOptions implements ImageWriteOptions {
     /**
      * Builds {@link PngWriteOptions} instances.
      */
-    public static class Builder implements ClassBuilder<PngWriteOptions> {
+    public static class Builder {
 
         private int compressionLevel = 6;
 
@@ -44,7 +43,6 @@ public class PngWriteOptions implements ImageWriteOptions {
             return this;
         }
 
-        @Override
         public @NotNull PngWriteOptions build() {
             return new PngWriteOptions(this.compressionLevel);
         }

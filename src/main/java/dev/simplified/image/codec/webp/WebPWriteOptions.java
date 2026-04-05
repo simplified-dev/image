@@ -1,7 +1,6 @@
 package dev.sbs.api.io.image.codec.webp;
 
 import dev.sbs.api.io.image.codec.ImageWriteOptions;
-import dev.sbs.api.util.builder.ClassBuilder;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
@@ -32,7 +31,7 @@ public class WebPWriteOptions implements ImageWriteOptions {
     /**
      * Builds {@link WebPWriteOptions} instances.
      */
-    public static class Builder implements ClassBuilder<WebPWriteOptions> {
+    public static class Builder {
 
         private boolean lossless = true;
         private float quality = 0.75f;
@@ -113,7 +112,6 @@ public class WebPWriteOptions implements ImageWriteOptions {
             return this;
         }
 
-        @Override
         public @NotNull WebPWriteOptions build() {
             return new WebPWriteOptions(this.lossless, this.quality, this.loopCount, this.multithreaded, this.alphaCompression);
         }
