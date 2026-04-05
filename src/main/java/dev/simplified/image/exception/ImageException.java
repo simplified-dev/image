@@ -1,6 +1,5 @@
 package dev.simplified.image.exception;
 
-import dev.simplified.exception.IoException;
 import org.intellij.lang.annotations.PrintFormat;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -8,7 +7,7 @@ import org.jetbrains.annotations.Nullable;
 /**
  * Thrown when the image pipeline encounters a read, write, or conversion error.
  */
-public class ImageException extends IoException {
+public class ImageException extends RuntimeException {
 
     /**
      * Constructs a new {@code ImageException} with the specified cause.
@@ -35,7 +34,7 @@ public class ImageException extends IoException {
      * @param message the detail message
      */
     public ImageException(@NotNull Throwable cause, @NotNull String message) {
-        super(cause, message);
+        super(message, cause);
     }
 
     /**
@@ -45,7 +44,7 @@ public class ImageException extends IoException {
      * @param args the format arguments
      */
     public ImageException(@NotNull @PrintFormat String message, @Nullable Object... args) {
-        super(message, args);
+        super(String.format(message, args));
     }
 
     /**
@@ -56,7 +55,7 @@ public class ImageException extends IoException {
      * @param args the format arguments
      */
     public ImageException(@NotNull Throwable cause, @NotNull @PrintFormat String message, @Nullable Object... args) {
-        super(cause, message, args);
+        super(String.format(message, args), cause);
     }
 
 }
