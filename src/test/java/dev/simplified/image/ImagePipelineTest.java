@@ -1,7 +1,7 @@
 package dev.simplified.image;
 
-import dev.simplified.collection.concurrent.Concurrent;
-import dev.simplified.collection.concurrent.ConcurrentList;
+import dev.simplified.collection.Concurrent;
+import dev.simplified.collection.ConcurrentList;
 import dev.simplified.image.codec.bmp.BmpImageReader;
 import dev.simplified.image.codec.bmp.BmpImageWriter;
 import dev.simplified.image.codec.gif.GifImageReader;

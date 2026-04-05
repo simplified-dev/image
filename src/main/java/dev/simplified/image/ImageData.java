@@ -1,6 +1,6 @@
 package dev.simplified.image;
 
-import dev.simplified.collection.concurrent.ConcurrentList;
+import dev.simplified.collection.ConcurrentList;
 import org.jetbrains.annotations.NotNull;
 
 import java.awt.image.BufferedImage;

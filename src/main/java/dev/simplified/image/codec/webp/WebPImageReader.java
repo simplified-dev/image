@@ -1,7 +1,7 @@
 package dev.simplified.image.codec.webp;
 
-import dev.simplified.collection.concurrent.Concurrent;
-import dev.simplified.collection.concurrent.ConcurrentList;
+import dev.simplified.collection.Concurrent;
+import dev.simplified.collection.ConcurrentList;
 import dev.simplified.image.AnimatedImageData;
 import dev.simplified.image.ImageData;
 import dev.simplified.image.ImageFormat;
