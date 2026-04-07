@@ -75,8 +75,8 @@ final class RiffContainer {
         int dataSize = 4; // "WEBP"
 
         for (WebPChunk chunk : chunks) {
-            dataSize += 8 + chunk.getPayloadLength();
-            if ((chunk.getPayloadLength() & 1) != 0) dataSize++; // padding
+            dataSize += 8 + chunk.payloadLength();
+            if ((chunk.payloadLength() & 1) != 0) dataSize++; // padding
         }
 
         byte[] output = new byte[8 + dataSize]; // RIFF + fileSize + data
@@ -90,20 +90,20 @@ final class RiffContainer {
 
         for (WebPChunk chunk : chunks) {
             // FourCC
-            byte[] fourCCBytes = chunk.getFourCC().getBytes();
+            byte[] fourCCBytes = chunk.fourCC().getBytes();
             System.arraycopy(fourCCBytes, 0, output, offset, 4);
             offset += 4;
 
             // Size
-            writeLE32(output, offset, chunk.getPayloadLength());
+            writeLE32(output, offset, chunk.payloadLength());
             offset += 4;
 
             // Payload
-            System.arraycopy(chunk.getSource(), chunk.getPayloadOffset(), output, offset, chunk.getPayloadLength());
-            offset += chunk.getPayloadLength();
+            System.arraycopy(chunk.source(), chunk.payloadOffset(), output, offset, chunk.payloadLength());
+            offset += chunk.payloadLength();
 
             // Word-alignment padding
-            if ((chunk.getPayloadLength() & 1) != 0)
+            if ((chunk.payloadLength() & 1) != 0)
                 output[offset++] = 0;
         }
 

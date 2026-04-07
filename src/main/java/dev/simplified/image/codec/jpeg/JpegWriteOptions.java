@@ -1,19 +1,19 @@
 package dev.simplified.image.codec.jpeg;
 
 import dev.simplified.image.codec.ImageWriteOptions;
-import lombok.AccessLevel;
-import lombok.Getter;
-import lombok.RequiredArgsConstructor;
 import org.jetbrains.annotations.NotNull;
 
 /**
  * JPEG-specific encoding options.
  */
-@Getter
-@RequiredArgsConstructor(access = AccessLevel.PRIVATE)
-public class JpegWriteOptions implements ImageWriteOptions {
+public record JpegWriteOptions(float quality) implements ImageWriteOptions {
 
-    private final float quality;
+    /**
+     * Validates and clamps the quality component to the {@code [0.0, 1.0]} range.
+     */
+    public JpegWriteOptions {
+        quality = Math.clamp(quality, 0.0f, 1.0f);
+    }
 
     /**
      * Returns a new builder for JPEG write options.
@@ -38,7 +38,7 @@ public class JpegWriteOptions implements ImageWriteOptions {
          * @return this builder for chaining
          */
         public @NotNull Builder withQuality(float quality) {
-            this.quality = Math.clamp(quality, 0.0f, 1.0f);
+            this.quality = quality;
             return this;
         }
 

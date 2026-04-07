@@ -104,7 +104,7 @@ public class GifImageReader implements ImageReader {
         reader.dispose();
 
         if (frames.size() == 1)
-            return StaticImageData.of(frames.getFirst().getImage());
+            return StaticImageData.of(frames.getFirst().image());
 
         return AnimatedImageData.builder()
             .withFrames(frames)

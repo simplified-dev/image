@@ -55,7 +55,7 @@ public class AnimatedImageData implements ImageData {
 
         for (int index = 0; index < this.frames.size(); index++) {
             ImageFrame frame = this.frames.get(index);
-            int duration = Math.max(frame.getDelayMs(), MIN_FRAME_DURATION_MS);
+            int duration = Math.max(frame.delayMs(), MIN_FRAME_DURATION_MS);
             int nextAccumulated = accumulated + duration;
 
             if (normalized < nextAccumulated) {
@@ -76,11 +76,11 @@ public class AnimatedImageData implements ImageData {
 
                 ImageFrame nextFrame = this.frames.get(nextIndex);
                 PixelBuffer blended = PixelBuffer.lerp(
-                    PixelBuffer.wrap(frame.getImage()),
-                    PixelBuffer.wrap(nextFrame.getImage()),
+                    PixelBuffer.wrap(frame.image()),
+                    PixelBuffer.wrap(nextFrame.image()),
                     (float) progress
                 );
-                ImageFrame interpolatedFrame = ImageFrame.of(blended.toBufferedImage(), frame.getDelayMs());
+                ImageFrame interpolatedFrame = ImageFrame.of(blended.toBufferedImage(), frame.delayMs());
                 return new FrameAtTimeResult(interpolatedFrame, true);
             }
 
@@ -183,11 +183,11 @@ public class AnimatedImageData implements ImageData {
 
         public @NotNull AnimatedImageData build() {
             ImageFrame first = this.frames.getFirst();
-            int w = this.width > 0 ? this.width : first.getImage().getWidth();
-            int h = this.height > 0 ? this.height : first.getImage().getHeight();
-            boolean alpha = first.getImage().getColorModel().hasAlpha();
+            int w = this.width > 0 ? this.width : first.image().getWidth();
+            int h = this.height > 0 ? this.height : first.image().getHeight();
+            boolean alpha = first.image().getColorModel().hasAlpha();
             int totalDuration = this.frames.stream()
-                .mapToInt(frame -> Math.max(frame.getDelayMs(), MIN_FRAME_DURATION_MS))
+                .mapToInt(frame -> Math.max(frame.delayMs(), MIN_FRAME_DURATION_MS))
                 .sum();
 
             return new AnimatedImageData(w, h, alpha, this.frames, this.loopCount, this.backgroundColor, totalDuration);

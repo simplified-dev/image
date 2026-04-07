@@ -243,8 +243,8 @@ public class ImagePipelineTest {
 
             // Default uses min dimensions
             for (ImageFrame frame : normalized.getFrames()) {
-                assertThat(frame.getImage().getWidth(), is(4));
-                assertThat(frame.getImage().getHeight(), is(4));
+                assertThat(frame.image().getWidth(), is(4));
+                assertThat(frame.image().getHeight(), is(4));
             }
         }
 
@@ -259,8 +259,8 @@ public class ImagePipelineTest {
 
             AnimatedImageData normalized = FrameNormalizer.normalize(data);
 
-            assertThat(normalized.getFrames().get(0).getDelayMs(), is(100));
-            assertThat(normalized.getFrames().get(1).getDelayMs(), is(250));
+            assertThat(normalized.getFrames().get(0).delayMs(), is(100));
+            assertThat(normalized.getFrames().get(1).delayMs(), is(250));
         }
 
     }
@@ -466,7 +466,7 @@ public class ImagePipelineTest {
 
             assertThat(data.isAnimated(), is(true));
             assertThat(data.getFrames(), hasSize(2));
-            assertThat(data.getFrames().get(0).getDelayMs(), is(100));
+            assertThat(data.getFrames().get(0).delayMs(), is(100));
         }
 
         @Test

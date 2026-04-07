@@ -2,19 +2,19 @@ package dev.simplified.image.codec.png;
 
 import dev.simplified.image.codec.ImageWriteOptions;
 import dev.simplified.util.NumberUtil;
-import lombok.AccessLevel;
-import lombok.Getter;
-import lombok.RequiredArgsConstructor;
 import org.jetbrains.annotations.NotNull;
 
 /**
  * PNG-specific encoding options.
  */
-@Getter
-@RequiredArgsConstructor(access = AccessLevel.PRIVATE)
-public class PngWriteOptions implements ImageWriteOptions {
+public record PngWriteOptions(int compressionLevel) implements ImageWriteOptions {
 
-    private final int compressionLevel;
+    /**
+     * Validates and clamps the compression level component to the {@code [0, 9]} range.
+     */
+    public PngWriteOptions {
+        compressionLevel = NumberUtil.ensureRange(compressionLevel, 0, 9);
+    }
 
     /**
      * Returns a new builder for PNG write options.
@@ -39,7 +39,7 @@ public class PngWriteOptions implements ImageWriteOptions {
          * @return this builder for chaining
          */
         public @NotNull Builder withCompressionLevel(int compressionLevel) {
-            this.compressionLevel = NumberUtil.ensureRange(compressionLevel, 0, 9);
+            this.compressionLevel = compressionLevel;
             return this;
         }
 

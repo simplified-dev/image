@@ -130,7 +130,7 @@ public class WebPImageWriter implements ImageWriter {
     }
 
     private byte @NotNull [] encodeFrame(@NotNull ImageFrame frame, boolean lossless, float quality) {
-        PixelBuffer pixels = PixelBuffer.wrap(frame.getImage());
+        PixelBuffer pixels = PixelBuffer.wrap(frame.image());
 
         if (lossless)
             return VP8LEncoder.encode(pixels);
@@ -171,11 +171,11 @@ public class WebPImageWriter implements ImageWriter {
     private static byte @NotNull [] buildAnmfPayload(@NotNull ImageFrame frame, byte @NotNull [] frameBitstream) {
         byte[] payload = new byte[16 + frameBitstream.length];
 
-        int x = frame.getOffsetX() / 2;
-        int y = frame.getOffsetY() / 2;
-        int w = frame.getImage().getWidth() - 1;
-        int h = frame.getImage().getHeight() - 1;
-        int dur = frame.getDelayMs();
+        int x = frame.offsetX() / 2;
+        int y = frame.offsetY() / 2;
+        int w = frame.image().getWidth() - 1;
+        int h = frame.image().getHeight() - 1;
+        int dur = frame.delayMs();
 
         payload[0] = (byte) (x & 0xFF);
         payload[1] = (byte) ((x >> 8) & 0xFF);
@@ -194,8 +194,8 @@ public class WebPImageWriter implements ImageWriter {
         payload[14] = (byte) ((dur >> 16) & 0xFF);
 
         int flags = 0;
-        if (frame.getDisposal() == ImageFrame.Disposal.RESTORE_TO_BACKGROUND) flags |= 0x01;
-        if (frame.getBlend() == ImageFrame.Blend.SOURCE) flags |= 0x02;
+        if (frame.disposal() == ImageFrame.Disposal.RESTORE_TO_BACKGROUND) flags |= 0x01;
+        if (frame.blend() == ImageFrame.Blend.SOURCE) flags |= 0x02;
         payload[15] = (byte) flags;
 
         System.arraycopy(frameBitstream, 0, payload, 16, frameBitstream.length);

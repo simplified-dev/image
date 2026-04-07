@@ -60,8 +60,8 @@ public final class FrameNormalizer {
 
         if (needMinDimensions) {
             for (ImageFrame frame : frames) {
-                minW = Math.min(minW, frame.getImage().getWidth());
-                minH = Math.min(minH, frame.getImage().getHeight());
+                minW = Math.min(minW, frame.image().getWidth());
+                minH = Math.min(minH, frame.image().getHeight());
             }
         }
 
@@ -71,7 +71,7 @@ public final class FrameNormalizer {
         ConcurrentList<ImageFrame> normalized = Concurrent.newList();
 
         for (ImageFrame frame : frames) {
-            BufferedImage src = frame.getImage();
+            BufferedImage src = frame.image();
             int sw = src.getWidth();
             int sh = src.getHeight();
 
@@ -84,7 +84,7 @@ public final class FrameNormalizer {
                 } finally {
                     g2d.dispose();
                 }
-                normalized.add(ImageFrame.of(copy, frame.getDelayMs(), 0, 0, frame.getDisposal(), frame.getBlend()));
+                normalized.add(ImageFrame.of(copy, frame.delayMs(), 0, 0, frame.disposal(), frame.blend()));
                 continue;
             }
 
@@ -138,7 +138,7 @@ public final class FrameNormalizer {
                 g2d.dispose();
             }
 
-            normalized.add(ImageFrame.of(canvas, frame.getDelayMs(), 0, 0, frame.getDisposal(), frame.getBlend()));
+            normalized.add(ImageFrame.of(canvas, frame.delayMs(), 0, 0, frame.disposal(), frame.blend()));
         }
 
         return new AnimatedImageData.Builder()

@@ -33,10 +33,10 @@ public class WebPCodecTest {
             ConcurrentList<WebPChunk> parsed = RiffContainer.parse(riffBytes);
 
             assertThat(parsed, hasSize(1));
-            assertThat(parsed.getFirst().getType(), is(WebPChunkType.VP8L));
-            assertThat(parsed.getFirst().getPayloadLength(), is(4));
+            assertThat(parsed.getFirst().type(), is(WebPChunkType.VP8L));
+            assertThat(parsed.getFirst().payloadLength(), is(4));
 
-            byte[] roundTripped = parsed.getFirst().getPayload();
+            byte[] roundTripped = parsed.getFirst().payload();
             assertThat(roundTripped[0], is((byte) 0x01));
             assertThat(roundTripped[3], is((byte) 0x04));
         }
@@ -54,9 +54,9 @@ public class WebPCodecTest {
             ConcurrentList<WebPChunk> parsed = RiffContainer.parse(riffBytes);
 
             assertThat(parsed, hasSize(2));
-            assertThat(parsed.get(0).getType(), is(WebPChunkType.VP8X));
-            assertThat(parsed.get(1).getType(), is(WebPChunkType.VP8L));
-            assertThat(parsed.get(1).getPayloadLength(), is(3));
+            assertThat(parsed.get(0).type(), is(WebPChunkType.VP8X));
+            assertThat(parsed.get(1).type(), is(WebPChunkType.VP8L));
+            assertThat(parsed.get(1).payloadLength(), is(3));
         }
 
     }

@@ -63,7 +63,7 @@ public class WebPImageReader implements ImageReader {
     }
 
     private @NotNull ImageData readExtended(@NotNull ConcurrentList<WebPChunk> chunks, @NotNull WebPChunk vp8x) {
-        byte[] payload = vp8x.getPayload();
+        byte[] payload = vp8x.payload();
 
         if (payload.length < 10)
             throw new ImageDecodeException("VP8X chunk too short");
@@ -97,8 +97,8 @@ public class WebPImageReader implements ImageReader {
         int backgroundColor = 0;
         int loopCount = 0;
 
-        if (animChunk != null && animChunk.getPayloadLength() >= 6) {
-            byte[] animPayload = animChunk.getPayload();
+        if (animChunk != null && animChunk.payloadLength() >= 6) {
+            byte[] animPayload = animChunk.payload();
             backgroundColor = readLE32(animPayload, 0);
             loopCount = (animPayload[4] & 0xFF) | ((animPayload[5] & 0xFF) << 8);
         }
@@ -106,9 +106,9 @@ public class WebPImageReader implements ImageReader {
         ConcurrentList<ImageFrame> frames = Concurrent.newList();
 
         for (WebPChunk chunk : chunks) {
-            if (chunk.getType() != WebPChunkType.ANMF) continue;
+            if (chunk.type() != WebPChunkType.ANMF) continue;
 
-            byte[] anmf = chunk.getPayload();
+            byte[] anmf = chunk.payload();
 
             if (anmf.length < 16)
                 throw new ImageDecodeException("ANMF chunk too short");
@@ -155,25 +155,25 @@ public class WebPImageReader implements ImageReader {
     }
 
     private @NotNull StaticImageData decodeVP8(@NotNull WebPChunk chunk) {
-        byte[] payload = chunk.getPayload();
+        byte[] payload = chunk.payload();
         PixelBuffer pixels = VP8Decoder.decode(payload);
         return StaticImageData.of(pixels.toBufferedImage());
     }
 
     private @NotNull StaticImageData decodeVP8L(@NotNull WebPChunk chunk) {
-        byte[] payload = chunk.getPayload();
+        byte[] payload = chunk.payload();
         PixelBuffer pixels = VP8LDecoder.decode(payload);
         return StaticImageData.of(pixels.toBufferedImage());
     }
 
     private @NotNull StaticImageData decodeVP8WithAlpha(@NotNull WebPChunk vp8, @Nullable WebPChunk alph) {
-        PixelBuffer colorPixels = VP8Decoder.decode(vp8.getPayload());
+        PixelBuffer colorPixels = VP8Decoder.decode(vp8.payload());
 
         if (alph == null)
             return StaticImageData.of(colorPixels.toBufferedImage());
 
         // Merge alpha plane into decoded color data
-        byte[] alphPayload = alph.getPayload();
+        byte[] alphPayload = alph.payload();
 
         if (alphPayload.length < 2)
             return StaticImageData.of(colorPixels.toBufferedImage());
@@ -213,7 +213,7 @@ public class WebPImageReader implements ImageReader {
 
     private static @Nullable WebPChunk findChunk(@NotNull ConcurrentList<WebPChunk> chunks, @NotNull WebPChunkType type) {
         return chunks.stream()
-            .filter(chunk -> chunk.getType() == type)
+            .filter(chunk -> chunk.type() == type)
             .findFirst()
             .orElse(null);
     }

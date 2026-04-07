@@ -38,7 +38,7 @@ public interface ImageData {
      * @return the first frame's pixel data
      */
     default @NotNull BufferedImage toBufferedImage() {
-        return getFrames().getFirst().getImage();
+        return getFrames().getFirst().image();
     }
 
 }

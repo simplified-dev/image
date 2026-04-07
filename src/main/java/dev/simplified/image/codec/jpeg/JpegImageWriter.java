@@ -34,7 +34,7 @@ public class JpegImageWriter implements ImageWriter {
         float quality = 0.75f;
 
         if (options instanceof JpegWriteOptions jpegOptions)
-            quality = jpegOptions.getQuality();
+            quality = jpegOptions.quality();
 
         // JPEG does not support alpha - convert if needed
         if (image.getColorModel().hasAlpha()) {

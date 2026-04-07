@@ -1,6 +1,5 @@
 package dev.simplified.image;
 
-import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import org.jetbrains.annotations.NotNull;
@@ -10,17 +9,22 @@ import java.util.Arrays;
 
 /**
  * A single frame within an image, carrying pixel data and animation metadata.
+ *
+ * @param image the frame pixel data
+ * @param delayMs the display duration in milliseconds
+ * @param offsetX the horizontal offset within the canvas
+ * @param offsetY the vertical offset within the canvas
+ * @param disposal the disposal method after displaying this frame
+ * @param blend the blending method when rendering this frame
  */
-@Getter
-@RequiredArgsConstructor(access = AccessLevel.PRIVATE)
-public class ImageFrame {
-
-    private final @NotNull BufferedImage image;
-    private final int delayMs;
-    private final int offsetX;
-    private final int offsetY;
-    private final @NotNull Disposal disposal;
-    private final @NotNull Blend blend;
+public record ImageFrame(
+    @NotNull BufferedImage image,
+    int delayMs,
+    int offsetX,
+    int offsetY,
+    @NotNull Disposal disposal,
+    @NotNull Blend blend
+) {
 
     /**
      * Creates a frame with the given image and delay, using default offset and disposal.

@@ -40,9 +40,9 @@ public class GifImageWriter implements ImageWriter {
         int transparentColorIndex = 0;
 
         if (options instanceof GifWriteOptions gifOptions) {
-            loopCount = gifOptions.getLoopCount();
-            transparent = gifOptions.isTransparent();
-            transparentColorIndex = gifOptions.getTransparentColorIndex();
+            loopCount = gifOptions.loopCount();
+            transparent = gifOptions.transparent();
+            transparentColorIndex = gifOptions.transparentColorIndex();
         } else if (data instanceof AnimatedImageData animated) {
             loopCount = animated.getLoopCount();
         }
@@ -68,7 +68,7 @@ public class GifImageWriter implements ImageWriter {
                     firstFrame = false;
                 }
 
-                writer.writeToSequence(new IIOImage(frame.getImage(), null, metadata), param);
+                writer.writeToSequence(new IIOImage(frame.image(), null, metadata), param);
             }
 
             writer.endWriteSequence();
@@ -76,7 +76,7 @@ public class GifImageWriter implements ImageWriter {
             ImageFrame frame = data.getFrames().getFirst();
             IIOMetadata metadata = writer.getDefaultImageMetadata(specifier, param);
             configureFrameMetadata(metadata, frame, transparent, transparentColorIndex);
-            writer.write(new IIOImage(frame.getImage(), null, metadata));
+            writer.write(new IIOImage(frame.image(), null, metadata));
         }
 
         writer.dispose();
@@ -95,10 +95,10 @@ public class GifImageWriter implements ImageWriter {
         IIOMetadataNode root = (IIOMetadataNode) metadata.getAsTree(formatName);
 
         IIOMetadataNode gce = getOrCreateNode(root, "GraphicControlExtension");
-        gce.setAttribute("disposalMethod", frame.getDisposal().getMethod());
+        gce.setAttribute("disposalMethod", frame.disposal().getMethod());
         gce.setAttribute("userInputFlag", "FALSE");
         gce.setAttribute("transparentColorFlag", String.valueOf(transparent));
-        gce.setAttribute("delayTime", Integer.toString(Math.max(1, frame.getDelayMs() / 10)));
+        gce.setAttribute("delayTime", Integer.toString(Math.max(1, frame.delayMs() / 10)));
         gce.setAttribute("transparentColorIndex", Integer.toString(transparentColorIndex));
 
         metadata.setFromTree(formatName, root);

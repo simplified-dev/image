@@ -1,21 +1,12 @@
 package dev.simplified.image.codec.gif;
 
 import dev.simplified.image.codec.ImageWriteOptions;
-import lombok.AccessLevel;
-import lombok.Getter;
-import lombok.RequiredArgsConstructor;
 import org.jetbrains.annotations.NotNull;
 
 /**
  * GIF-specific encoding options.
  */
-@Getter
-@RequiredArgsConstructor(access = AccessLevel.PRIVATE)
-public class GifWriteOptions implements ImageWriteOptions {
-
-    private final int loopCount;
-    private final boolean transparent;
-    private final int transparentColorIndex;
+public record GifWriteOptions(int loopCount, boolean transparent, int transparentColorIndex) implements ImageWriteOptions {
 
     /**
      * Returns a new builder for GIF write options.
