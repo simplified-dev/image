@@ -40,27 +40,15 @@ public class PixelBuffer {
     }
 
     /**
-     * Wraps the pixel data of a {@link BufferedImage}.
-     * <p>
-     * If the image is {@link BufferedImage#TYPE_INT_ARGB}, the underlying data buffer
-     * is referenced directly (zero copy). Otherwise, pixel data is extracted via
-     * {@link BufferedImage#getRGB(int, int, int, int, int[], int, int)}.
+     * Creates a blank pixel buffer of the given dimensions, initially filled with transparent black.
+     * No {@link BufferedImage} is allocated.
      *
-     * @param image the source image
-     * @return a pixel buffer wrapping the image data
+     * @param width the buffer width in pixels
+     * @param height the buffer height in pixels
+     * @return a new pixel buffer
      */
-    public static @NotNull PixelBuffer wrap(@NotNull BufferedImage image) {
-        int w = image.getWidth();
-        int h = image.getHeight();
-        boolean alpha = image.getColorModel().hasAlpha();
-
-        if (image.getType() == BufferedImage.TYPE_INT_ARGB) {
-            int[] data = ((DataBufferInt) image.getRaster().getDataBuffer()).getData();
-            return new PixelBuffer(data, w, h, alpha);
-        }
-
-        int[] pixels = image.getRGB(0, 0, w, h, null, 0, w);
-        return new PixelBuffer(pixels, w, h, alpha);
+    public static @NotNull PixelBuffer create(int width, int height) {
+        return new PixelBuffer(new int[width * height], width, height, true);
     }
 
     /**
@@ -86,6 +74,30 @@ public class PixelBuffer {
      */
     public static @NotNull PixelBuffer of(int @NotNull [] pixels, int width, int height) {
         return new PixelBuffer(pixels, width, height, true);
+    }
+
+    /**
+     * Wraps the pixel data of a {@link BufferedImage}.
+     * <p>
+     * If the image is {@link BufferedImage#TYPE_INT_ARGB}, the underlying data buffer
+     * is referenced directly (zero copy). Otherwise, pixel data is extracted via
+     * {@link BufferedImage#getRGB(int, int, int, int, int[], int, int)}.
+     *
+     * @param image the source image
+     * @return a pixel buffer wrapping the image data
+     */
+    public static @NotNull PixelBuffer wrap(@NotNull BufferedImage image) {
+        int w = image.getWidth();
+        int h = image.getHeight();
+        boolean alpha = image.getColorModel().hasAlpha();
+
+        if (image.getType() == BufferedImage.TYPE_INT_ARGB) {
+            int[] data = ((DataBufferInt) image.getRaster().getDataBuffer()).getData();
+            return new PixelBuffer(data, w, h, alpha);
+        }
+
+        int[] pixels = image.getRGB(0, 0, w, h, null, 0, w);
+        return new PixelBuffer(pixels, w, h, alpha);
     }
 
     /**
@@ -131,18 +143,6 @@ public class PixelBuffer {
      */
     public void setPixel(int x, int y, int argb) {
         this.pixels[y * this.width + x] = argb;
-    }
-
-    /**
-     * Creates a blank pixel buffer of the given dimensions, initially filled with transparent black.
-     * No {@link BufferedImage} is allocated.
-     *
-     * @param width the buffer width in pixels
-     * @param height the buffer height in pixels
-     * @return a new pixel buffer
-     */
-    public static @NotNull PixelBuffer create(int width, int height) {
-        return new PixelBuffer(new int[width * height], width, height, true);
     }
 
     /**
