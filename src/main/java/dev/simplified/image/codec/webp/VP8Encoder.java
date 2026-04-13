@@ -27,7 +27,7 @@ final class VP8Encoder {
     static byte @NotNull [] encode(@NotNull PixelBuffer pixels, float quality) {
         int width = pixels.width();
         int height = pixels.height();
-        int[] pixelData = pixels.getPixels();
+        int[] pixelData = pixels.pixels();
 
         int mbCols = (width + 15) / 16;
         int mbRows = (height + 15) / 16;

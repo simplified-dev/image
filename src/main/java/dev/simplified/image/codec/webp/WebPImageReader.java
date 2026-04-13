@@ -176,7 +176,7 @@ public class WebPImageReader implements ImageReader {
 
         int header = alphPayload[0] & 0xFF;
         int compression = header & 0x03;
-        int[] pixels = colorPixels.getPixels();
+        int[] pixels = colorPixels.pixels();
 
         if (compression == 0) {
             // Uncompressed alpha
@@ -188,7 +188,7 @@ public class WebPImageReader implements ImageReader {
             byte[] alphBitstream = new byte[alphPayload.length - 1];
             System.arraycopy(alphPayload, 1, alphBitstream, 0, alphBitstream.length);
             PixelBuffer alphDecoded = VP8LDecoder.decode(alphBitstream);
-            int[] alphPixels = alphDecoded.getPixels();
+            int[] alphPixels = alphDecoded.pixels();
             for (int i = 0; i < pixels.length && i < alphPixels.length; i++)
                 pixels[i] = (pixels[i] & 0x00FFFFFF) | (alphPixels[i] & 0xFF000000);
         }

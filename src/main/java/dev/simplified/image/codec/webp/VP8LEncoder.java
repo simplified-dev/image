@@ -36,7 +36,7 @@ final class VP8LEncoder {
     static byte @NotNull [] encode(@NotNull PixelBuffer pixels) {
         int width = pixels.width();
         int height = pixels.height();
-        int[] pixelData = pixels.getPixels();
+        int[] pixelData = pixels.pixels();
 
         // Analyze image for transforms
         boolean useSubtractGreen = true;

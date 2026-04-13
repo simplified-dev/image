@@ -116,7 +116,7 @@ public class ImagePipelineTest {
 
             assertThat(buffer.width(), is(4));
             assertThat(buffer.height(), is(4));
-            assertThat(buffer.getPixels().length, is(16));
+            assertThat(buffer.pixels().length, is(16));
         }
 
         @Test

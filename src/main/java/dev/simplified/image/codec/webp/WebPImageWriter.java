@@ -203,7 +203,7 @@ public class WebPImageWriter implements ImageWriter {
     }
 
     private static byte @NotNull [] encodeAlphaPlane(@NotNull PixelBuffer pixels, boolean compressed) {
-        int[] data = pixels.getPixels();
+        int[] data = pixels.pixels();
         byte[] rawAlpha = new byte[data.length];
 
         for (int i = 0; i < data.length; i++)
