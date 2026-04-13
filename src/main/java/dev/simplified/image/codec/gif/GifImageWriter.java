@@ -68,7 +68,7 @@ public class GifImageWriter implements ImageWriter {
                     firstFrame = false;
                 }
 
-                writer.writeToSequence(new IIOImage(frame.image(), null, metadata), param);
+                writer.writeToSequence(new IIOImage(frame.pixels().toBufferedImage(), null, metadata), param);
             }
 
             writer.endWriteSequence();
@@ -76,7 +76,7 @@ public class GifImageWriter implements ImageWriter {
             ImageFrame frame = data.getFrames().getFirst();
             IIOMetadata metadata = writer.getDefaultImageMetadata(specifier, param);
             configureFrameMetadata(metadata, frame, transparent, transparentColorIndex);
-            writer.write(new IIOImage(frame.image(), null, metadata));
+            writer.write(new IIOImage(frame.pixels().toBufferedImage(), null, metadata));
         }
 
         writer.dispose();

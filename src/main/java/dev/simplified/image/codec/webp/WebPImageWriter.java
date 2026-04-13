@@ -53,7 +53,7 @@ public class WebPImageWriter implements ImageWriter {
     }
 
     private byte @NotNull [] writeStatic(@NotNull ImageData data, boolean lossless, float quality, boolean alphaCompression) {
-        PixelBuffer pixels = PixelBuffer.wrap(data.toBufferedImage());
+        PixelBuffer pixels = data.toPixelBuffer();
         byte[] payload;
 
         if (lossless) {
@@ -71,7 +71,7 @@ public class WebPImageWriter implements ImageWriter {
 
         if (hasAlpha) {
             // Extended: VP8X + ALPH + VP8
-            chunks.add(RiffContainer.createChunk(WebPChunkType.VP8X, buildVP8XPayload(pixels.getWidth(), pixels.getHeight(), false, true)));
+            chunks.add(RiffContainer.createChunk(WebPChunkType.VP8X, buildVP8XPayload(pixels.width(), pixels.height(), false, true)));
             chunks.add(RiffContainer.createChunk(WebPChunkType.ALPH, encodeAlphaPlane(pixels, alphaCompression)));
             chunks.add(RiffContainer.createChunk(WebPChunkType.VP8, payload));
         } else {
@@ -130,7 +130,7 @@ public class WebPImageWriter implements ImageWriter {
     }
 
     private byte @NotNull [] encodeFrame(@NotNull ImageFrame frame, boolean lossless, float quality) {
-        PixelBuffer pixels = PixelBuffer.wrap(frame.image());
+        PixelBuffer pixels = frame.pixels();
 
         if (lossless)
             return VP8LEncoder.encode(pixels);
@@ -173,8 +173,8 @@ public class WebPImageWriter implements ImageWriter {
 
         int x = frame.offsetX() / 2;
         int y = frame.offsetY() / 2;
-        int w = frame.image().getWidth() - 1;
-        int h = frame.image().getHeight() - 1;
+        int w = frame.pixels().width() - 1;
+        int h = frame.pixels().height() - 1;
         int dur = frame.delayMs();
 
         payload[0] = (byte) (x & 0xFF);
@@ -216,7 +216,7 @@ public class WebPImageWriter implements ImageWriter {
                 java.util.stream.IntStream.range(0, data.length)
                     .map(i -> (rawAlpha[i] & 0xFF) << 24) // pack alpha into ARGB alpha channel
                     .toArray(),
-                pixels.getWidth(), pixels.getHeight()
+                pixels.width(), pixels.height()
             );
             byte[] vp8lPayload = VP8LEncoder.encode(alphaBuf);
             byte[] result = new byte[1 + vp8lPayload.length];

@@ -25,8 +25,8 @@ final class VP8Encoder {
      * @throws ImageEncodeException if encoding fails
      */
     static byte @NotNull [] encode(@NotNull PixelBuffer pixels, float quality) {
-        int width = pixels.getWidth();
-        int height = pixels.getHeight();
+        int width = pixels.width();
+        int height = pixels.height();
         int[] pixelData = pixels.getPixels();
 
         int mbCols = (width + 15) / 16;

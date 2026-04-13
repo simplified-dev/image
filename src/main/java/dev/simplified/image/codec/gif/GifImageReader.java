@@ -8,6 +8,7 @@ import dev.simplified.image.ImageFormat;
 import dev.simplified.image.ImageFrame;
 import dev.simplified.image.ImageFrame.Blend;
 import dev.simplified.image.ImageFrame.Disposal;
+import dev.simplified.image.PixelBuffer;
 import dev.simplified.image.StaticImageData;
 import dev.simplified.image.codec.ImageReadOptions;
 import dev.simplified.image.codec.ImageReader;
@@ -22,7 +23,6 @@ import javax.imageio.ImageIO;
 import javax.imageio.metadata.IIOMetadata;
 import javax.imageio.metadata.IIOMetadataNode;
 import javax.imageio.stream.ImageInputStream;
-import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 
 /**
@@ -57,7 +57,7 @@ public class GifImageReader implements ImageReader {
         int loopCount = 0;
 
         for (int i = 0; i < frameCount; i++) {
-            BufferedImage image = reader.read(i);
+            var image = reader.read(i);
             IIOMetadata metadata = reader.getImageMetadata(i);
 
             int delayMs = 100;
@@ -98,13 +98,13 @@ public class GifImageReader implements ImageReader {
                 }
             }
 
-            frames.add(ImageFrame.of(image, delayMs, offsetX, offsetY, disposal, Blend.SOURCE));
+            frames.add(ImageFrame.of(PixelBuffer.wrap(image), delayMs, offsetX, offsetY, disposal, Blend.SOURCE));
         }
 
         reader.dispose();
 
         if (frames.size() == 1)
-            return StaticImageData.of(frames.getFirst().image());
+            return StaticImageData.of(frames.getFirst().pixels());
 
         return AnimatedImageData.builder()
             .withFrames(frames)

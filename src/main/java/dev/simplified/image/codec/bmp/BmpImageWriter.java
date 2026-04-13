@@ -27,18 +27,14 @@ public class BmpImageWriter implements ImageWriter {
     @Override
     @SneakyThrows
     public byte @NotNull [] write(@NotNull ImageData data, @Nullable ImageWriteOptions options) {
-        BufferedImage image = data.toBufferedImage();
-
-        // BMP does not support alpha - convert if needed
-        if (image.getColorModel().hasAlpha()) {
-            BufferedImage rgb = new BufferedImage(image.getWidth(), image.getHeight(), BufferedImage.TYPE_INT_RGB);
-            Graphics2D g2d = rgb.createGraphics();
-            try {
-                g2d.drawImage(image, 0, 0, null);
-            } finally {
-                g2d.dispose();
-            }
-            image = rgb;
+        // BMP does not support alpha - always convert to RGB
+        BufferedImage argb = data.toBufferedImage();
+        BufferedImage image = new BufferedImage(argb.getWidth(), argb.getHeight(), BufferedImage.TYPE_INT_RGB);
+        Graphics2D g2d = image.createGraphics();
+        try {
+            g2d.drawImage(argb, 0, 0, null);
+        } finally {
+            g2d.dispose();
         }
 
         @Cleanup ByteArrayDataOutput dataOutput = new ByteArrayDataOutput();

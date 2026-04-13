@@ -2,6 +2,7 @@ package dev.simplified.image.codec.jpeg;
 
 import dev.simplified.image.ImageData;
 import dev.simplified.image.ImageFormat;
+import dev.simplified.image.PixelBuffer;
 import dev.simplified.image.codec.ImageWriteOptions;
 import dev.simplified.image.codec.ImageWriter;
 import dev.simplified.stream.ByteArrayDataOutput;
@@ -30,22 +31,20 @@ public class JpegImageWriter implements ImageWriter {
     @Override
     @SneakyThrows
     public byte @NotNull [] write(@NotNull ImageData data, @Nullable ImageWriteOptions options) {
-        BufferedImage image = data.toBufferedImage();
         float quality = 0.75f;
 
         if (options instanceof JpegWriteOptions jpegOptions)
             quality = jpegOptions.quality();
 
-        // JPEG does not support alpha - convert if needed
-        if (image.getColorModel().hasAlpha()) {
-            BufferedImage rgb = new BufferedImage(image.getWidth(), image.getHeight(), BufferedImage.TYPE_INT_RGB);
-            Graphics2D g2d = rgb.createGraphics();
-            try {
-                g2d.drawImage(image, 0, 0, null);
-            } finally {
-                g2d.dispose();
-            }
-            image = rgb;
+        // JPEG does not support alpha - always convert to RGB
+        PixelBuffer pixels = data.toPixelBuffer();
+        BufferedImage argb = pixels.toBufferedImage();
+        BufferedImage image = new BufferedImage(argb.getWidth(), argb.getHeight(), BufferedImage.TYPE_INT_RGB);
+        Graphics2D g2d = image.createGraphics();
+        try {
+            g2d.drawImage(argb, 0, 0, null);
+        } finally {
+            g2d.dispose();
         }
 
         javax.imageio.ImageWriter writer = ImageIO.getImageWritersByFormatName("jpeg").next();
