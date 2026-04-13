@@ -16,8 +16,6 @@ import dev.simplified.image.exception.ImageDecodeException;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
-import java.awt.image.BufferedImage;
-
 /**
  * Reads WebP images (static and animated, lossless and lossy) using a pure Java
  * implementation of the VP8L and VP8 codecs.
@@ -131,15 +129,15 @@ public class WebPImageReader implements ImageReader {
             byte[] frameBitstream = new byte[anmf.length - 16];
             System.arraycopy(anmf, 16, frameBitstream, 0, frameBitstream.length);
 
-            BufferedImage frameImage = decodeFrameBitstream(frameBitstream);
+            PixelBuffer framePixels = decodeFrameBitstream(frameBitstream);
 
-            if (frameImage.getWidth() != frameW || frameImage.getHeight() != frameH)
+            if (framePixels.width() != frameW || framePixels.height() != frameH)
                 throw new ImageDecodeException(
                     "ANMF frame size mismatch: declared %dx%d but decoded %dx%d",
-                    frameW, frameH, frameImage.getWidth(), frameImage.getHeight()
+                    frameW, frameH, framePixels.width(), framePixels.height()
                 );
 
-            frames.add(ImageFrame.of(frameImage, durationMs, frameX, frameY, disposal, blend));
+            frames.add(ImageFrame.of(framePixels, durationMs, frameX, frameY, disposal, blend));
         }
 
         if (frames.isEmpty())
@@ -156,27 +154,25 @@ public class WebPImageReader implements ImageReader {
 
     private @NotNull StaticImageData decodeVP8(@NotNull WebPChunk chunk) {
         byte[] payload = chunk.payload();
-        PixelBuffer pixels = VP8Decoder.decode(payload);
-        return StaticImageData.of(pixels.toBufferedImage());
+        return StaticImageData.of(VP8Decoder.decode(payload));
     }
 
     private @NotNull StaticImageData decodeVP8L(@NotNull WebPChunk chunk) {
         byte[] payload = chunk.payload();
-        PixelBuffer pixels = VP8LDecoder.decode(payload);
-        return StaticImageData.of(pixels.toBufferedImage());
+        return StaticImageData.of(VP8LDecoder.decode(payload));
     }
 
     private @NotNull StaticImageData decodeVP8WithAlpha(@NotNull WebPChunk vp8, @Nullable WebPChunk alph) {
         PixelBuffer colorPixels = VP8Decoder.decode(vp8.payload());
 
         if (alph == null)
-            return StaticImageData.of(colorPixels.toBufferedImage());
+            return StaticImageData.of(colorPixels);
 
         // Merge alpha plane into decoded color data
         byte[] alphPayload = alph.payload();
 
         if (alphPayload.length < 2)
-            return StaticImageData.of(colorPixels.toBufferedImage());
+            return StaticImageData.of(colorPixels);
 
         int header = alphPayload[0] & 0xFF;
         int compression = header & 0x03;
@@ -197,18 +193,15 @@ public class WebPImageReader implements ImageReader {
                 pixels[i] = (pixels[i] & 0x00FFFFFF) | (alphPixels[i] & 0xFF000000);
         }
 
-        return StaticImageData.of(colorPixels.toBufferedImage());
+        return StaticImageData.of(colorPixels);
     }
 
-    private @NotNull BufferedImage decodeFrameBitstream(byte @NotNull [] bitstream) {
+    private @NotNull PixelBuffer decodeFrameBitstream(byte @NotNull [] bitstream) {
         // Detect if frame is VP8L or VP8 based on signature
-        if (bitstream.length > 0 && bitstream[0] == 0x2F) {
-            // VP8L signature
-            return VP8LDecoder.decode(bitstream).toBufferedImage();
-        }
+        if (bitstream.length > 0 && bitstream[0] == 0x2F)
+            return VP8LDecoder.decode(bitstream);
 
-        // VP8 lossy
-        return VP8Decoder.decode(bitstream).toBufferedImage();
+        return VP8Decoder.decode(bitstream);
     }
 
     private static @Nullable WebPChunk findChunk(@NotNull ConcurrentList<WebPChunk> chunks, @NotNull WebPChunkType type) {

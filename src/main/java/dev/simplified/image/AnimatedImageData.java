@@ -76,11 +76,11 @@ public class AnimatedImageData implements ImageData {
 
                 ImageFrame nextFrame = this.frames.get(nextIndex);
                 PixelBuffer blended = PixelBuffer.lerp(
-                    PixelBuffer.wrap(frame.image()),
-                    PixelBuffer.wrap(nextFrame.image()),
+                    frame.pixels(),
+                    nextFrame.pixels(),
                     (float) progress
                 );
-                ImageFrame interpolatedFrame = ImageFrame.of(blended.toBufferedImage(), frame.delayMs());
+                ImageFrame interpolatedFrame = ImageFrame.of(blended, frame.delayMs());
                 return new FrameAtTimeResult(interpolatedFrame, true);
             }
 
@@ -183,9 +183,9 @@ public class AnimatedImageData implements ImageData {
 
         public @NotNull AnimatedImageData build() {
             ImageFrame first = this.frames.getFirst();
-            int w = this.width > 0 ? this.width : first.image().getWidth();
-            int h = this.height > 0 ? this.height : first.image().getHeight();
-            boolean alpha = first.image().getColorModel().hasAlpha();
+            int w = this.width > 0 ? this.width : first.pixels().width();
+            int h = this.height > 0 ? this.height : first.pixels().height();
+            boolean alpha = first.pixels().hasAlpha();
             int totalDuration = this.frames.stream()
                 .mapToInt(frame -> Math.max(frame.delayMs(), MIN_FRAME_DURATION_MS))
                 .sum();

@@ -2,6 +2,7 @@ package dev.simplified.image.codec.png;
 
 import dev.simplified.image.ImageData;
 import dev.simplified.image.ImageFormat;
+import dev.simplified.image.PixelBuffer;
 import dev.simplified.image.StaticImageData;
 import dev.simplified.image.codec.ImageReadOptions;
 import dev.simplified.image.codec.ImageReader;
@@ -11,7 +12,6 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import javax.imageio.ImageIO;
-import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 
 /**
@@ -32,12 +32,12 @@ public class PngImageReader implements ImageReader {
     @Override
     @SneakyThrows
     public @NotNull ImageData read(byte @NotNull [] data, @Nullable ImageReadOptions options) {
-        BufferedImage image = ImageIO.read(new ByteArrayInputStream(data));
+        var image = ImageIO.read(new ByteArrayInputStream(data));
 
         if (image == null)
             throw new ImageDecodeException("Failed to decode PNG image");
 
-        return StaticImageData.of(image);
+        return StaticImageData.of(PixelBuffer.wrap(image));
     }
 
 }

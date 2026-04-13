@@ -4,13 +4,12 @@ import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import org.jetbrains.annotations.NotNull;
 
-import java.awt.image.BufferedImage;
 import java.util.Arrays;
 
 /**
  * A single frame within an image, carrying pixel data and animation metadata.
  *
- * @param image the frame pixel data
+ * @param pixels the frame pixel data
  * @param delayMs the display duration in milliseconds
  * @param offsetX the horizontal offset within the canvas
  * @param offsetY the vertical offset within the canvas
@@ -18,7 +17,7 @@ import java.util.Arrays;
  * @param blend the blending method when rendering this frame
  */
 public record ImageFrame(
-    @NotNull BufferedImage image,
+    @NotNull PixelBuffer pixels,
     int delayMs,
     int offsetX,
     int offsetY,
@@ -27,20 +26,20 @@ public record ImageFrame(
 ) {
 
     /**
-     * Creates a frame with the given image and delay, using default offset and disposal.
+     * Creates a frame with the given pixels and delay, using default offset and disposal.
      *
-     * @param image the frame pixel data
+     * @param pixels the frame pixel data
      * @param delayMs the display duration in milliseconds
      * @return a new image frame
      */
-    public static @NotNull ImageFrame of(@NotNull BufferedImage image, int delayMs) {
-        return new ImageFrame(image, delayMs, 0, 0, Disposal.NONE, Blend.SOURCE);
+    public static @NotNull ImageFrame of(@NotNull PixelBuffer pixels, int delayMs) {
+        return new ImageFrame(pixels, delayMs, 0, 0, Disposal.NONE, Blend.SOURCE);
     }
 
     /**
      * Creates a frame with full control over all animation parameters.
      *
-     * @param image the frame pixel data
+     * @param pixels the frame pixel data
      * @param delayMs the display duration in milliseconds
      * @param offsetX the horizontal offset within the canvas
      * @param offsetY the vertical offset within the canvas
@@ -49,14 +48,14 @@ public record ImageFrame(
      * @return a new image frame
      */
     public static @NotNull ImageFrame of(
-        @NotNull BufferedImage image,
+        @NotNull PixelBuffer pixels,
         int delayMs,
         int offsetX,
         int offsetY,
         @NotNull Disposal disposal,
         @NotNull ImageFrame.Blend blend
     ) {
-        return new ImageFrame(image, delayMs, offsetX, offsetY, disposal, blend);
+        return new ImageFrame(pixels, delayMs, offsetX, offsetY, disposal, blend);
     }
 
     /**

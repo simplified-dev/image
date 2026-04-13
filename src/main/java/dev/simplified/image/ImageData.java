@@ -33,12 +33,23 @@ public interface ImageData {
     @NotNull ConcurrentList<ImageFrame> getFrames();
 
     /**
-     * Returns the first frame as a {@link BufferedImage}.
+     * Returns the first frame's pixel data.
      *
-     * @return the first frame's pixel data
+     * @return the first frame's pixel buffer
+     */
+    default @NotNull PixelBuffer toPixelBuffer() {
+        return getFrames().getFirst().pixels();
+    }
+
+    /**
+     * Returns the first frame as a {@link BufferedImage}.
+     * <p>
+     * The image is constructed on demand from the underlying pixel data.
+     *
+     * @return the first frame's pixel data as a buffered image
      */
     default @NotNull BufferedImage toBufferedImage() {
-        return getFrames().getFirst().image();
+        return toPixelBuffer().toBufferedImage();
     }
 
 }

@@ -60,8 +60,8 @@ public final class FrameNormalizer {
 
         if (needMinDimensions) {
             for (ImageFrame frame : frames) {
-                minW = Math.min(minW, frame.image().getWidth());
-                minH = Math.min(minH, frame.image().getHeight());
+                minW = Math.min(minW, frame.pixels().width());
+                minH = Math.min(minH, frame.pixels().height());
             }
         }
 
@@ -71,23 +71,18 @@ public final class FrameNormalizer {
         ConcurrentList<ImageFrame> normalized = Concurrent.newList();
 
         for (ImageFrame frame : frames) {
-            BufferedImage src = frame.image();
-            int sw = src.getWidth();
-            int sh = src.getHeight();
+            PixelBuffer src = frame.pixels();
+            int sw = src.width();
+            int sh = src.height();
 
             // Fast path: no transformation needed
             if (sw == canvasW && sh == canvasH && fitMode != FitMode.COVER) {
-                BufferedImage copy = new BufferedImage(canvasW, canvasH, BufferedImage.TYPE_INT_ARGB);
-                Graphics2D g2d = copy.createGraphics();
-                try {
-                    g2d.drawImage(src, 0, 0, null);
-                } finally {
-                    g2d.dispose();
-                }
+                PixelBuffer copy = PixelBuffer.of(src.getPixels().clone(), canvasW, canvasH, src.hasAlpha());
                 normalized.add(ImageFrame.of(copy, frame.delayMs(), 0, 0, frame.disposal(), frame.blend()));
                 continue;
             }
 
+            BufferedImage srcImage = src.toBufferedImage();
             BufferedImage canvas = new BufferedImage(canvasW, canvasH, BufferedImage.TYPE_INT_ARGB);
             Graphics2D g2d = canvas.createGraphics();
             try {
@@ -133,12 +128,12 @@ public final class FrameNormalizer {
                     }
                 }
 
-                g2d.drawImage(src, dx, dy, dw, dh, null);
+                g2d.drawImage(srcImage, dx, dy, dw, dh, null);
             } finally {
                 g2d.dispose();
             }
 
-            normalized.add(ImageFrame.of(canvas, frame.delayMs(), 0, 0, frame.disposal(), frame.blend()));
+            normalized.add(ImageFrame.of(PixelBuffer.wrap(canvas), frame.delayMs(), 0, 0, frame.disposal(), frame.blend()));
         }
 
         return new AnimatedImageData.Builder()

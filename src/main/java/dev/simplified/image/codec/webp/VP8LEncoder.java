@@ -34,8 +34,8 @@ final class VP8LEncoder {
      * @throws ImageEncodeException if encoding fails
      */
     static byte @NotNull [] encode(@NotNull PixelBuffer pixels) {
-        int width = pixels.getWidth();
-        int height = pixels.getHeight();
+        int width = pixels.width();
+        int height = pixels.height();
         int[] pixelData = pixels.getPixels();
 
         // Analyze image for transforms

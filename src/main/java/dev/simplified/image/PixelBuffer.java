@@ -3,6 +3,7 @@ package dev.simplified.image;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
+import lombok.experimental.Accessors;
 import org.jetbrains.annotations.NotNull;
 
 import java.awt.image.BufferedImage;
@@ -21,8 +22,12 @@ import java.util.stream.IntStream;
 public class PixelBuffer {
 
     private final int @NotNull [] pixels;
+    @Accessors(fluent = true)
     private final int width;
+    @Accessors(fluent = true)
     private final int height;
+    @Accessors(fluent = true)
+    private final boolean hasAlpha;
 
     /**
      * Wraps the pixel data of a {@link BufferedImage}.
@@ -37,14 +42,15 @@ public class PixelBuffer {
     public static @NotNull PixelBuffer wrap(@NotNull BufferedImage image) {
         int w = image.getWidth();
         int h = image.getHeight();
+        boolean alpha = image.getColorModel().hasAlpha();
 
         if (image.getType() == BufferedImage.TYPE_INT_ARGB) {
             int[] data = ((DataBufferInt) image.getRaster().getDataBuffer()).getData();
-            return new PixelBuffer(data, w, h);
+            return new PixelBuffer(data, w, h, alpha);
         }
 
         int[] pixels = image.getRGB(0, 0, w, h, null, 0, w);
-        return new PixelBuffer(pixels, w, h);
+        return new PixelBuffer(pixels, w, h, alpha);
     }
 
     /**
@@ -53,10 +59,23 @@ public class PixelBuffer {
      * @param pixels the ARGB pixel data (not copied)
      * @param width the image width
      * @param height the image height
+     * @param hasAlpha whether the alpha channel carries meaningful data
+     * @return a pixel buffer wrapping the array
+     */
+    public static @NotNull PixelBuffer of(int @NotNull [] pixels, int width, int height, boolean hasAlpha) {
+        return new PixelBuffer(pixels, width, height, hasAlpha);
+    }
+
+    /**
+     * Creates a pixel buffer from an existing ARGB pixel array, assuming alpha is present.
+     *
+     * @param pixels the ARGB pixel data (not copied)
+     * @param width the image width
+     * @param height the image height
      * @return a pixel buffer wrapping the array
      */
     public static @NotNull PixelBuffer of(int @NotNull [] pixels, int width, int height) {
-        return new PixelBuffer(pixels, width, height);
+        return new PixelBuffer(pixels, width, height, true);
     }
 
     /**
@@ -127,7 +146,7 @@ public class PixelBuffer {
             }
         }
 
-        return PixelBuffer.of(result, width, height);
+        return PixelBuffer.of(result, width, height, a.hasAlpha || b.hasAlpha);
     }
 
     private static int clampByte(float value) {

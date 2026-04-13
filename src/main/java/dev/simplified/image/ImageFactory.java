@@ -218,7 +218,7 @@ public class ImageFactory {
      * @return a static image data instance
      */
     public @NotNull StaticImageData fromImage(@NotNull BufferedImage image) {
-        return StaticImageData.of(image);
+        return StaticImageData.of(PixelBuffer.wrap(image));
     }
 
     /**
@@ -232,7 +232,7 @@ public class ImageFactory {
         AnimatedImageData.Builder builder = AnimatedImageData.builder();
 
         for (BufferedImage image : images)
-            builder.withFrame(ImageFrame.of(image, delayMs));
+            builder.withFrame(ImageFrame.of(PixelBuffer.wrap(image), delayMs));
 
         return builder.build();
     }

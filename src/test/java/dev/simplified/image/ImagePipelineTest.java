@@ -114,8 +114,8 @@ public class ImagePipelineTest {
             BufferedImage image = createArgbTestImage(4, 4, Color.RED);
             PixelBuffer buffer = PixelBuffer.wrap(image);
 
-            assertThat(buffer.getWidth(), is(4));
-            assertThat(buffer.getHeight(), is(4));
+            assertThat(buffer.width(), is(4));
+            assertThat(buffer.height(), is(4));
             assertThat(buffer.getPixels().length, is(16));
         }
 
@@ -124,8 +124,8 @@ public class ImagePipelineTest {
             BufferedImage image = createRgbTestImage(4, 4, Color.BLUE);
             PixelBuffer buffer = PixelBuffer.wrap(image);
 
-            assertThat(buffer.getWidth(), is(4));
-            assertThat(buffer.getHeight(), is(4));
+            assertThat(buffer.width(), is(4));
+            assertThat(buffer.height(), is(4));
         }
 
         @Test
@@ -197,8 +197,8 @@ public class ImagePipelineTest {
             BufferedImage frame2 = createArgbTestImage(8, 8, Color.BLUE);
 
             AnimatedImageData data = AnimatedImageData.builder()
-                .withFrame(ImageFrame.of(frame1, 100))
-                .withFrame(ImageFrame.of(frame2, 200))
+                .withFrame(ImageFrame.of(PixelBuffer.wrap(frame1), 100))
+                .withFrame(ImageFrame.of(PixelBuffer.wrap(frame2), 200))
                 .withLoopCount(3)
                 .build();
 
@@ -215,8 +215,8 @@ public class ImagePipelineTest {
             BufferedImage frame2 = createArgbTestImage(4, 4, Color.BLUE);
 
             AnimatedImageData data = AnimatedImageData.builder()
-                .withFrame(ImageFrame.of(frame1, 100))
-                .withFrame(ImageFrame.of(frame2, 100))
+                .withFrame(ImageFrame.of(PixelBuffer.wrap(frame1), 100))
+                .withFrame(ImageFrame.of(PixelBuffer.wrap(frame2), 100))
                 .build();
 
             assertThat(data.toBufferedImage().getRGB(0, 0), is(frame1.getRGB(0, 0)));
@@ -235,16 +235,16 @@ public class ImagePipelineTest {
             BufferedImage large = createArgbTestImage(8, 8, Color.BLUE);
 
             AnimatedImageData data = AnimatedImageData.builder()
-                .withFrame(ImageFrame.of(small, 100))
-                .withFrame(ImageFrame.of(large, 100))
+                .withFrame(ImageFrame.of(PixelBuffer.wrap(small), 100))
+                .withFrame(ImageFrame.of(PixelBuffer.wrap(large), 100))
                 .build();
 
             AnimatedImageData normalized = FrameNormalizer.normalize(data);
 
             // Default uses min dimensions
             for (ImageFrame frame : normalized.getFrames()) {
-                assertThat(frame.image().getWidth(), is(4));
-                assertThat(frame.image().getHeight(), is(4));
+                assertThat(frame.pixels().width(), is(4));
+                assertThat(frame.pixels().height(), is(4));
             }
         }
 
@@ -253,8 +253,8 @@ public class ImagePipelineTest {
             BufferedImage img = createArgbTestImage(4, 4, Color.RED);
 
             AnimatedImageData data = AnimatedImageData.builder()
-                .withFrame(ImageFrame.of(img, 100))
-                .withFrame(ImageFrame.of(img, 250))
+                .withFrame(ImageFrame.of(PixelBuffer.wrap(img), 100))
+                .withFrame(ImageFrame.of(PixelBuffer.wrap(img), 250))
                 .build();
 
             AnimatedImageData normalized = FrameNormalizer.normalize(data);
@@ -374,9 +374,9 @@ public class ImagePipelineTest {
             BufferedImage frame3 = createRgbTestImage(8, 8, Color.BLUE);
 
             AnimatedImageData animated = AnimatedImageData.builder()
-                .withFrame(ImageFrame.of(frame1, 100))
-                .withFrame(ImageFrame.of(frame2, 200))
-                .withFrame(ImageFrame.of(frame3, 150))
+                .withFrame(ImageFrame.of(PixelBuffer.wrap(frame1), 100))
+                .withFrame(ImageFrame.of(PixelBuffer.wrap(frame2), 200))
+                .withFrame(ImageFrame.of(PixelBuffer.wrap(frame3), 150))
                 .build();
 
             GifImageWriter writer = new GifImageWriter();
@@ -395,8 +395,8 @@ public class ImagePipelineTest {
             BufferedImage frame2 = createRgbTestImage(4, 4, Color.BLUE);
 
             AnimatedImageData animated = AnimatedImageData.builder()
-                .withFrame(ImageFrame.of(frame1, 100))
-                .withFrame(ImageFrame.of(frame2, 100))
+                .withFrame(ImageFrame.of(PixelBuffer.wrap(frame1), 100))
+                .withFrame(ImageFrame.of(PixelBuffer.wrap(frame2), 100))
                 .withLoopCount(5)
                 .build();
 
