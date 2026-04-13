@@ -77,7 +77,7 @@ public final class FrameNormalizer {
 
             // Fast path: no transformation needed
             if (sw == canvasW && sh == canvasH && fitMode != FitMode.COVER) {
-                PixelBuffer copy = PixelBuffer.of(src.getPixels().clone(), canvasW, canvasH, src.hasAlpha());
+                PixelBuffer copy = PixelBuffer.of(src.pixels().clone(), canvasW, canvasH, src.hasAlpha());
                 normalized.add(ImageFrame.of(copy, frame.delayMs(), 0, 0, frame.disposal(), frame.blend()));
                 continue;
             }

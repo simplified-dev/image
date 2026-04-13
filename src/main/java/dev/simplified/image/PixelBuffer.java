@@ -1,8 +1,6 @@
 package dev.simplified.image;
 
-import lombok.AccessLevel;
 import lombok.Getter;
-import lombok.RequiredArgsConstructor;
 import lombok.experimental.Accessors;
 import org.jetbrains.annotations.NotNull;
 
@@ -18,16 +16,23 @@ import java.util.stream.IntStream;
  * into a new array, then accessed without further copies.
  */
 @Getter
-@RequiredArgsConstructor(access = AccessLevel.PRIVATE)
+@Accessors(fluent = true)
 public class PixelBuffer {
 
     private final int @NotNull [] pixels;
-    @Accessors(fluent = true)
     private final int width;
-    @Accessors(fluent = true)
     private final int height;
-    @Accessors(fluent = true)
     private final boolean hasAlpha;
+
+    private PixelBuffer(int @NotNull [] pixels, int width, int height, boolean hasAlpha) {
+        if (pixels.length != width * height)
+            throw new IllegalArgumentException("Pixel array length %d does not match dimensions %dx%d".formatted(pixels.length, width, height));
+
+        this.pixels = pixels;
+        this.width = width;
+        this.height = height;
+        this.hasAlpha = hasAlpha;
+    }
 
     /**
      * Wraps the pixel data of a {@link BufferedImage}.
@@ -244,7 +249,7 @@ public class PixelBuffer {
         return (r * 0.299f + g * 0.587f + b * 0.114f) * (a / 255f);
     }
 
-    private int sampleBilinear(int[] source, float x, float y) {
+    private int sampleBilinear(int @NotNull [] source, float x, float y) {
         int ix = (int) Math.floor(x);
         int iy = (int) Math.floor(y);
         float fx = x - ix;
