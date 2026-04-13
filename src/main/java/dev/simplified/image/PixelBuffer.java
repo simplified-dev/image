@@ -5,7 +5,12 @@ import lombok.experimental.Accessors;
 import org.jetbrains.annotations.NotNull;
 
 import java.awt.image.BufferedImage;
+import java.awt.image.ColorModel;
+import java.awt.image.DataBuffer;
 import java.awt.image.DataBufferInt;
+import java.awt.image.Raster;
+import java.awt.image.SinglePixelPackedSampleModel;
+import java.util.Arrays;
 import java.util.stream.IntStream;
 
 /**
@@ -84,17 +89,26 @@ public class PixelBuffer {
     }
 
     /**
-     * Creates a new {@link BufferedImage} from this buffer's pixel data.
+     * Creates a {@link BufferedImage} backed by this buffer's pixel array (zero copy).
      * <p>
-     * The returned image is {@link BufferedImage#TYPE_INT_ARGB} with the pixel array
-     * set directly on its raster.
+     * The returned image shares the same {@code int[]} as this buffer, so edits made through
+     * either API (pixel buffer or {@link java.awt.Graphics2D}) are immediately visible from
+     * the other without a flush step.
      *
-     * @return a new buffered image containing this buffer's pixels
+     * @return a buffered image sharing this buffer's pixel array
      */
     public @NotNull BufferedImage toBufferedImage() {
-        BufferedImage image = new BufferedImage(this.width, this.height, BufferedImage.TYPE_INT_ARGB);
-        image.setRGB(0, 0, this.width, this.height, this.pixels, 0, this.width);
-        return image;
+        DataBufferInt db = new DataBufferInt(this.pixels, this.pixels.length);
+        int[] masks = { 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000 };
+        SinglePixelPackedSampleModel sm = new SinglePixelPackedSampleModel(
+            DataBuffer.TYPE_INT, this.width, this.height, masks
+        );
+        return new BufferedImage(
+            ColorModel.getRGBdefault(),
+            Raster.createWritableRaster(sm, db, null),
+            false,
+            null
+        );
     }
 
     /**
@@ -117,6 +131,143 @@ public class PixelBuffer {
      */
     public void setPixel(int x, int y, int argb) {
         this.pixels[y * this.width + x] = argb;
+    }
+
+    /**
+     * Creates a blank pixel buffer of the given dimensions, initially filled with transparent black.
+     * No {@link BufferedImage} is allocated.
+     *
+     * @param width the buffer width in pixels
+     * @param height the buffer height in pixels
+     * @return a new pixel buffer
+     */
+    public static @NotNull PixelBuffer create(int width, int height) {
+        return new PixelBuffer(new int[width * height], width, height, true);
+    }
+
+    /**
+     * Returns a new pixel buffer with a cloned pixel array.
+     *
+     * @return an independent copy of this buffer
+     */
+    public @NotNull PixelBuffer copy() {
+        return new PixelBuffer(this.pixels.clone(), this.width, this.height, this.hasAlpha);
+    }
+
+    /**
+     * Fills the entire buffer with the given ARGB colour. Discards any existing content.
+     *
+     * @param argb the fill colour
+     */
+    public void fill(int argb) {
+        Arrays.fill(this.pixels, argb);
+    }
+
+    /**
+     * Fills a rectangular region with the given ARGB colour. Out-of-bounds areas are silently
+     * clipped. Each row is filled via {@link Arrays#fill} for JVM vectorization.
+     *
+     * @param x the left edge
+     * @param y the top edge
+     * @param w the rectangle width
+     * @param h the rectangle height
+     * @param argb the fill colour
+     */
+    public void fillRect(int x, int y, int w, int h, int argb) {
+        int x0 = Math.max(0, x);
+        int y0 = Math.max(0, y);
+        int x1 = Math.min(this.width, x + w);
+        int y1 = Math.min(this.height, y + h);
+
+        for (int row = y0; row < y1; row++) {
+            int offset = row * this.width;
+            Arrays.fill(this.pixels, offset + x0, offset + x1, argb);
+        }
+    }
+
+    /**
+     * Composites the source buffer onto this buffer at the given origin using standard
+     * source-over alpha compositing.
+     *
+     * @param source the source buffer
+     * @param dx the destination x origin
+     * @param dy the destination y origin
+     */
+    public void blit(@NotNull PixelBuffer source, int dx, int dy) {
+        blit(source, dx, dy, BlendMode.NORMAL);
+    }
+
+    /**
+     * Composites the source buffer onto this buffer at the given origin using the specified
+     * blend mode. Out-of-bounds pixels are silently clipped.
+     *
+     * @param source the source buffer
+     * @param dx the destination x origin
+     * @param dy the destination y origin
+     * @param mode the blend mode to use for compositing
+     */
+    public void blit(@NotNull PixelBuffer source, int dx, int dy, @NotNull BlendMode mode) {
+        int srcX0 = Math.max(0, -dx);
+        int srcY0 = Math.max(0, -dy);
+        int srcX1 = Math.min(source.width, this.width - dx);
+        int srcY1 = Math.min(source.height, this.height - dy);
+
+        for (int y = srcY0; y < srcY1; y++) {
+            int dstRow = (dy + y) * this.width;
+            int srcRow = y * source.width;
+
+            for (int x = srcX0; x < srcX1; x++) {
+                int src = source.pixels[srcRow + x];
+                if (ColorMath.alpha(src) == 0) continue;
+                int dst = this.pixels[dstRow + dx + x];
+                this.pixels[dstRow + dx + x] = ColorMath.blend(src, dst, mode);
+            }
+        }
+    }
+
+    /**
+     * Composites the source buffer onto this buffer at the given origin, rescaling to the
+     * specified width and height using nearest-neighbor sampling with source-over alpha
+     * compositing.
+     *
+     * @param source the source buffer
+     * @param dx the destination x origin
+     * @param dy the destination y origin
+     * @param dw the destination width
+     * @param dh the destination height
+     */
+    public void blitScaled(@NotNull PixelBuffer source, int dx, int dy, int dw, int dh) {
+        int x0 = Math.max(0, -dx);
+        int y0 = Math.max(0, -dy);
+        int x1 = Math.min(dw, this.width - dx);
+        int y1 = Math.min(dh, this.height - dy);
+
+        for (int y = y0; y < y1; y++) {
+            int dstRow = (dy + y) * this.width;
+            int sy = (y * source.height) / dh;
+
+            for (int x = x0; x < x1; x++) {
+                int sx = (x * source.width) / dw;
+                int src = source.pixels[sy * source.width + sx];
+                if (ColorMath.alpha(src) == 0) continue;
+                int dstIdx = dstRow + dx + x;
+                this.pixels[dstIdx] = ColorMath.blend(src, this.pixels[dstIdx], BlendMode.NORMAL);
+            }
+        }
+    }
+
+    /**
+     * Tints the source buffer and composites it onto this buffer at the given origin using the
+     * specified blend mode.
+     *
+     * @param source the source buffer
+     * @param dx the destination x origin
+     * @param dy the destination y origin
+     * @param argbTint the ARGB tint colour
+     * @param mode the blend mode to use for compositing
+     */
+    public void blitTinted(@NotNull PixelBuffer source, int dx, int dy, int argbTint, @NotNull BlendMode mode) {
+        blit(ColorMath.tint(source, argbTint), dx, dy, mode);
     }
 
     /**
