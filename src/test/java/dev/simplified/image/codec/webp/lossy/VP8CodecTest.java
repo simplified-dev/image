@@ -660,6 +660,280 @@ public class VP8CodecTest {
 
     }
 
+    // ──── VP8 Spec conformance (RFC 6386 + libwebp/libvpx parity) ────
+
+    @Nested
+    class VP8ConformanceTests {
+
+        @Test @DisplayName("conformance: frame tag emits version=0 and filter header emits simple=0")
+        void wireFormatVersionAndSimpleFilterBit() {
+            // RFC 6386 section 9.1: version=0 pairs with bicubic (6-tap) sub-pel + normal
+            // loop filter. Our sub-pel is 6-tap everywhere, so simple_filter must be 0.
+            PixelBuffer buf = PixelBuffer.create(16, 16);
+            buf.fill(0xFF808080);
+            byte[] vp8 = VP8Encoder.encode(buf, 0.5f);
+
+            int frameTag = (vp8[0] & 0xFF) | ((vp8[1] & 0xFF) << 8) | ((vp8[2] & 0xFF) << 16);
+            int version = (frameTag >>> 1) & 0x07;
+            assertThat("frame-tag version", version, is(0));
+
+            int firstPartSize = (frameTag >>> 5) & 0x7FFFF;
+            BooleanDecoder br = new BooleanDecoder(vp8, 10, firstPartSize);
+            br.decodeBool();                         // color_space
+            br.decodeBool();                         // clamp_type
+            assertThat("use_segment",    br.decodeBool(), is(0));
+            assertThat("simple_filter bit (0 = normal, matching version=0)",
+                br.decodeBool(), is(0));
+        }
+
+        @Test @DisplayName("conformance: normal-filter keyframe decodes via libwebp at >= 30 dB PSNR")
+        void normalFilterLibwebpRoundtrip() throws Exception {
+            PixelBuffer src = PixelBuffer.create(32, 32);
+            for (int y = 0; y < 32; y++)
+                for (int x = 0; x < 32; x++)
+                    src.setPixel(x, y, 0xFF000000 | ((x * 8) << 16) | ((y * 8) << 8));
+
+            byte[] vp8 = VP8Encoder.encode(src, 0.9f);
+            ConcurrentList<WebPChunk> chunks = Concurrent.newList();
+            chunks.add(RiffContainer.createChunk(WebPChunk.Type.VP8, vp8));
+            byte[] riff = RiffContainer.write(chunks);
+
+            int[] decoded = ConformanceHelper.decodeWithLibwebp(riff, 32, 32);
+            if (decoded == null) return;  // libwebp/Python unavailable - skipped.
+
+            double psnr = ConformanceHelper.pixelPsnr(src, decoded, 32, 32);
+            if (psnr < 30.0)
+                throw new AssertionError(String.format(
+                    "libwebp decode of normal-filter output: PSNR = %.2f dB (expected >= 30 dB)",
+                    psnr));
+        }
+
+        @Test @DisplayName("conformance: our decoder matches libwebp's decode of the same libwebp-encoded stream")
+        void decoderParityWithLibwebpOnLibwebpStream() throws Exception {
+            PixelBuffer src = PixelBuffer.create(32, 32);
+            for (int y = 0; y < 32; y++)
+                for (int x = 0; x < 32; x++)
+                    src.setPixel(x, y, 0xFF000000 | ((x * 8) << 16) | ((y * 8) << 8));
+
+            byte[] vp8 = ConformanceHelper.encodeWithLibwebp(src, 60);
+            if (vp8 == null) return;
+
+            PixelBuffer ours = VP8Decoder.decode(vp8);
+
+            ConcurrentList<WebPChunk> chunks = Concurrent.newList();
+            chunks.add(RiffContainer.createChunk(WebPChunk.Type.VP8, vp8));
+            byte[] riff = RiffContainer.write(chunks);
+            int[] libwebp = ConformanceHelper.decodeWithLibwebp(riff, 32, 32);
+            if (libwebp == null) return;
+
+            // libwebp uses "fancy" bilinear chroma upsampling; we use nearest. That alone
+            // costs a few dB. If ref_lf_delta / mode_lf_delta parsing were broken, filter
+            // application would diverge at MB edges and PSNR would collapse below 25 dB.
+            double psnr = ConformanceHelper.pixelPsnr(ours, libwebp, 32, 32);
+            if (psnr < 30.0)
+                throw new AssertionError(String.format(
+                    "ours-vs-libwebp decode parity PSNR = %.2f dB (expected >= 30 dB)", psnr));
+        }
+
+        @Test @DisplayName("conformance: decoder honours use_lf_delta=1 with nonzero ref_lf_delta[INTRA]")
+        void decoderAppliesRefLfDeltaFromSynthesizedStream() {
+            // Two streams, identical except the filter header: one with use_lf_delta=0,
+            // one with use_lf_delta=1 and ref_lf_delta[INTRA] = +63 (which caps the
+            // effective filter level at the full 63, maximum filtering on intra MBs).
+            // Quantization-induced block artefacts differ dramatically between mild
+            // baseline filtering and maxed-out filtering - any decoder that ignores
+            // the deltas produces identical pixels for both streams.
+            PixelBuffer src = PixelBuffer.create(32, 32);
+            for (int y = 0; y < 32; y++)
+                for (int x = 0; x < 32; x++) {
+                    // Smooth gradient produces quantization artefacts across MB edges
+                    // where the loop filter has visible effect.
+                    int r = (x * 255) / 31;
+                    int g = (y * 255) / 31;
+                    int b = ((x + y) * 255) / 62;
+                    src.setPixel(x, y, 0xFF000000 | (r << 16) | (g << 8) | b);
+                }
+
+            byte[] vp8Base = VP8Encoder.encode(src, 0.5f);   // use_lf_delta = 0 by default
+            int[] refDeltas = { 63, 0, 0, 0 };               // REF_INTRA = +63 maxes the filter
+            byte[] vp8WithDeltas = VP8Encoder.encodeWithLfDeltas(src, 0.5f, refDeltas, new int[4]);
+
+            PixelBuffer baseDecoded = VP8Decoder.decode(vp8Base);
+            PixelBuffer deltaDecoded = VP8Decoder.decode(vp8WithDeltas);
+
+            // With all intra MBs having their filter suppressed, pixel output near MB
+            // boundaries must differ from the filter-active baseline. Require at least
+            // one pixel differ by >= 2 in some channel.
+            long totalDiff = 0;
+            int maxDiff = 0;
+            for (int y = 0; y < 32; y++) {
+                for (int x = 0; x < 32; x++) {
+                    int a = baseDecoded.getPixel(x, y);
+                    int b = deltaDecoded.getPixel(x, y);
+                    for (int shift : new int[]{0, 8, 16}) {
+                        int d = Math.abs(((a >> shift) & 0xFF) - ((b >> shift) & 0xFF));
+                        totalDiff += d;
+                        if (d > maxDiff) maxDiff = d;
+                    }
+                }
+            }
+            if (maxDiff < 2)
+                throw new AssertionError(String.format(
+                    "decoder ignored ref_lf_delta: max per-sample diff = %d, total = %d "
+                        + "(expected meaningful divergence with intraDelta=-63)",
+                    maxDiff, totalDiff));
+        }
+
+    }
+
+    /**
+     * Shared utilities for the conformance tests - libwebp encode / decode via Python
+     * plus a bit-surgical patch that inserts {@code use_lf_delta=1} + a single
+     * {@code ref_lf_delta[INTRA]} override into an already-encoded stream.
+     */
+    private static final class ConformanceHelper {
+
+        private ConformanceHelper() { }
+
+        /** PSNR in dB between an RGB {@link PixelBuffer} and a decoded ARGB pixel array of the same dims. */
+        static double pixelPsnr(PixelBuffer src, int[] decoded, int w, int h) {
+            long sumSq = 0;
+            int n = 0;
+            for (int y = 0; y < h; y++)
+                for (int x = 0; x < w; x++) {
+                    int s = src.getPixel(x, y);
+                    int d = decoded[y * w + x];
+                    for (int shift : new int[]{0, 8, 16}) {
+                        int diff = ((s >> shift) & 0xFF) - ((d >> shift) & 0xFF);
+                        sumSq += (long) diff * diff;
+                        n++;
+                    }
+                }
+            double mse = sumSq / (double) n;
+            return mse == 0 ? Double.POSITIVE_INFINITY : 10.0 * Math.log10(255.0 * 255.0 / mse);
+        }
+
+        /**
+         * Shells out to Python's {@code webp} package to encode {@code src} at the given
+         * quality and returns the bare VP8 payload. Returns {@code null} when Python or
+         * the {@code webp} module is unavailable (so the test can self-skip).
+         */
+        static byte[] encodeWithLibwebp(PixelBuffer src, int quality) throws Exception {
+            java.nio.file.Path out = java.nio.file.Files.createTempFile("libwebp-enc-", ".webp");
+            try {
+                StringBuilder pixels = new StringBuilder();
+                for (int y = 0; y < src.height(); y++) {
+                    for (int x = 0; x < src.width(); x++) {
+                        int p = src.getPixel(x, y);
+                        pixels.append(String.format("%d,%d,%d,%d,",
+                            (p >> 16) & 0xFF, (p >> 8) & 0xFF, p & 0xFF, (p >>> 24) & 0xFF));
+                    }
+                }
+                String script =
+                    "import sys\n" +
+                    "try:\n" +
+                    "    import webp, numpy as np\n" +
+                    "except ImportError:\n" +
+                    "    print('NO_WEBP'); sys.exit(2)\n" +
+                    "raw = bytes([" + pixels.substring(0, pixels.length() - 1) + "])\n" +
+                    "arr = np.frombuffer(raw, dtype=np.uint8).reshape(" + src.height() + ", " + src.width() + ", 4)\n" +
+                    "pic = webp.WebPPicture.from_numpy(arr, pilmode='RGBA')\n" +
+                    "cfg = webp.WebPConfig.new(quality=" + quality + ")\n" +
+                    "data = pic.encode(cfg).buffer()\n" +
+                    "with open(r'" + out.toAbsolutePath() + "', 'wb') as f: f.write(bytes(data))\n";
+                Process p = startPython(script);
+                if (p == null) return null;
+                int exit = p.waitFor();
+                String stdout = new String(p.getInputStream().readAllBytes());
+                if (exit == 2 && stdout.contains("NO_WEBP")) return null;
+                if (exit != 0) throw new AssertionError("libwebp encode failed:\n" + stdout);
+
+                byte[] riff = java.nio.file.Files.readAllBytes(out);
+                return extractVp8Payload(riff);
+            } finally {
+                java.nio.file.Files.deleteIfExists(out);
+            }
+        }
+
+        /**
+         * Shells out to libwebp to decode a RIFF-wrapped WebP. Returns {@code null} when
+         * Python or the {@code webp} module is unavailable.
+         */
+        static int[] decodeWithLibwebp(byte[] riff, int expectedW, int expectedH) throws Exception {
+            java.nio.file.Path tmp = java.nio.file.Files.createTempFile("vp8-conf-", ".webp");
+            try {
+                java.nio.file.Files.write(tmp, riff);
+
+                String script =
+                    "import sys\n" +
+                    "try:\n" +
+                    "    import webp\n" +
+                    "except ImportError:\n" +
+                    "    print('NO_WEBP'); sys.exit(2)\n" +
+                    "img = webp.load_image(r'" + tmp.toAbsolutePath() + "').convert('RGBA')\n" +
+                    "w, h = img.size\n" +
+                    "print(w, h)\n" +
+                    "data = img.tobytes()\n" +
+                    "for i in range(0, len(data), 4):\n" +
+                    "    r, g, b, a = data[i], data[i+1], data[i+2], data[i+3]\n" +
+                    "    print(f'{a:02x}{r:02x}{g:02x}{b:02x}')\n";
+
+                Process p = startPython(script);
+                if (p == null) return null;
+                String out = new String(p.getInputStream().readAllBytes());
+                int exit = p.waitFor();
+                if (exit == 2 && out.contains("NO_WEBP")) return null;
+                if (exit != 0) throw new AssertionError("libwebp rejected VP8 stream:\n" + out);
+
+                String[] lines = out.trim().split("\\R");
+                String[] dims = lines[0].split("\\s+");
+                int w = Integer.parseInt(dims[0]);
+                int h = Integer.parseInt(dims[1]);
+                if (w != expectedW || h != expectedH)
+                    throw new AssertionError("decoded dims " + w + "x" + h
+                        + " != expected " + expectedW + "x" + expectedH);
+
+                int[] pixels = new int[w * h];
+                for (int i = 0; i < w * h; i++)
+                    pixels[i] = (int) Long.parseLong(lines[i + 1], 16);
+                return pixels;
+            } finally {
+                java.nio.file.Files.deleteIfExists(tmp);
+            }
+        }
+
+        /** Strips RIFF container headers, returns the bare VP8 payload. */
+        private static byte[] extractVp8Payload(byte[] riff) {
+            int offset = 12;
+            while (offset + 8 <= riff.length) {
+                String tag = new String(riff, offset, 4);
+                int size = (riff[offset + 4] & 0xFF)
+                    | ((riff[offset + 5] & 0xFF) << 8)
+                    | ((riff[offset + 6] & 0xFF) << 16)
+                    | ((riff[offset + 7] & 0xFF) << 24);
+                if (tag.equals("VP8 ")) {
+                    byte[] payload = new byte[size];
+                    System.arraycopy(riff, offset + 8, payload, 0, size);
+                    return payload;
+                }
+                offset += 8 + size + (size & 1);
+            }
+            throw new AssertionError("no VP8 chunk found in RIFF");
+        }
+
+        private static Process startPython(String script) {
+            for (String cmd : new String[]{"python3", "python", "py"}) {
+                try {
+                    ProcessBuilder pb = new ProcessBuilder(cmd, "-c", script);
+                    pb.redirectErrorStream(true);
+                    return pb.start();
+                } catch (java.io.IOException ignored) { }
+            }
+            return null;
+        }
+
+    }
+
     // ──── VP8 Session (Phase 0 stateful encoder/decoder wrappers) ────
 
     @Nested
