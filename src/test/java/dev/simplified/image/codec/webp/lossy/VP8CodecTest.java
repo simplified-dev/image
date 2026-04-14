@@ -885,6 +885,70 @@ public class VP8CodecTest {
                     throw new AssertionError("ALTREF mutated by default P-frame at index " + i);
         }
 
+        @Test @DisplayName("conformance: NearMvs flips cross-reference MVs when sign bias differs (RFC 6386 section 18.3)")
+        void nearMvsFlipsCrossReferenceMvWhenSignBiasDiffers() {
+            // 3x1 MB layout: left(0) = GOLDEN with MV (10, -20), middle(1) = LAST dummy to
+            // seed mvIdx, current MB at (2, 0) is being evaluated against REF_LAST. When
+            // sign_bias_golden = 1 and sign_bias_last = 0 (always), libvpx flips the GOLDEN
+            // neighbour's MV before feeding it to the NEAREST / NEAR derivation.
+            //
+            // Layout:
+            //   [GOLDEN mv=(10,-20)]  [LAST mv=(4, 8)]  [current, ref=LAST]
+            // With sign_bias_golden = 0: both neighbours contribute unflipped. The above
+            //   neighbour (weight 2) seeds slot 1 with (4, 8); the left neighbour doesn't
+            //   exist at the above position here - we use a 3x1 grid so the neighbour to the
+            //   left of the current MB is the LAST-ref MB at (1, 0), and the above-left /
+            //   above don't exist (mbY = 0). Only left contributes.
+            // With sign_bias_golden = 1: irrelevant to this layout (GOLDEN isn't a neighbour
+            //   of current). So we need a different layout.
+            //
+            // Simpler layout: 1x2 - above(0) = GOLDEN mv=(10,-20), current at (0, 1) ref=LAST.
+            int mbCols = 1;
+            boolean[] mbIsInter = { true, false };            // above is inter, current is undecided
+            int[] mbMvRow      = { 10,   0 };
+            int[] mbMvCol      = { -20,  0 };
+            int[] mbRefFrame   = { LoopFilter.REF_GOLDEN, LoopFilter.REF_INTRA };
+
+            // Case 1: sign_bias_golden = 0 - current (REF_LAST bias=0) vs above (REF_GOLDEN bias=0).
+            // No flip. Nearest MV = (10, -20).
+            NearMvs.Result r0 = new NearMvs.Result();
+            NearMvs.find(mbIsInter, mbMvRow, mbMvCol, mbRefFrame, mbCols, 0, 1,
+                LoopFilter.REF_LAST, false, false, r0);
+            assertThat("no-flip nearest row", r0.nearestRow, is(10));
+            assertThat("no-flip nearest col", r0.nearestCol, is(-20));
+
+            // Case 2: sign_bias_golden = 1 - current bias 0, above bias 1. Flip the neighbour.
+            // Nearest MV = (-10, 20).
+            NearMvs.Result r1 = new NearMvs.Result();
+            NearMvs.find(mbIsInter, mbMvRow, mbMvCol, mbRefFrame, mbCols, 0, 1,
+                LoopFilter.REF_LAST, true, false, r1);
+            assertThat("flipped nearest row", r1.nearestRow, is(-10));
+            assertThat("flipped nearest col", r1.nearestCol, is(20));
+
+            // Case 3: current MB is itself REF_GOLDEN (bias 1) against REF_GOLDEN neighbour
+            // (bias 1) - biases match, no flip. Nearest = (10, -20).
+            NearMvs.Result r2 = new NearMvs.Result();
+            NearMvs.find(mbIsInter, mbMvRow, mbMvCol, mbRefFrame, mbCols, 0, 1,
+                LoopFilter.REF_GOLDEN, true, false, r2);
+            assertThat("same-bias nearest row", r2.nearestRow, is(10));
+            assertThat("same-bias nearest col", r2.nearestCol, is(-20));
+
+            // Case 4: INTRA neighbour is skipped regardless of sign bias - no MV contribution.
+            // Current evaluated against GOLDEN; sanity check that the biasOf(INTRA) = 0 path
+            // never negates an MV for an intra neighbour. We swap ref to INTRA and expect all
+            // zero slots because mbIsInter[0] = false.
+            boolean[] intraNeighbour = { false, false };
+            int[] intraRef = { LoopFilter.REF_INTRA, LoopFilter.REF_INTRA };
+            NearMvs.Result r3 = new NearMvs.Result();
+            NearMvs.find(intraNeighbour, mbMvRow, mbMvCol, intraRef, mbCols, 0, 1,
+                LoopFilter.REF_LAST, true, true, r3);
+            assertThat("intra neighbour contributes zero nearest row", r3.nearestRow, is(0));
+            assertThat("intra neighbour contributes zero nearest col", r3.nearestCol, is(0));
+            assertThat("intra neighbour bumps CNT_INTRA-only",
+                r3.cnt[NearMvs.CNT_INTRA] + r3.cnt[NearMvs.CNT_NEAREST]
+                + r3.cnt[NearMvs.CNT_NEAR] + r3.cnt[NearMvs.CNT_SPLITMV], is(0));
+        }
+
     }
 
     /**

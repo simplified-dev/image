@@ -46,21 +46,51 @@ final class NearMvs {
     private NearMvs() { }
 
     /**
+     * Returns the RFC 6386 section 18.3 sign-bias flag for a reference frame. INTRA and
+     * LAST are always 0; GOLDEN and ALTREF take the per-frame flags emitted in the
+     * key-frame header. Mirrors libvpx's {@code ref_frame_sign_bias[]} table.
+     *
+     * @param refFrame one of {@link LoopFilter#REF_INTRA} / {@link LoopFilter#REF_LAST}
+     *                / {@link LoopFilter#REF_GOLDEN} / {@link LoopFilter#REF_ALTREF}
+     * @param signBiasGolden per-frame sign_bias_golden flag
+     * @param signBiasAltref per-frame sign_bias_altref flag
+     * @return 0 or 1
+     */
+    private static int biasOf(int refFrame, boolean signBiasGolden, boolean signBiasAltref) {
+        if (refFrame == LoopFilter.REF_GOLDEN) return signBiasGolden ? 1 : 0;
+        if (refFrame == LoopFilter.REF_ALTREF) return signBiasAltref ? 1 : 0;
+        return 0;                          // INTRA and LAST always 0
+    }
+
+    /**
      * Derives nearest / near / best MVs and neighbour vote counts for the MB at
      * ({@code mbX}, {@code mbY}). Read-only over {@code mbIsInter}, {@code mbMvRow},
-     * {@code mbMvCol} which must already carry state for MBs earlier in raster order.
+     * {@code mbMvCol}, {@code mbRefFrame} which must already carry state for MBs earlier
+     * in raster order.
+     * <p>
+     * Implements libvpx's {@code vp8_mv_bias} cross-reference sign handling: each
+     * neighbour MV whose reference-frame sign bias differs from the current MB's sign bias
+     * has its row and column negated before the distinct-MV comparison and vote bump.
+     * Required for interop with libvpx-produced streams that set a non-zero
+     * {@code sign_bias_golden} / {@code sign_bias_altref}.
      *
      * @param mbIsInter per-MB "has a reference frame" flag
      * @param mbMvRow per-MB MV row (1/8-pel internal) - unused when {@code !mbIsInter[i]}
      * @param mbMvCol per-MB MV col (1/8-pel internal) - unused when {@code !mbIsInter[i]}
+     * @param mbRefFrame per-MB reference-frame index (REF_INTRA / REF_LAST / REF_GOLDEN /
+     *                   REF_ALTREF); used to resolve each inter neighbour's sign bias
      * @param mbCols macroblock grid width
      * @param mbX current MB column
      * @param mbY current MB row
+     * @param currentRefFrame reference frame the current MB is being evaluated against
+     * @param signBiasGolden per-frame {@code sign_bias_golden} flag
+     * @param signBiasAltref per-frame {@code sign_bias_altref} flag
      * @param out populated with the derived values (caller-allocated to avoid GC churn)
      */
     static void find(
         boolean @NotNull [] mbIsInter, int @NotNull [] mbMvRow, int @NotNull [] mbMvCol,
-        int mbCols, int mbX, int mbY, @NotNull Result out
+        int @NotNull [] mbRefFrame, int mbCols, int mbX, int mbY, int currentRefFrame,
+        boolean signBiasGolden, boolean signBiasAltref, @NotNull Result out
     ) {
         // libvpx stashes best/nearest/near/split MVs in a 4-slot array and walks a "current"
         // pointer forward as new distinct non-zero neighbour MVs arrive. cntx advances in
@@ -71,12 +101,16 @@ final class NearMvs {
         int[] cnt = out.cnt;
         cnt[0] = cnt[1] = cnt[2] = cnt[3] = 0;
         int mvIdx = 0;
+        int curBias = biasOf(currentRefFrame, signBiasGolden, signBiasAltref);
 
         // Above neighbour (weight 2).
         if (mbY > 0) {
             int idx = (mbY - 1) * mbCols + mbX;
             if (mbIsInter[idx]) {
                 int r = mbMvRow[idx], c = mbMvCol[idx];
+                if (biasOf(mbRefFrame[idx], signBiasGolden, signBiasAltref) != curBias) {
+                    r = -r; c = -c;
+                }
                 if ((r | c) != 0) {
                     mvIdx++;
                     mvRows[mvIdx] = r;
@@ -93,6 +127,9 @@ final class NearMvs {
             int idx = mbY * mbCols + mbX - 1;
             if (mbIsInter[idx]) {
                 int r = mbMvRow[idx], c = mbMvCol[idx];
+                if (biasOf(mbRefFrame[idx], signBiasGolden, signBiasAltref) != curBias) {
+                    r = -r; c = -c;
+                }
                 if ((r | c) != 0) {
                     if (r != mvRows[mvIdx] || c != mvCols[mvIdx]) {
                         mvIdx++;
@@ -111,6 +148,9 @@ final class NearMvs {
             int idx = (mbY - 1) * mbCols + mbX - 1;
             if (mbIsInter[idx]) {
                 int r = mbMvRow[idx], c = mbMvCol[idx];
+                if (biasOf(mbRefFrame[idx], signBiasGolden, signBiasAltref) != curBias) {
+                    r = -r; c = -c;
+                }
                 if ((r | c) != 0) {
                     if (r != mvRows[mvIdx] || c != mvCols[mvIdx]) {
                         mvIdx++;
