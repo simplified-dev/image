@@ -102,6 +102,15 @@ public final class VP8Decoder {
         final int[] yModeProba = VP8Tables.YMODE_PROBA_INTER.clone();
         final int[] uvModeProba = VP8Tables.UV_MODE_PROBA_INTER.clone();
 
+        // Reference-buffer management flags from the inter-frame header (RFC 6386 section 9.7).
+        boolean refreshLast;
+        boolean refreshGolden;
+        boolean refreshAltref;
+        int copyBufferToGolden;    // 0 = keep, 1 = from LAST, 2 = from ALTREF
+        int copyBufferToAltref;    // 0 = keep, 1 = from LAST, 2 = from GOLDEN
+        boolean signBiasGolden;
+        boolean signBiasAltref;
+
         State(int width, int height, boolean isKeyframe, @Nullable VP8DecoderSession session) {
             this.isKeyframe = isKeyframe;
             this.session = session;
@@ -246,12 +255,17 @@ public final class VP8Decoder {
 
         // ── Inter-frame reference-buffer management (RFC 6386 section 9.7) ──
         if (!keyFrame) {
-            boolean refreshGolden = br.decodeBool() != 0;
-            boolean refreshAlt = br.decodeBool() != 0;
-            if (!refreshGolden) br.decodeUint(2);    // copy_buffer_to_golden
-            if (!refreshAlt) br.decodeUint(2);       // copy_buffer_to_alt
-            br.decodeBool();                         // sign_bias_golden
-            br.decodeBool();                         // sign_bias_alt
+            s.refreshGolden = br.decodeBool() != 0;
+            s.refreshAltref = br.decodeBool() != 0;
+            s.copyBufferToGolden = s.refreshGolden ? 0 : br.decodeUint(2);
+            s.copyBufferToAltref = s.refreshAltref ? 0 : br.decodeUint(2);
+            s.signBiasGolden = br.decodeBool() != 0;
+            s.signBiasAltref = br.decodeBool() != 0;
+        } else {
+            // Keyframes implicitly refresh all 3 slots; no sign bias.
+            s.refreshGolden = true;
+            s.refreshAltref = true;
+            s.refreshLast = true;
         }
 
         // refresh_entropy_probs (value ignored on keyframes, but the bit is still consumed).
@@ -259,7 +273,7 @@ public final class VP8Decoder {
 
         // Inter-only: refresh_last.
         if (!keyFrame)
-            br.decodeBool();                         // refresh_last
+            s.refreshLast = br.decodeBool() != 0;
 
         // VP8ParseProba: 1056 probability update bits.
         for (int t = 0; t < VP8Tables.NUM_TYPES; t++)
@@ -354,14 +368,14 @@ public final class VP8Decoder {
             );
         }
 
-        // Snapshot the post-filter planes into the session so Phase 1+ P-frame
-        // decoding can read them as the LAST reference.
+        // Apply RFC 6386 section 9.7 reference-buffer updates. Libvpx order: copy
+        // operations first (using PRE-update buffers), then refreshes. Copy-to-alt
+        // happens before copy-to-golden so a {@code copy_buffer_to_golden = 2}
+        // operation sees the original golden slot, not the just-copied alt.
         if (session != null) {
-            session.captureReference(
-                s.reconY, s.reconU, s.reconV,
-                s.lumaStride, s.chromaStride,
-                s.mbCols, s.mbRows, width, height
-            );
+            updateReferenceBuffers(session, s, width, height);
+            session.signBiasGolden = s.signBiasGolden;
+            session.signBiasAltref = s.signBiasAltref;
         }
 
         // ── YCbCr -> ARGB (fancy bilinear chroma upsampling, matching libwebp) ──
@@ -557,12 +571,19 @@ public final class VP8Decoder {
         boolean isInter = br.decodeBit(s.probIntra) != 0;
 
         if (isInter) {
-            // Reference frame: 0 = LAST, 1 = GOLDEN/ALTREF (branch we never emit).
+            // Reference-frame tree (RFC 6386 section 16.2):
+            //   bit at prob_last = 0 -> LAST
+            //   bit at prob_last = 1, bit at prob_gf = 0 -> GOLDEN
+            //   bit at prob_last = 1, bit at prob_gf = 1 -> ALTREF
             int refBit = br.decodeBit(s.probLast);
-            if (refBit != 0) {
-                br.decodeBit(s.probGf);  // consume the second ref bit even though we refuse
-                throw new ImageDecodeException("VP8 GOLDEN/ALTREF references not supported (Phase 1)");
+            int refFrame;
+            if (refBit == 0) {
+                refFrame = LoopFilter.REF_LAST;
+            } else {
+                int gfBit = br.decodeBit(s.probGf);
+                refFrame = (gfBit == 0) ? LoopFilter.REF_GOLDEN : LoopFilter.REF_ALTREF;
             }
+            assertReferenceAvailable(s.session, refFrame);
 
             // MV-reference tree with context-dependent probabilities (libvpx parity).
             NearMvs.Result near = new NearMvs.Result();
@@ -602,7 +623,7 @@ public final class VP8Decoder {
             s.mbIsI4x4[mbIdx] = false;
             s.mbMvRow[mbIdx] = effInternalRow;
             s.mbMvCol[mbIdx] = effInternalCol;
-            s.mbRefFrame[mbIdx] = LoopFilter.REF_LAST;
+            s.mbRefFrame[mbIdx] = refFrame;
             // mvMode: 0=ZEROMV, 1=NEARESTMV, 2=NEARMV, 3=NEWMV. NEAREST/NEAR/NEW all map
             // to MODE_OTHER_INTER per RFC 6386 section 15 (mode_lf_delta[2]).
             s.mbModeLfIdx[mbIdx] = (mvMode == 0) ? LoopFilter.MODE_ZEROMV : LoopFilter.MODE_OTHER_INTER;
@@ -612,16 +633,19 @@ public final class VP8Decoder {
             java.util.Arrays.fill(s.intraL, IntraPrediction.B_DC_PRED);
 
             if (mvMode == 0 && skip != 0) {
-                // ZEROMV+skip fast path: straight copy from the LAST reference, no residual.
-                copyRefMb16x16(s.session.refY, s.session.refLumaStride, s.reconY, s.lumaStride, mbX, mbY);
-                copyRefMb8x8(s.session.refU, s.session.refChromaStride, s.reconU, s.chromaStride, mbX, mbY);
-                copyRefMb8x8(s.session.refV, s.session.refChromaStride, s.reconV, s.chromaStride, mbX, mbY);
+                // ZEROMV+skip fast path: straight copy from the chosen reference, no residual.
+                short[] refYPlane = s.session.lumaRef(refFrame);
+                short[] refUPlane = s.session.uRef(refFrame);
+                short[] refVPlane = s.session.vRef(refFrame);
+                copyRefMb16x16(refYPlane, s.session.refLumaStride, s.reconY, s.lumaStride, mbX, mbY);
+                copyRefMb8x8(refUPlane, s.session.refChromaStride, s.reconU, s.chromaStride, mbX, mbY);
+                copyRefMb8x8(refVPlane, s.session.refChromaStride, s.reconV, s.chromaStride, mbX, mbY);
                 int[] top = s.topNz[mbX];
                 for (int i = 0; i < 9; i++) { top[i] = 0; s.leftNz[i] = 0; }
                 return;
             }
 
-            decodeInterWithMv(s, br, td, mbX, mbY, skip, effInternalRow, effInternalCol);
+            decodeInterWithMv(s, br, td, mbX, mbY, skip, effInternalRow, effInternalCol, refFrame);
             return;
         }
 
@@ -749,7 +773,7 @@ public final class VP8Decoder {
      */
     private static void decodeInterWithMv(
         @NotNull State s, @NotNull BooleanDecoder br, @NotNull BooleanDecoder td,
-        int mbX, int mbY, int skip, int effInternalRow, int effInternalCol
+        int mbX, int mbY, int skip, int effInternalRow, int effInternalCol, int refFrame
     ) {
         // buildInterPrediction takes wire (quarter-pel); convert from internal (>>1).
         int wireRow = effInternalRow >> 1;
@@ -759,7 +783,7 @@ public final class VP8Decoder {
         short[] predY = new short[256];
         short[] predU = new short[64];
         short[] predV = new short[64];
-        buildInterPrediction(s, mbX, mbY, wireRow, wireCol, predY, predU, predV);
+        buildInterPrediction(s, mbX, mbY, wireRow, wireCol, refFrame, predY, predU, predV);
 
         int[] top = s.topNz[mbX];
         int[] left = s.leftNz;
@@ -835,7 +859,7 @@ public final class VP8Decoder {
      * both sides must produce bit-identical predictions.
      */
     private static void buildInterPrediction(
-        @NotNull State s, int mbX, int mbY, int wireRow, int wireCol,
+        @NotNull State s, int mbX, int mbY, int wireRow, int wireCol, int refFrame,
         short @NotNull [] predY, short @NotNull [] predU, short @NotNull [] predV
     ) {
         int refStrideY = s.session.refLumaStride;
@@ -843,13 +867,17 @@ public final class VP8Decoder {
         int refStrideC = s.session.refChromaStride;
         int refHC = s.session.refMbRows * 8;
 
+        short[] refY = s.session.lumaRef(refFrame);
+        short[] refU = s.session.uRef(refFrame);
+        short[] refV = s.session.vRef(refFrame);
+
         int lumaIntRow = wireRow << 1;
         int lumaIntCol = wireCol << 1;
         int lumaY = mbY * 16 + (lumaIntRow >> 3);
         int lumaX = mbX * 16 + (lumaIntCol >> 3);
         int lumaSubY = lumaIntRow & 7;
         int lumaSubX = lumaIntCol & 7;
-        SubpelPrediction.predict6tap(s.session.refY, refStrideY, refH,
+        SubpelPrediction.predict6tap(refY, refStrideY, refH,
             lumaX, lumaY, lumaSubX, lumaSubY, predY, 16, 16, 16);
 
         int chromaRow = chromaMv(lumaIntRow);
@@ -858,10 +886,71 @@ public final class VP8Decoder {
         int chromaX = mbX * 8 + (chromaCol >> 3);
         int chromaSubY = chromaRow & 7;
         int chromaSubX = chromaCol & 7;
-        SubpelPrediction.predict6tap(s.session.refU, refStrideC, refHC,
+        SubpelPrediction.predict6tap(refU, refStrideC, refHC,
             chromaX, chromaY, chromaSubX, chromaSubY, predU, 8, 8, 8);
-        SubpelPrediction.predict6tap(s.session.refV, refStrideC, refHC,
+        SubpelPrediction.predict6tap(refV, refStrideC, refHC,
             chromaX, chromaY, chromaSubX, chromaSubY, predV, 8, 8, 8);
+    }
+
+    /**
+     * Throws an {@link ImageDecodeException} when the decoder needs {@code refFrame} but
+     * the corresponding slot has not been populated in {@code session}. A well-formed
+     * bitstream guarantees availability (keyframes populate all 3 slots and refresh /
+     * copy flags track updates across subsequent P-frames), so this is a defensive check
+     * against truncated or invalid streams.
+     */
+    private static void assertReferenceAvailable(@NotNull VP8DecoderSession session, int refFrame) {
+        boolean ok = switch (refFrame) {
+            case LoopFilter.REF_LAST -> session.hasReference();
+            case LoopFilter.REF_GOLDEN -> session.hasReferenceGolden();
+            case LoopFilter.REF_ALTREF -> session.hasReferenceAltref();
+            default -> false;
+        };
+        if (!ok)
+            throw new ImageDecodeException(
+                "VP8 inter frame references unavailable slot %d",
+                refFrame);
+    }
+
+    /**
+     * Applies end-of-frame reference-buffer updates per RFC 6386 section 9.7 using the
+     * libvpx order: {@code copy_buffer_to_alt} then {@code copy_buffer_to_golden} (both
+     * using PRE-update buffers), then {@code refresh_alt}, {@code refresh_golden},
+     * {@code refresh_last}. Keyframes implicitly set all three refresh flags.
+     */
+    private static void updateReferenceBuffers(
+        @NotNull VP8DecoderSession session, @NotNull State s, int width, int height
+    ) {
+        // Copy operations (using pre-update buffer contents). Skip when the slot is
+        // about to be refreshed anyway.
+        if (!s.refreshAltref) {
+            if (s.copyBufferToAltref == 1) session.copyLastToAltref();
+            else if (s.copyBufferToAltref == 2) session.copyGoldenToAltref();
+        }
+        if (!s.refreshGolden) {
+            if (s.copyBufferToGolden == 1) session.copyLastToGolden();
+            else if (s.copyBufferToGolden == 2) session.copyAltrefToGolden();
+        }
+
+        // Refresh operations overwrite the slot with the current reconstruction.
+        if (s.refreshAltref) {
+            session.captureReferenceAltref(
+                s.reconY, s.reconU, s.reconV,
+                s.lumaStride, s.chromaStride, s.mbCols, s.mbRows, width, height
+            );
+        }
+        if (s.refreshGolden) {
+            session.captureReferenceGolden(
+                s.reconY, s.reconU, s.reconV,
+                s.lumaStride, s.chromaStride, s.mbCols, s.mbRows, width, height
+            );
+        }
+        if (s.refreshLast) {
+            session.captureReferenceLast(
+                s.reconY, s.reconU, s.reconV,
+                s.lumaStride, s.chromaStride, s.mbCols, s.mbRows, width, height
+            );
+        }
     }
 
     /** Round-away-from-zero division of the internal luma MV by 2 (libvpx parity). */

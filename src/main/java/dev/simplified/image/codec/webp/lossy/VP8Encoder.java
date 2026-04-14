@@ -318,11 +318,27 @@ public final class VP8Encoder {
         }
 
         if (session != null) {
-            session.captureReference(
+            // Keyframe refreshes all three reference slots (RFC 6386 section 9.7 -
+            // keyframes implicitly overwrite LAST, GOLDEN, and ALTREF). P-frames
+            // default to {@code refresh_last = 1, refresh_golden = refresh_alt = 0,
+            // copy_buffer_to_golden = copy_buffer_to_alt = 0}, so only LAST updates.
+            session.captureReferenceLast(
                 s.reconY, s.reconU, s.reconV,
                 s.lumaStride, s.chromaStride,
                 s.mbCols, s.mbRows, width, height
             );
+            if (isKeyframe) {
+                session.captureReferenceGolden(
+                    s.reconY, s.reconU, s.reconV,
+                    s.lumaStride, s.chromaStride,
+                    s.mbCols, s.mbRows, width, height
+                );
+                session.captureReferenceAltref(
+                    s.reconY, s.reconU, s.reconV,
+                    s.lumaStride, s.chromaStride,
+                    s.mbCols, s.mbRows, width, height
+                );
+            }
         }
 
         byte[] headerBytes = s.header.toByteArray();

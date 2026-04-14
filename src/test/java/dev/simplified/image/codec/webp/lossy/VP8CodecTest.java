@@ -833,6 +833,58 @@ public class VP8CodecTest {
             return out;
         }
 
+        @Test @DisplayName("conformance: keyframe populates all three reference slots (LAST/GOLDEN/ALTREF)")
+        void keyframeRefreshesAllThreeSlots() {
+            PixelBuffer src = PixelBuffer.create(16, 16);
+            src.fill(0xFF206080);
+
+            VP8EncoderSession enc = new VP8EncoderSession();
+            assertThat("no refs before first encode", enc.hasReference(), is(false));
+            assertThat("no golden before first encode", enc.hasReferenceGolden(), is(false));
+            assertThat("no altref before first encode", enc.hasReferenceAltref(), is(false));
+
+            byte[] kf = enc.encode(src, 0.75f, true);
+            assertThat("LAST after keyframe",   enc.hasReference(),        is(true));
+            assertThat("GOLDEN after keyframe", enc.hasReferenceGolden(),  is(true));
+            assertThat("ALTREF after keyframe", enc.hasReferenceAltref(),  is(true));
+
+            VP8DecoderSession dec = new VP8DecoderSession();
+            dec.decode(kf);
+            assertThat("decoder LAST after keyframe",   dec.hasReference(),       is(true));
+            assertThat("decoder GOLDEN after keyframe", dec.hasReferenceGolden(), is(true));
+            assertThat("decoder ALTREF after keyframe", dec.hasReferenceAltref(), is(true));
+        }
+
+        @Test @DisplayName("conformance: default P-frame refreshes LAST but not GOLDEN/ALTREF")
+        void defaultPFrameOnlyRefreshesLast() {
+            PixelBuffer frame0 = PixelBuffer.create(16, 16);
+            frame0.fill(0xFF206080);
+            PixelBuffer frame1 = PixelBuffer.create(16, 16);
+            frame1.fill(0xFFA040C0);
+
+            VP8EncoderSession enc = new VP8EncoderSession();
+            enc.encode(frame0, 0.75f, true);             // keyframe - populates all 3
+            // Snapshot the golden/altref buffers so we can assert they survive the P-frame.
+            short[] goldenYBefore = enc.goldenY.clone();
+            short[] altrefYBefore = enc.altrefY.clone();
+            short[] lastYBefore = enc.refY.clone();
+
+            enc.encode(frame1, 0.75f, false);            // P-frame, default refresh flags
+
+            // LAST must have changed (refresh_last=1); GOLDEN and ALTREF must be identical.
+            boolean lastChanged = false;
+            for (int i = 0; i < lastYBefore.length; i++)
+                if (lastYBefore[i] != enc.refY[i]) { lastChanged = true; break; }
+            assertThat("LAST updated by P-frame", lastChanged, is(true));
+
+            for (int i = 0; i < goldenYBefore.length; i++)
+                if (goldenYBefore[i] != enc.goldenY[i])
+                    throw new AssertionError("GOLDEN mutated by default P-frame at index " + i);
+            for (int i = 0; i < altrefYBefore.length; i++)
+                if (altrefYBefore[i] != enc.altrefY[i])
+                    throw new AssertionError("ALTREF mutated by default P-frame at index " + i);
+        }
+
     }
 
     /**
