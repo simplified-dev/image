@@ -407,6 +407,183 @@ public class VP8CodecTest {
 
     }
 
+    // ──── VP8 Decoder (self round-trip + libwebp-produced payload parse) ────
+
+    @Nested
+    class VP8DecoderTests {
+
+        @Test @DisplayName("self round-trip: 2x2 solid red decodes to encoder-reconstructed pixels")
+        void selfRoundTrip2x2Red() {
+            PixelBuffer buf = PixelBuffer.create(2, 2);
+            buf.fill(0xFFFF0000);
+            byte[] vp8 = VP8Encoder.encode(buf, 0.75f);
+            PixelBuffer decoded = VP8Decoder.decode(vp8);
+
+            assertThat("width", decoded.width(), is(2));
+            assertThat("height", decoded.height(), is(2));
+            // Encoder + decoder both go through the same BT.601 YCbCr quantization,
+            // so the reconstructed pixel is deterministic but not == source red.
+            // Just check the decoded frame is uniform and close to red.
+            int p = decoded.getPixel(0, 0);
+            int r = (p >> 16) & 0xFF, g = (p >> 8) & 0xFF, b = p & 0xFF;
+            if (r < 200 || g > 60 || b > 60)
+                throw new AssertionError(String.format(
+                    "expected near-red, got (%d,%d,%d)", r, g, b));
+            for (int y = 0; y < 2; y++)
+                for (int x = 0; x < 2; x++)
+                    assertThat("uniform fill", decoded.getPixel(x, y), is(p));
+        }
+
+        @Test @DisplayName("self round-trip: 16x16 gradient decodes to source within PSNR bound")
+        void selfRoundTrip16x16Gradient() {
+            PixelBuffer buf = PixelBuffer.create(16, 16);
+            for (int y = 0; y < 16; y++)
+                for (int x = 0; x < 16; x++)
+                    buf.setPixel(x, y, 0xFF000000 | ((x * 16) << 16) | ((y * 16) << 8));
+
+            byte[] vp8 = VP8Encoder.encode(buf, 1.0f);
+            PixelBuffer decoded = VP8Decoder.decode(vp8);
+
+            double psnr = sourcePsnr(buf, decoded);
+            if (psnr < 30.0)
+                throw new AssertionError(String.format(
+                    "self-roundtrip 16x16 gradient PSNR = %.2f dB (expected >= 30 dB)", psnr));
+        }
+
+        @Test @DisplayName("self round-trip: 32x48 multi-MB image decodes to source within PSNR bound")
+        void selfRoundTrip32x48MultiMb() {
+            PixelBuffer buf = PixelBuffer.create(32, 48);
+            for (int y = 0; y < 48; y++)
+                for (int x = 0; x < 32; x++) {
+                    int r = (x * 255) / 31;
+                    int g = (y * 255) / 47;
+                    int b = ((x + y) * 255) / 78;
+                    buf.setPixel(x, y, 0xFF000000 | (r << 16) | (g << 8) | b);
+                }
+            byte[] vp8 = VP8Encoder.encode(buf, 0.9f);
+            PixelBuffer decoded = VP8Decoder.decode(vp8);
+
+            double psnr = sourcePsnr(buf, decoded);
+            if (psnr < 28.0)
+                throw new AssertionError(String.format(
+                    "self-roundtrip 32x48 PSNR = %.2f dB (expected >= 28 dB)", psnr));
+        }
+
+        @Test @DisplayName("decodes libwebp-produced 32x32 gradient to a recognizable image")
+        void libwebpProducedGradientQi0() throws Exception {
+            PixelBuffer src = PixelBuffer.create(32, 32);
+            for (int y = 0; y < 32; y++)
+                for (int x = 0; x < 32; x++)
+                    src.setPixel(x, y, 0xFF000000 | ((x * 8) << 16) | ((y * 8) << 8));
+
+            byte[] vp8 = encodeWithLibwebp(src, 100);
+            if (vp8 == null) return;   // Python/libwebp unavailable - skipped.
+
+            PixelBuffer decoded = VP8Decoder.decode(vp8);
+            double psnr = sourcePsnr(src, decoded);
+            // Loose threshold - libwebp at quality 100 emits normal-filter and fancy-upsampling
+            // dependent artifacts that our decoder doesn't apply yet. 20 dB confirms the
+            // basic parse path works end-to-end; tighter tolerances are follow-up work.
+            if (psnr < 20.0)
+                throw new AssertionError(String.format(
+                    "PSNR decoding libwebp q=100 gradient = %.2f dB (expected >= 20 dB)", psnr));
+        }
+
+        private static double sourcePsnr(PixelBuffer src, PixelBuffer decoded) {
+            long sumSq = 0;
+            int n = 0;
+            int w = src.width(), h = src.height();
+            for (int y = 0; y < h; y++)
+                for (int x = 0; x < w; x++) {
+                    int s = src.getPixel(x, y);
+                    int d = decoded.getPixel(x, y);
+                    for (int shift : new int[]{0, 8, 16}) {
+                        int diff = ((s >> shift) & 0xFF) - ((d >> shift) & 0xFF);
+                        sumSq += (long) diff * diff;
+                        n++;
+                    }
+                }
+            double mse = sumSq / (double) n;
+            return mse == 0 ? Double.POSITIVE_INFINITY : 10.0 * Math.log10(255.0 * 255.0 / mse);
+        }
+
+        /**
+         * Encodes {@code src} via Python's {@code webp} bindings at the given quality
+         * (0..100, higher = better) and returns the bare VP8 payload (strips the RIFF
+         * and VP8 chunk headers).
+         *
+         * @return the VP8 payload, or {@code null} if Python/webp is unavailable
+         */
+        private static byte[] encodeWithLibwebp(PixelBuffer src, int quality) throws Exception {
+            java.nio.file.Path out = java.nio.file.Files.createTempFile("libwebp-enc-", ".webp");
+            try {
+                StringBuilder pixels = new StringBuilder();
+                for (int y = 0; y < src.height(); y++) {
+                    for (int x = 0; x < src.width(); x++) {
+                        int p = src.getPixel(x, y);
+                        pixels.append(String.format("%d,%d,%d,%d,",
+                            (p >> 16) & 0xFF, (p >> 8) & 0xFF, p & 0xFF, (p >>> 24) & 0xFF));
+                    }
+                }
+                String script =
+                    "import sys\n" +
+                    "try:\n" +
+                    "    import webp, numpy as np\n" +
+                    "except ImportError:\n" +
+                    "    print('NO_WEBP'); sys.exit(2)\n" +
+                    "raw = bytes([" + pixels.substring(0, pixels.length() - 1) + "])\n" +
+                    "arr = np.frombuffer(raw, dtype=np.uint8).reshape(" + src.height() + ", " + src.width() + ", 4)\n" +
+                    "pic = webp.WebPPicture.from_numpy(arr, pilmode='RGBA')\n" +
+                    "cfg = webp.WebPConfig.new(quality=" + quality + ")\n" +
+                    "data = pic.encode(cfg).buffer()\n" +
+                    "with open(r'" + out.toAbsolutePath() + "', 'wb') as f: f.write(bytes(data))\n";
+                Process p = startPython(script);
+                if (p == null) return null;
+                int exit = p.waitFor();
+                String stdout = new String(p.getInputStream().readAllBytes());
+                if (exit == 2 && stdout.contains("NO_WEBP")) return null;
+                if (exit != 0) throw new AssertionError("libwebp encode failed:\n" + stdout);
+
+                byte[] riff = java.nio.file.Files.readAllBytes(out);
+                return extractVp8Payload(riff);
+            } finally {
+                java.nio.file.Files.deleteIfExists(out);
+            }
+        }
+
+        /** Strips RIFF/WEBP/VP8 chunk headers and returns the bare VP8 payload. */
+        private static byte[] extractVp8Payload(byte[] riff) {
+            // RIFF header: 4 + 4 + 4 = 12 bytes (magic + size + "WEBP").
+            int offset = 12;
+            while (offset + 8 <= riff.length) {
+                String tag = new String(riff, offset, 4);
+                int size = (riff[offset + 4] & 0xFF)
+                    | ((riff[offset + 5] & 0xFF) << 8)
+                    | ((riff[offset + 6] & 0xFF) << 16)
+                    | ((riff[offset + 7] & 0xFF) << 24);
+                if (tag.equals("VP8 ")) {
+                    byte[] payload = new byte[size];
+                    System.arraycopy(riff, offset + 8, payload, 0, size);
+                    return payload;
+                }
+                offset += 8 + size + (size & 1);   // chunks are padded to even length
+            }
+            throw new AssertionError("no VP8 chunk found in RIFF");
+        }
+
+        private static Process startPython(String script) {
+            for (String cmd : new String[]{"python3", "python", "py"}) {
+                try {
+                    ProcessBuilder pb = new ProcessBuilder(cmd, "-c", script);
+                    pb.redirectErrorStream(true);
+                    return pb.start();
+                } catch (java.io.IOException ignored) { }
+            }
+            return null;
+        }
+
+    }
+
     // ──── VP8 Token Encoder / Decoder (coefficient tree) ────
 
     @Nested

@@ -5,29 +5,27 @@ import dev.simplified.image.exception.ImageDecodeException;
 import org.jetbrains.annotations.NotNull;
 
 /**
- * Pure Java VP8 (WebP lossy) decoder.
+ * Pure Java VP8 (WebP lossy) keyframe decoder.
  * <p>
- * Decodes a VP8 bitstream into ARGB pixel data using boolean arithmetic
- * decoding, intra-frame prediction, inverse DCT, and loop filtering.
- * Supports both 16x16 prediction modes and B_PRED (per-sub-block 4x4
- * prediction with all 10 intra modes).
+ * Parses the frame/segment/filter/quant/probability headers exactly as libwebp's
+ * {@code VP8GetHeaders} does, then walks the macroblock grid consuming per-MB
+ * modes from the first partition and coefficients from the token partition via
+ * {@link VP8TokenDecoder}. Coefficients are dequantized with the
+ * {@link VP8Tables#DC_Q_LOOKUP} / {@link VP8Tables#AC_Q_LOOKUP} /
+ * {@link VP8Tables#AC2_Q_LOOKUP} tables, inverse-transformed, added to the
+ * predicted samples, and clamped to produce the reconstructed Y/U/V planes.
+ * <p>
+ * Supports the four 16x16 luma modes (DC, V, H, TM), B_PRED with all ten 4x4
+ * sub-block modes, the four 8x8 chroma modes, and per-MB skip bits. Only
+ * keyframes are supported.
+ *
+ * @see <a href="https://datatracker.ietf.org/doc/html/rfc6386">RFC 6386</a>
  */
 public final class VP8Decoder {
 
     // @formatter:off
 
-    /** Key frame luma mode tree (5 leaves: B_PRED, DC, V, H, TM). */
-    private static final int[] KF_YMODE_TREE = {
-        -IntraPrediction.B_PRED, 2,
-        -IntraPrediction.DC_PRED, 4,
-        -IntraPrediction.V_PRED, 6,
-        -IntraPrediction.H_PRED, -IntraPrediction.TM_PRED
-    };
-
-    /** Key frame luma mode probabilities (one per internal tree node). */
-    private static final int[] KF_YMODE_PROB = { 145, 156, 163, 128 };
-
-    /** Sub-block mode tree (10 leaves: B_DC, B_TM, B_VE, B_HE, B_LD, B_RD, B_VR, B_VL, B_HD, B_HU). */
+    /** Sub-block mode tree (10 leaves), matching RFC 6386 section 11.5. */
     private static final int[] BMODE_TREE = {
         -IntraPrediction.B_DC_PRED, 2,
         -IntraPrediction.B_TM_PRED, 4,
@@ -42,9 +40,7 @@ public final class VP8Decoder {
 
     /**
      * Key frame sub-block mode probabilities indexed by {@code [above_mode][left_mode]}.
-     * Each entry has 9 probabilities for the 9 internal nodes of the bmode tree.
-     * <p>
-     * From RFC 6386, Section 12.1.
+     * RFC 6386 section 12.1.
      */
     private static final int[][][] KF_BMODE_PROB = {
         /* above = B_DC_PRED (0) */
@@ -183,158 +179,181 @@ public final class VP8Decoder {
 
     private VP8Decoder() { }
 
+    /** Per-frame decoder state threaded through the MB loop. */
+    private static final class State {
+        final int mbCols, mbRows;
+        final int lumaStride, chromaStride;
+
+        final short[] reconY, reconU, reconV;
+
+        // Non-zero context trackers - mirror VP8Encoder.State exactly:
+        //   topNz[mbX][0..3] luma sub-block columns (bottom row of MB above)
+        //   topNz[mbX][4..5] U sub-block columns
+        //   topNz[mbX][6..7] V sub-block columns
+        //   topNz[mbX][8]    Y2 block (for i16x16 MBs)
+        // leftNz[0..3]=luma rows, [4..5]=U rows, [6..7]=V rows, [8]=Y2.
+        final int[][] topNz;
+        final int[] leftNz = new int[9];
+
+        // B_PRED neighbor sub-block modes (bottom row of MB above, right column of left MB).
+        final int[] intraT;
+        final int[] intraL = new int[4];
+
+        // Dequantizer steps (filled after VP8ParseQuant).
+        int y1Dc, y1Ac, y2Dc, y2Ac, uvDc, uvAc;
+
+        // Coefficient probabilities after parsing the 1056 update bits.
+        final int[][][][] proba;
+
+        // Per-MB skip bit state.
+        boolean useSkipProba;
+        int skipP;
+
+        // Segment map state (needed to correctly consume per-MB segment bits).
+        boolean updateMap;
+        final int[] segmentProbs = { 255, 255, 255 };
+
+        State(int width, int height) {
+            this.mbCols = (width + 15) / 16;
+            this.mbRows = (height + 15) / 16;
+            this.lumaStride = mbCols * 16;
+            this.chromaStride = mbCols * 8;
+            this.reconY = new short[lumaStride * mbRows * 16];
+            this.reconU = new short[chromaStride * mbRows * 8];
+            this.reconV = new short[chromaStride * mbRows * 8];
+            this.topNz = new int[mbCols][9];
+            this.intraT = new int[mbCols * 4];
+            this.proba = cloneProba(VP8Tables.COEFFS_PROBA_0);
+        }
+    }
+
     /**
-     * Decodes a VP8 bitstream into pixel data.
+     * Decodes a VP8 keyframe bitstream into pixel data.
      *
      * @param data the raw VP8 payload
      * @return the decoded pixel buffer
-     * @throws ImageDecodeException if decoding fails
+     * @throws ImageDecodeException if the bitstream is malformed or uses unsupported features
      */
     public static @NotNull PixelBuffer decode(byte @NotNull [] data) {
         if (data.length < 10)
             throw new ImageDecodeException("VP8 data too short");
 
-        // Parse frame tag (3 bytes)
         int frameTag = (data[0] & 0xFF) | ((data[1] & 0xFF) << 8) | ((data[2] & 0xFF) << 16);
         boolean keyFrame = (frameTag & 0x01) == 0;
-        int firstPartSize = (frameTag >> 5) & 0x7FFFF;
+        int firstPartSize = (frameTag >>> 5) & 0x7FFFF;
 
         if (!keyFrame)
             throw new ImageDecodeException("VP8 inter-frames not supported (only key frames)");
 
-        // Key frame header (7 bytes: 3 sync + 2 width + 2 height)
-        int offset = 3;
-
-        if (data.length < offset + 7)
-            throw new ImageDecodeException("VP8 key frame header too short");
-
-        // Sync code
-        if (data[offset] != (byte) 0x9D || data[offset + 1] != (byte) 0x01 || data[offset + 2] != (byte) 0x2A)
+        if (data[3] != (byte) 0x9D || data[4] != (byte) 0x01 || data[5] != (byte) 0x2A)
             throw new ImageDecodeException("Invalid VP8 sync code");
 
-        offset += 3;
-
-        int widthField = (data[offset] & 0xFF) | ((data[offset + 1] & 0xFF) << 8);
-        int heightField = (data[offset + 2] & 0xFF) | ((data[offset + 3] & 0xFF) << 8);
-        int width = widthField & 0x3FFF;
-        int height = heightField & 0x3FFF;
-
-        offset += 4;
-
+        int width = ((data[6] & 0xFF) | ((data[7] & 0xFF) << 8)) & 0x3FFF;
+        int height = ((data[8] & 0xFF) | ((data[9] & 0xFF) << 8)) & 0x3FFF;
         if (width == 0 || height == 0)
             throw new ImageDecodeException("Invalid VP8 dimensions: %dx%d", width, height);
 
-        // Decode first partition (header + macroblock modes)
-        int partitionEnd = Math.min(offset + firstPartSize, data.length);
-        BooleanDecoder headerDecoder = new BooleanDecoder(data, offset, partitionEnd - offset);
+        int headerStart = 10;
+        int partitionEnd = Math.min(headerStart + firstPartSize, data.length);
+        BooleanDecoder br = new BooleanDecoder(data, headerStart, partitionEnd - headerStart);
 
-        // Colorspace and clamping (consumed but not used - VP8 always BT.601)
-        headerDecoder.decodeBool();
-        headerDecoder.decodeBool();
+        State s = new State(width, height);
 
-        // Skip segmentation
-        if (headerDecoder.decodeBool() != 0) {
-            int updateMap = headerDecoder.decodeBool();
-            if (headerDecoder.decodeBool() != 0) {
-                headerDecoder.decodeBool(); // abs or delta
+        // ── Frame header (keyframe only) ──
+        br.decodeBool();   // colorspace
+        br.decodeBool();   // clamp_type
+
+        // ── Segment header ──
+        boolean useSegment = br.decodeBool() != 0;
+        if (useSegment) {
+            s.updateMap = br.decodeBool() != 0;
+            if (br.decodeBool() != 0) {                       // update_data
+                br.decodeBool();                              // absolute_delta
                 for (int i = 0; i < 4; i++)
-                    if (headerDecoder.decodeBool() != 0) headerDecoder.decodeSint(7);
+                    if (br.decodeBool() != 0) br.decodeSint(7);
                 for (int i = 0; i < 4; i++)
-                    if (headerDecoder.decodeBool() != 0) headerDecoder.decodeSint(6);
+                    if (br.decodeBool() != 0) br.decodeSint(6);
             }
-            if (updateMap != 0)
+            if (s.updateMap) {
                 for (int i = 0; i < 3; i++)
-                    if (headerDecoder.decodeBool() != 0) headerDecoder.decodeUint(8);
+                    s.segmentProbs[i] = br.decodeBool() != 0 ? br.decodeUint(8) : 255;
+            }
         }
 
-        // Filter parameters
-        headerDecoder.decodeBool(); // simple vs normal filter (only simple implemented)
-        int filterLevel = headerDecoder.decodeUint(6);
-        int sharpness = headerDecoder.decodeUint(3);
-
-        if (headerDecoder.decodeBool() != 0) { // filter adjust
-            if (headerDecoder.decodeBool() != 0)
-                for (int i = 0; i < 8; i++)
-                    if (headerDecoder.decodeBool() != 0) headerDecoder.decodeSint(6);
+        // ── Filter header ──
+        br.decodeBool();                                      // simple filter
+        int filterLevel = br.decodeUint(6);
+        int sharpness = br.decodeUint(3);
+        if (br.decodeBool() != 0) {                           // use_lf_delta
+            if (br.decodeBool() != 0) {                       // update_lf_delta
+                for (int i = 0; i < 4; i++)
+                    if (br.decodeBool() != 0) br.decodeSint(6); // ref_lf_delta
+                for (int i = 0; i < 4; i++)
+                    if (br.decodeBool() != 0) br.decodeSint(6); // mode_lf_delta
+            }
         }
 
-        // Token partitions
-        int numTokenPartitions = 1 << headerDecoder.decodeUint(2);
+        // ── Token partitions ──
+        int numTokenPartitions = 1 << br.decodeUint(2);
 
-        // Quantizer indices
-        int yAcQi = headerDecoder.decodeUint(7);
-        int yDcDelta = headerDecoder.decodeBool() != 0 ? headerDecoder.decodeSint(4) : 0;
-        int y2DcDelta = headerDecoder.decodeBool() != 0 ? headerDecoder.decodeSint(4) : 0;
-        int y2AcDelta = headerDecoder.decodeBool() != 0 ? headerDecoder.decodeSint(4) : 0;
-        int uvDcDelta = headerDecoder.decodeBool() != 0 ? headerDecoder.decodeSint(4) : 0;
-        int uvAcDelta = headerDecoder.decodeBool() != 0 ? headerDecoder.decodeSint(4) : 0;
+        // ── VP8ParseQuant ──
+        int baseQ = br.decodeUint(7);
+        int dqy1Dc = br.decodeBool() != 0 ? br.decodeSint(4) : 0;
+        int dqy2Dc = br.decodeBool() != 0 ? br.decodeSint(4) : 0;
+        int dqy2Ac = br.decodeBool() != 0 ? br.decodeSint(4) : 0;
+        int dquvDc = br.decodeBool() != 0 ? br.decodeSint(4) : 0;
+        int dquvAc = br.decodeBool() != 0 ? br.decodeSint(4) : 0;
 
-        // Build dequantization steps from QI + deltas
-        int yDcQ = lookupDc(Math.clamp(yAcQi + yDcDelta, 0, 127));
-        int yAcQ = lookupAc(yAcQi);
-        int y2DcQ = lookupDc(Math.clamp(yAcQi + y2DcDelta, 0, 127)) * 2;
-        int y2AcQ = Math.max(8, lookupAc(Math.clamp(yAcQi + y2AcDelta, 0, 127)) * 155 / 100);
-        int uvDcQ = lookupDc(Math.clamp(yAcQi + uvDcDelta, 0, 127));
-        int uvAcQ = lookupAc(Math.clamp(yAcQi + uvAcDelta, 0, 127));
+        s.y1Dc = VP8Tables.DC_Q_LOOKUP[Math.clamp(baseQ + dqy1Dc, 0, 127)];
+        s.y1Ac = VP8Tables.AC_Q_LOOKUP[Math.clamp(baseQ, 0, 127)];
+        s.y2Dc = VP8Tables.DC_Q_LOOKUP[Math.clamp(baseQ + dqy2Dc, 0, 127)] * 2;
+        s.y2Ac = Math.max(8, VP8Tables.AC2_Q_LOOKUP[Math.clamp(baseQ + dqy2Ac, 0, 127)]);
+        s.uvDc = VP8Tables.DC_Q_LOOKUP[Math.clamp(baseQ + dquvDc, 0, 117)];
+        s.uvAc = VP8Tables.AC_Q_LOOKUP[Math.clamp(baseQ + dquvAc, 0, 127)];
 
-        // Macroblock grid
-        int mbCols = (width + 15) / 16;
-        int mbRows = (height + 15) / 16;
-        int lumaWidth = mbCols * 16;
-        int chromaWidth = mbCols * 8;
+        // refresh_entropy_probs (value ignored on keyframes, but the bit is still consumed).
+        br.decodeBool();
 
-        // Reconstructed planes
-        short[] reconLuma = new short[lumaWidth * mbRows * 16];
-        short[] reconCb = new short[chromaWidth * mbRows * 8];
-        short[] reconCr = new short[chromaWidth * mbRows * 8];
+        // VP8ParseProba: 1056 probability update bits.
+        for (int t = 0; t < VP8Tables.NUM_TYPES; t++)
+            for (int b = 0; b < VP8Tables.NUM_BANDS; b++)
+                for (int c = 0; c < VP8Tables.NUM_CTX; c++)
+                    for (int p = 0; p < VP8Tables.NUM_PROBAS; p++)
+                        if (br.decodeBit(VP8Tables.COEFFS_UPDATE_PROBA[t][b][c][p]) != 0)
+                            s.proba[t][b][c][p] = br.decodeUint(8);
 
-        // Token partition(s) start after header partition
+        s.useSkipProba = br.decodeBool() != 0;
+        if (s.useSkipProba)
+            s.skipP = br.decodeUint(8);
+
+        // ── Token partition decoder ──
         int tokenOffset = partitionEnd;
-        // Skip partition size fields for multi-partition (3 bytes each for partitions 1..N-1)
         if (numTokenPartitions > 1)
             tokenOffset += (numTokenPartitions - 1) * 3;
+        if (tokenOffset > data.length)
+            throw new ImageDecodeException("VP8 token partition truncated");
+        BooleanDecoder td = new BooleanDecoder(data, tokenOffset, data.length - tokenOffset);
 
-        BooleanDecoder tokenDecoder = tokenOffset < data.length
-            ? new BooleanDecoder(data, tokenOffset, data.length - tokenOffset)
-            : null;
+        // ── Macroblock loop ──
+        for (int mbY = 0; mbY < s.mbRows; mbY++) {
+            java.util.Arrays.fill(s.leftNz, 0);
+            java.util.Arrays.fill(s.intraL, IntraPrediction.B_DC_PRED);
 
-        // Sub-block mode context tracking for B_PRED
-        int[] aboveSubBlockModes = new int[mbCols * 4]; // bottom row from macroblock row above
-        int[] leftSubBlockModes = new int[4]; // right column from macroblock to the left
-
-        // Decode each macroblock
-        for (int mbY = 0; mbY < mbRows; mbY++) {
-            java.util.Arrays.fill(leftSubBlockModes, IntraPrediction.B_DC_PRED);
-
-            for (int mbX = 0; mbX < mbCols; mbX++) {
-                // Read prediction mode from header partition using tree decoding
-                int yMode = headerDecoder.decodeTree(KF_YMODE_TREE, KF_YMODE_PROB);
-                int uvMode = headerDecoder.decodeUint(2);
-
-                if (yMode == IntraPrediction.B_PRED)
-                    decodeBPred(reconLuma, mbX, mbY, lumaWidth, headerDecoder, tokenDecoder,
-                        yDcQ, yAcQ, aboveSubBlockModes, leftSubBlockModes);
-                else
-                    decode16x16(reconLuma, mbX, mbY, lumaWidth, yMode, tokenDecoder,
-                        yAcQ, y2DcQ, y2AcQ, aboveSubBlockModes, leftSubBlockModes);
-
-                // Predict + decode residual for chroma
-                decodeChromaPlane(reconCb, mbX, mbY, chromaWidth, uvMode, tokenDecoder, uvDcQ, uvAcQ);
-                decodeChromaPlane(reconCr, mbX, mbY, chromaWidth, uvMode, tokenDecoder, uvDcQ, uvAcQ);
-            }
+            for (int mbX = 0; mbX < s.mbCols; mbX++)
+                decodeMacroblock(s, br, td, mbX, mbY);
         }
 
-        // Loop filter
+        // Loop filter - encoder currently emits filter_level=0, so this is a no-op today.
         if (filterLevel > 0)
-            LoopFilter.filterSimple(reconLuma, lumaWidth, mbRows * 16, filterLevel, sharpness);
+            LoopFilter.filterSimple(s.reconY, s.lumaStride, s.mbRows * 16, filterLevel, sharpness);
 
-        // Convert YCbCr to ARGB
+        // ── YCbCr -> ARGB ──
         int[] pixels = new int[width * height];
         for (int y = 0; y < height; y++) {
             for (int x = 0; x < width; x++) {
-                int yVal = reconLuma[y * lumaWidth + x] - 16;
-                int cbVal = reconCb[(y / 2) * chromaWidth + (x / 2)] - 128;
-                int crVal = reconCr[(y / 2) * chromaWidth + (x / 2)] - 128;
+                int yVal = s.reconY[y * s.lumaStride + x] - 16;
+                int cbVal = s.reconU[(y / 2) * s.chromaStride + (x / 2)] - 128;
+                int crVal = s.reconV[(y / 2) * s.chromaStride + (x / 2)] - 128;
 
                 int r = Math.clamp((298 * yVal + 409 * crVal + 128) >> 8, 0, 255);
                 int g = Math.clamp((298 * yVal - 100 * cbVal - 208 * crVal + 128) >> 8, 0, 255);
@@ -347,176 +366,260 @@ public final class VP8Decoder {
         return PixelBuffer.of(pixels, width, height);
     }
 
-    /**
-     * Decodes a macroblock using 16x16 prediction with WHT-coded DC coefficients.
-     */
-    private static void decode16x16(
-        short @NotNull [] reconLuma, int mbX, int mbY, int lumaWidth,
-        int yMode, BooleanDecoder tokenDecoder,
-        int yAcQ, int y2DcQ, int y2AcQ,
-        int @NotNull [] aboveSubBlockModes, int @NotNull [] leftSubBlockModes
+    // ──────────────────────────────────────────────────────────────────────
+    // Per-macroblock parse + reconstruct
+    // ──────────────────────────────────────────────────────────────────────
+
+    private static void decodeMacroblock(
+        @NotNull State s, @NotNull BooleanDecoder br, @NotNull BooleanDecoder td,
+        int mbX, int mbY
     ) {
-        // 16x16 luma prediction using macroblock-boundary neighbors
-        short[] above16 = mbY > 0
-            ? extractRow(reconLuma, mbX * 16, (mbY * 16 - 1) * lumaWidth, 16) : null;
-        short[] left16 = mbX > 0
-            ? extractCol(reconLuma, mbX * 16 - 1, mbY * 16, lumaWidth, 16) : null;
-        short aboveLeft16 = (mbX > 0 && mbY > 0)
-            ? reconLuma[(mbY * 16 - 1) * lumaWidth + mbX * 16 - 1] : (short) 128;
+        // Segment map (consume bits; value unused since we don't track per-segment state).
+        if (s.updateMap) {
+            if (br.decodeBit(s.segmentProbs[0]) == 0)
+                br.decodeBit(s.segmentProbs[1]);
+            else
+                br.decodeBit(s.segmentProbs[2]);
+        }
 
-        short[] predicted16 = new short[256];
-        IntraPrediction.predict16x16(predicted16, above16, left16, aboveLeft16, yMode);
+        int skip = (s.useSkipProba && br.decodeBit(s.skipP) != 0) ? 1 : 0;
 
-        // Decode Y2 block (WHT-coded DC coefficients for luma sub-blocks)
-        short[] y2Coeffs = new short[16];
-        if (tokenDecoder != null)
-            for (int c = 0; c < 16; c++)
-                y2Coeffs[c] = (short) tokenDecoder.decodeSint(11);
+        // is_i4x4 - bit=0 means i4x4, bit=1 means 16x16 prediction (libwebp convention).
+        boolean isI4x4 = br.decodeBit(145) == 0;
 
-        y2Coeffs[0] = (short) (y2Coeffs[0] * y2DcQ);
-        for (int c = 1; c < 16; c++)
-            y2Coeffs[c] = (short) (y2Coeffs[c] * y2AcQ);
+        int yMode;
+        int[][] subModes = null;
+
+        if (!isI4x4) {
+            // Hardcoded 16x16 intra-mode decision tree.
+            if (br.decodeBit(156) != 0)
+                yMode = br.decodeBit(128) != 0 ? IntraPrediction.TM_PRED : IntraPrediction.H_PRED;
+            else
+                yMode = br.decodeBit(163) != 0 ? IntraPrediction.V_PRED : IntraPrediction.DC_PRED;
+
+            // Fill sub-block neighbor context with the analogous B_PRED mode.
+            int ctxMode = mb16ToSubMode(yMode);
+            java.util.Arrays.fill(s.intraT, mbX * 4, mbX * 4 + 4, ctxMode);
+            java.util.Arrays.fill(s.intraL, ctxMode);
+        } else {
+            yMode = IntraPrediction.B_PRED;
+            subModes = new int[4][4];
+            for (int by = 0; by < 4; by++) {
+                for (int bx = 0; bx < 4; bx++) {
+                    int above = by > 0 ? subModes[by - 1][bx] : s.intraT[mbX * 4 + bx];
+                    int leftM = bx > 0 ? subModes[by][bx - 1] : s.intraL[by];
+                    subModes[by][bx] = br.decodeTree(BMODE_TREE, KF_BMODE_PROB[above][leftM]);
+                }
+            }
+            for (int bx = 0; bx < 4; bx++) s.intraT[mbX * 4 + bx] = subModes[3][bx];
+            for (int by = 0; by < 4; by++) s.intraL[by] = subModes[by][3];
+        }
+
+        // UV mode tree.
+        int uvMode;
+        if (br.decodeBit(142) == 0)
+            uvMode = IntraPrediction.DC_PRED;
+        else if (br.decodeBit(114) == 0)
+            uvMode = IntraPrediction.V_PRED;
+        else
+            uvMode = br.decodeBit(183) != 0 ? IntraPrediction.TM_PRED : IntraPrediction.H_PRED;
+
+        // ── Parse residuals ──
+        int[] top = s.topNz[mbX];
+        int[] left = s.leftNz;
 
         short[] dcValues = new short[16];
-        DCT.inverseWHT(y2Coeffs, dcValues);
+        short[][] yCoefs = new short[16][16];
+        short[][] uCoefs = new short[4][16];
+        short[][] vCoefs = new short[4][16];
 
-        // Decode each 4x4 luma sub-block (AC only - DC comes from WHT)
+        if (skip != 0) {
+            // All residuals are zero; clear nz contexts and fall through to reconstruction.
+            for (int i = 0; i < 9; i++) { top[i] = 0; left[i] = 0; }
+        } else {
+            int first;
+            int acType;
+
+            if (!isI4x4) {
+                short[] zz = new short[16];
+                int ctx = top[8] + left[8];
+                int nz = VP8TokenDecoder.decode(td, zz, 0, ctx, VP8Tables.TYPE_I16_DC, s.proba);
+                top[8] = left[8] = nz;
+
+                short[] y2Raster = zigzagToRaster(zz);
+                y2Raster[0] = (short) (y2Raster[0] * s.y2Dc);
+                for (int i = 1; i < 16; i++) y2Raster[i] = (short) (y2Raster[i] * s.y2Ac);
+                DCT.inverseWHT(y2Raster, dcValues);
+
+                first = 1;
+                acType = VP8Tables.TYPE_I16_AC;
+            } else {
+                first = 0;
+                acType = VP8Tables.TYPE_I4_AC;
+            }
+
+            // 16 Y blocks - raster order (y outer, x inner) matching VP8Encoder.emitMbTokens.
+            for (int y = 0; y < 4; y++) {
+                for (int x = 0; x < 4; x++) {
+                    short[] zz = new short[16];
+                    int ctx = top[x] + left[y];
+                    int nz = VP8TokenDecoder.decode(td, zz, first, ctx, acType, s.proba);
+                    top[x] = left[y] = nz;
+
+                    short[] raster = zigzagToRaster(zz);
+                    if (!isI4x4) {
+                        // DC comes from the Y2 WHT block; raster[0] at first=1 is already zero.
+                        raster[0] = dcValues[y * 4 + x];
+                    } else {
+                        raster[0] = (short) (raster[0] * s.y1Dc);
+                    }
+                    for (int i = 1; i < 16; i++) raster[i] = (short) (raster[i] * s.y1Ac);
+                    yCoefs[y * 4 + x] = raster;
+                }
+            }
+
+            // U blocks (2x2).
+            for (int y = 0; y < 2; y++) {
+                for (int x = 0; x < 2; x++) {
+                    short[] zz = new short[16];
+                    int ctx = top[4 + x] + left[4 + y];
+                    int nz = VP8TokenDecoder.decode(td, zz, 0, ctx, VP8Tables.TYPE_CHROMA_A, s.proba);
+                    top[4 + x] = left[4 + y] = nz;
+
+                    short[] raster = zigzagToRaster(zz);
+                    raster[0] = (short) (raster[0] * s.uvDc);
+                    for (int i = 1; i < 16; i++) raster[i] = (short) (raster[i] * s.uvAc);
+                    uCoefs[y * 2 + x] = raster;
+                }
+            }
+            // V blocks (2x2).
+            for (int y = 0; y < 2; y++) {
+                for (int x = 0; x < 2; x++) {
+                    short[] zz = new short[16];
+                    int ctx = top[6 + x] + left[6 + y];
+                    int nz = VP8TokenDecoder.decode(td, zz, 0, ctx, VP8Tables.TYPE_CHROMA_A, s.proba);
+                    top[6 + x] = left[6 + y] = nz;
+
+                    short[] raster = zigzagToRaster(zz);
+                    raster[0] = (short) (raster[0] * s.uvDc);
+                    for (int i = 1; i < 16; i++) raster[i] = (short) (raster[i] * s.uvAc);
+                    vCoefs[y * 2 + x] = raster;
+                }
+            }
+        }
+
+        // ── Reconstruct ──
+        if (isI4x4)
+            reconstructI4x4(s, mbX, mbY, subModes, yCoefs);
+        else
+            reconstruct16x16(s, mbX, mbY, yMode, yCoefs);
+
+        reconstructChroma(s.reconU, s.chromaStride, mbX, mbY, uvMode, uCoefs);
+        reconstructChroma(s.reconV, s.chromaStride, mbX, mbY, uvMode, vCoefs);
+    }
+
+    /** Maps a 16x16 luma macroblock mode to the corresponding sub-block mode for B_PRED neighbor context. */
+    private static int mb16ToSubMode(int mbMode) {
+        return switch (mbMode) {
+            case IntraPrediction.V_PRED -> IntraPrediction.B_VE_PRED;
+            case IntraPrediction.H_PRED -> IntraPrediction.B_HE_PRED;
+            case IntraPrediction.TM_PRED -> IntraPrediction.B_TM_PRED;
+            default -> IntraPrediction.B_DC_PRED;
+        };
+    }
+
+    private static short[] zigzagToRaster(short @NotNull [] zz) {
+        short[] raster = new short[16];
+        for (int i = 0; i < 16; i++) raster[VP8Tables.ZIGZAG[i]] = zz[i];
+        return raster;
+    }
+
+    private static void reconstruct16x16(
+        @NotNull State s, int mbX, int mbY, int yMode, short @NotNull [] @NotNull [] yCoefs
+    ) {
+        short[] above = mbY > 0 ? extractRow(s.reconY, mbX * 16, (mbY * 16 - 1) * s.lumaStride, 16) : null;
+        short[] leftCol = mbX > 0 ? extractCol(s.reconY, mbX * 16 - 1, mbY * 16, s.lumaStride, 16) : null;
+        short aboveLeft = (mbX > 0 && mbY > 0)
+            ? s.reconY[(mbY * 16 - 1) * s.lumaStride + mbX * 16 - 1] : (short) 128;
+
+        short[] predicted = new short[256];
+        IntraPrediction.predict16x16(predicted, above, leftCol, aboveLeft, yMode);
+
         for (int by = 0; by < 4; by++) {
             for (int bx = 0; bx < 4; bx++) {
-                short[] coefficients = new short[16];
-                coefficients[0] = dcValues[by * 4 + bx];
-
-                if (tokenDecoder != null)
-                    for (int c = 1; c < 16; c++)
-                        coefficients[c] = (short) tokenDecoder.decodeSint(11);
-
-                for (int c = 1; c < 16; c++)
-                    coefficients[c] = (short) (coefficients[c] * yAcQ);
-
                 short[] residual = new short[16];
-                DCT.inverseDCT(coefficients, residual);
+                DCT.inverseDCT(yCoefs[by * 4 + bx], residual);
 
                 int baseX = mbX * 16 + bx * 4;
                 int baseY = mbY * 16 + by * 4;
                 for (int y = 0; y < 4; y++)
                     for (int x = 0; x < 4; x++)
-                        reconLuma[(baseY + y) * lumaWidth + baseX + x] = (short) Math.clamp(
-                            predicted16[(by * 4 + y) * 16 + bx * 4 + x] + residual[y * 4 + x], 0, 255
+                        s.reconY[(baseY + y) * s.lumaStride + baseX + x] = (short) Math.clamp(
+                            predicted[(by * 4 + y) * 16 + bx * 4 + x] + residual[y * 4 + x], 0, 255
                         );
             }
         }
-
-        // 16x16 mode macroblocks provide B_DC_PRED context for neighboring B_PRED sub-blocks
-        java.util.Arrays.fill(aboveSubBlockModes, mbX * 4, mbX * 4 + 4, IntraPrediction.B_DC_PRED);
-        java.util.Arrays.fill(leftSubBlockModes, IntraPrediction.B_DC_PRED);
     }
 
-    /**
-     * Decodes a B_PRED macroblock where each 4x4 sub-block has its own prediction mode.
-     */
-    private static void decodeBPred(
-        short @NotNull [] reconLuma, int mbX, int mbY, int lumaWidth,
-        @NotNull BooleanDecoder headerDecoder, BooleanDecoder tokenDecoder,
-        int yDcQ, int yAcQ,
-        int @NotNull [] aboveSubBlockModes, int @NotNull [] leftSubBlockModes
+    private static void reconstructI4x4(
+        @NotNull State s, int mbX, int mbY,
+        int @NotNull [] @NotNull [] subModes, short @NotNull [] @NotNull [] yCoefs
     ) {
-        int[][] subModes = new int[4][4];
-
         for (int by = 0; by < 4; by++) {
             for (int bx = 0; bx < 4; bx++) {
-                // Context: mode of the sub-block above and to the left
-                int aboveMode = by > 0
-                    ? subModes[by - 1][bx]
-                    : aboveSubBlockModes[mbX * 4 + bx];
-                int leftMode = bx > 0
-                    ? subModes[by][bx - 1]
-                    : leftSubBlockModes[by];
-
-                // Decode sub-block mode with context-dependent probabilities
-                subModes[by][bx] = headerDecoder.decodeTree(BMODE_TREE, KF_BMODE_PROB[aboveMode][leftMode]);
-
-                // Get neighbor pixels for prediction (8-element above includes above-right)
                 int blockX = mbX * 16 + bx * 4;
                 int blockY = mbY * 16 + by * 4;
 
-                short[] above8 = getAbove8(reconLuma, blockX, blockY, lumaWidth);
-                short[] left4 = getLeft4(reconLuma, blockX, blockY, lumaWidth);
-                short aboveLeft = getAboveLeft(reconLuma, blockX, blockY, lumaWidth);
+                short[] above8 = getAbove8(s.reconY, blockX, blockY, s.lumaStride);
+                short[] left4 = getLeft4(s.reconY, blockX, blockY, s.lumaStride);
+                short aboveLeft = getAboveLeft(s.reconY, blockX, blockY, s.lumaStride);
 
-                // Predict
                 short[] predicted = new short[16];
                 IntraPrediction.predict4x4(predicted, above8, left4, aboveLeft, subModes[by][bx]);
 
-                // Decode all 16 coefficients (no WHT for B_PRED)
-                short[] coefficients = new short[16];
-                if (tokenDecoder != null)
-                    for (int c = 0; c < 16; c++)
-                        coefficients[c] = (short) tokenDecoder.decodeSint(11);
-
-                // Dequantize with Y1 params
-                coefficients[0] = (short) (coefficients[0] * yDcQ);
-                for (int c = 1; c < 16; c++)
-                    coefficients[c] = (short) (coefficients[c] * yAcQ);
-
-                // Inverse DCT
                 short[] residual = new short[16];
-                DCT.inverseDCT(coefficients, residual);
+                DCT.inverseDCT(yCoefs[by * 4 + bx], residual);
 
-                // Reconstruct and store (prediction is per-sub-block, not whole macroblock)
                 for (int y = 0; y < 4; y++)
                     for (int x = 0; x < 4; x++)
-                        reconLuma[(blockY + y) * lumaWidth + blockX + x] = (short) Math.clamp(
+                        s.reconY[(blockY + y) * s.lumaStride + blockX + x] = (short) Math.clamp(
                             predicted[y * 4 + x] + residual[y * 4 + x], 0, 255
                         );
             }
         }
-
-        // Store bottom row and right column for neighboring macroblock context
-        for (int bx = 0; bx < 4; bx++)
-            aboveSubBlockModes[mbX * 4 + bx] = subModes[3][bx];
-        for (int by = 0; by < 4; by++)
-            leftSubBlockModes[by] = subModes[by][3];
     }
 
-    private static void decodeChromaPlane(
-        short @NotNull [] recon, int mbX, int mbY, int chromaWidth,
-        int uvMode, BooleanDecoder tokenDecoder, int dcQ, int acQ
+    private static void reconstructChroma(
+        short @NotNull [] plane, int stride, int mbX, int mbY, int uvMode,
+        short @NotNull [] @NotNull [] coefs
     ) {
-        // 8x8 chroma prediction using macroblock-boundary neighbors
-        short[] above8 = mbY > 0
-            ? extractRow(recon, mbX * 8, (mbY * 8 - 1) * chromaWidth, 8) : null;
-        short[] left8 = mbX > 0
-            ? extractCol(recon, mbX * 8 - 1, mbY * 8, chromaWidth, 8) : null;
-        short aboveLeft8 = (mbX > 0 && mbY > 0)
-            ? recon[(mbY * 8 - 1) * chromaWidth + mbX * 8 - 1] : (short) 128;
+        short[] above = mbY > 0 ? extractRow(plane, mbX * 8, (mbY * 8 - 1) * stride, 8) : null;
+        short[] leftCol = mbX > 0 ? extractCol(plane, mbX * 8 - 1, mbY * 8, stride, 8) : null;
+        short aboveLeft = (mbX > 0 && mbY > 0)
+            ? plane[(mbY * 8 - 1) * stride + mbX * 8 - 1] : (short) 128;
 
-        short[] predicted8 = new short[64];
-        IntraPrediction.predict8x8(predicted8, above8, left8, aboveLeft8, uvMode);
+        short[] predicted = new short[64];
+        IntraPrediction.predict8x8(predicted, above, leftCol, aboveLeft, uvMode);
 
         for (int by = 0; by < 2; by++) {
             for (int bx = 0; bx < 2; bx++) {
-                short[] coefficients = new short[16];
-                if (tokenDecoder != null)
-                    for (int c = 0; c < 16; c++)
-                        coefficients[c] = (short) tokenDecoder.decodeSint(11);
-
-                coefficients[0] = (short) (coefficients[0] * dcQ);
-                for (int c = 1; c < 16; c++)
-                    coefficients[c] = (short) (coefficients[c] * acQ);
-
                 short[] residual = new short[16];
-                DCT.inverseDCT(coefficients, residual);
+                DCT.inverseDCT(coefs[by * 2 + bx], residual);
 
                 int baseX = mbX * 8 + bx * 4;
                 int baseY = mbY * 8 + by * 4;
                 for (int y = 0; y < 4; y++)
                     for (int x = 0; x < 4; x++)
-                        recon[(baseY + y) * chromaWidth + baseX + x] = (short) Math.clamp(
-                            predicted8[(by * 4 + y) * 8 + bx * 4 + x] + residual[y * 4 + x], 0, 255
+                        plane[(baseY + y) * stride + baseX + x] = (short) Math.clamp(
+                            predicted[(by * 4 + y) * 8 + bx * 4 + x] + residual[y * 4 + x], 0, 255
                         );
             }
         }
     }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // Neighbor extraction helpers
+    // ──────────────────────────────────────────────────────────────────────
 
     private static short[] extractRow(short[] plane, int startX, int rowOffset, int count) {
         short[] row = new short[count];
@@ -531,9 +634,7 @@ public final class VP8Decoder {
         return col;
     }
 
-    /**
-     * Gets 8 pixels above a 4x4 sub-block (4 above + 4 above-right), clamped at plane edge.
-     */
+    /** Gets 8 pixels above a 4x4 sub-block (4 above + 4 above-right), clamped at plane edge. */
     private static short[] getAbove8(short[] plane, int blockX, int blockY, int stride) {
         if (blockY == 0) return null;
         short[] above = new short[8];
@@ -545,9 +646,6 @@ public final class VP8Decoder {
         return above;
     }
 
-    /**
-     * Gets 4 pixels to the left of a 4x4 sub-block.
-     */
     private static short[] getLeft4(short[] plane, int blockX, int blockY, int stride) {
         if (blockX == 0) return null;
         short[] left = new short[4];
@@ -556,20 +654,23 @@ public final class VP8Decoder {
         return left;
     }
 
-    /**
-     * Gets the pixel above-left of a 4x4 sub-block.
-     */
     private static short getAboveLeft(short[] plane, int blockX, int blockY, int stride) {
         if (blockX == 0 || blockY == 0) return 128;
         return plane[(blockY - 1) * stride + blockX - 1];
     }
 
-    private static int lookupDc(int qi) {
-        return Math.max(1, (qi < 8) ? qi + 2 : (qi < 25) ? (qi * 2 - 4) : (qi * 3 - 26));
-    }
-
-    private static int lookupAc(int qi) {
-        return Math.max(1, (qi < 4) ? qi + 2 : (qi < 24) ? (qi + qi / 2) : (qi * 2 - 16));
+    /** Deep-copies the static default proba table so per-frame updates do not mutate the source. */
+    private static int[][][][] cloneProba(int[][][][] src) {
+        int[][][][] out = new int[src.length][][][];
+        for (int t = 0; t < src.length; t++) {
+            out[t] = new int[src[t].length][][];
+            for (int b = 0; b < src[t].length; b++) {
+                out[t][b] = new int[src[t][b].length][];
+                for (int c = 0; c < src[t][b].length; c++)
+                    out[t][b][c] = src[t][b][c].clone();
+            }
+        }
+        return out;
     }
 
 }
