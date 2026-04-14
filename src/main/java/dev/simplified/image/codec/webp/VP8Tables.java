@@ -22,11 +22,43 @@ final class VP8Tables {
     /** Number of probabilities per context (one per token-tree branch). */
     static final int NUM_PROBAS = 11;
 
+    /** Coefficient type: intra 16x16 AC - first coefficient is stored separately in Y2. */
+    static final int TYPE_I16_AC = 0;
+
+    /** Coefficient type: intra 16x16 DC (Y2 block - WHT-coded DC coefficients of luma). */
+    static final int TYPE_I16_DC = 1;
+
+    /** Coefficient type: chroma (UV) - both DC and AC. */
+    static final int TYPE_CHROMA_A = 2;
+
+    /** Coefficient type: intra 4x4 AC - used when the block is B_PRED (no Y2). */
+    static final int TYPE_I4_AC = 3;
+
     /** Maps zig-zag coefficient index 0..15 to its band. Entry 16 is a sentinel. */
     static final int[] COEF_BANDS = {
         0, 1, 2, 3, 6, 4, 5, 6, 6, 6, 6, 6, 6, 6, 6, 7,
         0
     };
+
+    /** Zig-zag scan order: natural position -> raster position in a 4x4 block. */
+    static final int[] ZIGZAG = {
+        0, 1, 4,  8,
+        5, 2, 3,  6,
+        9, 12, 13, 10,
+        7, 11, 14, 15
+    };
+
+    /** Extra-bit probabilities for coefficient magnitude category 3 (values 11..18, 3 extra bits). */
+    static final int[] CAT3 = { 173, 148, 140 };
+
+    /** Extra-bit probabilities for coefficient magnitude category 4 (values 19..34, 4 extra bits). */
+    static final int[] CAT4 = { 176, 155, 140, 135 };
+
+    /** Extra-bit probabilities for coefficient magnitude category 5 (values 35..66, 5 extra bits). */
+    static final int[] CAT5 = { 180, 157, 141, 134, 130 };
+
+    /** Extra-bit probabilities for coefficient magnitude category 6 (values 67..2048, 11 extra bits). */
+    static final int[] CAT6 = { 254, 254, 243, 230, 196, 177, 153, 140, 133, 130, 129 };
 
     /**
      * Default coefficient token probabilities used by the decoder before any

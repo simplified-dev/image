@@ -494,6 +494,136 @@ public class WebPCodecTest {
 
     }
 
+    // ──── VP8 Token Encoder / Decoder (coefficient tree) ────
+
+    @Nested
+    class VP8TokenCoderTests {
+
+        @Test @DisplayName("all-zero block emits a single EOB bit and round-trips")
+        void allZeroBlock() {
+            short[] coeffs = new short[16];
+            short[] decoded = new short[16];
+            byte[] bytes = encodeAndFinish(coeffs, 0, 0, VP8Tables.TYPE_I16_DC);
+            BooleanDecoder dec = new BooleanDecoder(bytes, 0, bytes.length);
+            int nz = VP8TokenDecoder.decode(dec, decoded, 0, 0, VP8Tables.TYPE_I16_DC, VP8Tables.COEFFS_PROBA_0);
+            assertThat("non-zero flag", nz, is(0));
+            for (int i = 0; i < 16; i++)
+                assertThat("coef " + i, decoded[i], is((short) 0));
+        }
+
+        @Test @DisplayName("single DC=1 coefficient round-trips")
+        void singleDc1() {
+            short[] coeffs = new short[16];
+            coeffs[0] = 1;
+            assertRoundTrips(coeffs, 0, 0, VP8Tables.TYPE_I16_DC);
+        }
+
+        @Test @DisplayName("all magnitudes 1..10 round-trip (small + mid tree branches)")
+        void smallMagnitudes() {
+            for (int v = 1; v <= 10; v++) {
+                short[] coeffs = new short[16];
+                coeffs[0] = (short) v;
+                coeffs[1] = (short) -v;
+                assertRoundTrips(coeffs, 0, 0, VP8Tables.TYPE_I16_DC);
+            }
+        }
+
+        @Test @DisplayName("CAT3/4/5/6 boundary magnitudes round-trip")
+        void catBoundaries() {
+            // Boundaries: 11, 18 (Cat3 bounds), 19, 34 (Cat4), 35, 66 (Cat5), 67, 2047 (Cat6).
+            int[] values = { 11, 18, 19, 34, 35, 66, 67, 100, 500, 2047 };
+            for (int v : values) {
+                short[] coeffs = new short[16];
+                coeffs[0] = (short) v;
+                assertRoundTrips(coeffs, 0, 0, VP8Tables.TYPE_I16_DC);
+
+                short[] coeffsNeg = new short[16];
+                coeffsNeg[0] = (short) -v;
+                assertRoundTrips(coeffsNeg, 0, 0, VP8Tables.TYPE_I16_DC);
+            }
+        }
+
+        @Test @DisplayName("dense block with interleaved zeros round-trips")
+        void denseBlock() {
+            short[] coeffs = {
+                 5,  0,  3, -2,
+                 0,  0,  1,  0,
+                -7,  4,  0,  2,
+                 0, -1,  0, 15
+            };
+            assertRoundTrips(coeffs, 0, 0, VP8Tables.TYPE_I16_DC);
+        }
+
+        @Test @DisplayName("AC-only block (first=1) round-trips, coef[0] untouched")
+        void acOnly() {
+            short[] coeffs = new short[16];
+            coeffs[0] = 999; // DC placeholder that must not be emitted or overwritten
+            coeffs[1] = 3;
+            coeffs[5] = -42;
+            coeffs[15] = 1;
+            short[] decoded = new short[16];
+            decoded[0] = 999; // decoder preserves whatever was below 'first'
+            byte[] bytes = encodeAndFinish(coeffs, 1, 0, VP8Tables.TYPE_I16_AC);
+            BooleanDecoder dec = new BooleanDecoder(bytes, 0, bytes.length);
+            int nz = VP8TokenDecoder.decode(dec, decoded, 1, 0, VP8Tables.TYPE_I16_AC, VP8Tables.COEFFS_PROBA_0);
+            assertThat("non-zero flag", nz, is(1));
+            assertThat("DC untouched", decoded[0], is((short) 999));
+            for (int i = 1; i < 16; i++)
+                assertThat("coef " + i, decoded[i], is(coeffs[i]));
+        }
+
+        @Test @DisplayName("varying initial context value round-trips")
+        void contextVariation() {
+            short[] coeffs = { 0, 1, -1, 2, 0, 0, 3, -4, 0, 5, 0, 0, 6, 0, 0, 0 };
+            for (int ctx0 : new int[]{0, 1, 2}) {
+                assertRoundTrips(coeffs, 0, ctx0, VP8Tables.TYPE_CHROMA_A);
+            }
+        }
+
+        @Test @DisplayName("random blocks across all coefficient types round-trip")
+        void randomStress() {
+            java.util.Random rng = new java.util.Random(0xABCDEF);
+            int[] types = {
+                VP8Tables.TYPE_I16_AC, VP8Tables.TYPE_I16_DC,
+                VP8Tables.TYPE_CHROMA_A, VP8Tables.TYPE_I4_AC
+            };
+            for (int trial = 0; trial < 100; trial++) {
+                short[] coeffs = new short[16];
+                int numNonZero = 1 + rng.nextInt(16);
+                for (int i = 0; i < numNonZero; i++) {
+                    int pos = rng.nextInt(16);
+                    int mag = 1 + rng.nextInt(100);
+                    coeffs[pos] = (short) (rng.nextBoolean() ? mag : -mag);
+                }
+                int type = types[rng.nextInt(4)];
+                int first = (type == VP8Tables.TYPE_I16_AC) ? 1 : 0;
+                int ctx = rng.nextInt(3);
+                if (first == 1) coeffs[0] = 0; // AC-only path should have no DC.
+                assertRoundTrips(coeffs, first, ctx, type);
+            }
+        }
+
+        private static byte[] encodeAndFinish(short[] coeffs, int first, int ctx0, int type) {
+            BooleanEncoder enc = new BooleanEncoder(64);
+            VP8TokenEncoder.emit(enc, coeffs, first, ctx0, type, VP8Tables.COEFFS_PROBA_0);
+            return enc.toByteArray();
+        }
+
+        private static void assertRoundTrips(short[] coeffs, int first, int ctx0, int type) {
+            byte[] bytes = encodeAndFinish(coeffs, first, ctx0, type);
+            short[] decoded = new short[16];
+            for (int i = 0; i < first; i++) decoded[i] = coeffs[i];
+            BooleanDecoder dec = new BooleanDecoder(bytes, 0, bytes.length);
+            VP8TokenDecoder.decode(dec, decoded, first, ctx0, type, VP8Tables.COEFFS_PROBA_0);
+            for (int i = 0; i < 16; i++)
+                if (decoded[i] != coeffs[i])
+                    throw new AssertionError(String.format(
+                        "coef[%d]: expected %d got %d (type=%d first=%d ctx0=%d)",
+                        i, coeffs[i], decoded[i], type, first, ctx0));
+        }
+
+    }
+
     // ──── ColorCache ────
 
     @Nested
