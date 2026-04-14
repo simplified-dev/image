@@ -11,28 +11,30 @@ import org.jetbrains.annotations.NotNull;
  */
 final class LZ77 {
 
-    /** VP8L length code prefix table (RFC 6386 / VP8L spec Table 1). */
-    static final int[] LENGTH_CODES = {
-         1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 13, 15, 17, 19, 23,
-        27, 31, 35, 43, 51, 59, 67, 83, 99,115,131,163,195,227,258
-    };
+    /**
+     * Number of plane codes (1-indexed) that map through {@link #CODE_TO_PLANE_LUT}.
+     * Plane codes larger than this are literal backward-reference distances with
+     * {@code distance = plane_code - CODE_TO_PLANE_CODES}.
+     */
+    static final int CODE_TO_PLANE_CODES = 120;
 
-    /** Extra bits for each length code. */
-    static final int[] LENGTH_EXTRA_BITS = {
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2,
-        2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 0
-    };
-
-    /** VP8L distance code prefix table. */
-    static final int[] DISTANCE_CODES = {
-         1,  2,  3,  4,  5,  7,  9, 13, 17, 25, 33, 49, 65, 97,129,193,
-       257,385,513,769,1025,1537,2049,3073,4097,6145,8193,12289,16385,24577,32769
-    };
-
-    /** Extra bits for each distance code. */
-    static final int[] DISTANCE_EXTRA_BITS = {
-        0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6,
-        7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13, 0
+    /**
+     * VP8L 2-D plane code lookup table. Indexed by {@code plane_code - 1}.
+     * Each byte encodes {@code (yoffset << 4) | (8 - xoffset)}, producing signed
+     * (dy, dx) deltas with {@code dx in [-4..4]} and {@code dy in [0..7]}.
+     * Source: libwebp's {@code kCodeToPlane}.
+     */
+    static final int[] CODE_TO_PLANE_LUT = {
+        0x18, 0x07, 0x17, 0x19, 0x28, 0x06, 0x27, 0x29, 0x16, 0x1a, 0x26, 0x2a,
+        0x38, 0x05, 0x37, 0x39, 0x15, 0x1b, 0x36, 0x3a, 0x25, 0x2b, 0x48, 0x04,
+        0x47, 0x49, 0x14, 0x1c, 0x35, 0x3b, 0x46, 0x4a, 0x24, 0x2c, 0x58, 0x45,
+        0x4b, 0x34, 0x3c, 0x03, 0x57, 0x59, 0x13, 0x1d, 0x56, 0x5a, 0x23, 0x2d,
+        0x44, 0x4c, 0x55, 0x5b, 0x33, 0x3d, 0x68, 0x02, 0x67, 0x69, 0x12, 0x1e,
+        0x66, 0x6a, 0x22, 0x2e, 0x54, 0x5c, 0x43, 0x4d, 0x65, 0x6b, 0x32, 0x3e,
+        0x78, 0x01, 0x77, 0x79, 0x53, 0x5d, 0x11, 0x1f, 0x64, 0x6c, 0x42, 0x4e,
+        0x76, 0x7a, 0x21, 0x2f, 0x75, 0x7b, 0x31, 0x3f, 0x63, 0x6d, 0x52, 0x5e,
+        0x00, 0x74, 0x7c, 0x41, 0x4f, 0x10, 0x20, 0x62, 0x6e, 0x30, 0x73, 0x7d,
+        0x51, 0x5f, 0x40, 0x72, 0x7e, 0x61, 0x6f, 0x50, 0x71, 0x7f, 0x60, 0x70
     };
 
     private static final int HASH_BITS = 16;
@@ -44,87 +46,69 @@ final class LZ77 {
     private LZ77() { }
 
     /**
-     * Decodes a length from a VP8L length symbol and extra bits.
+     * Decodes an LZ77 match length from a VP8L length symbol.
+     * <p>
+     * Per the VP8L spec: "Length values have the same encoding as distance values".
+     * The 24-symbol length alphabet uses the same {@code base + extra_bits + 1} formula
+     * as {@link #getCopyDistance}, not a DEFLATE-style length table.
      *
-     * @param code the length code index (0-23, after subtracting 256 from the green symbol)
-     * @param reader the bit reader for extra bits
-     * @return the decoded length
+     * @param code the length symbol (0-23, after subtracting 256 from the green symbol)
+     * @param reader the bit reader for the symbol's extra bits
+     * @return the decoded match length in pixels
      */
     static int decodeLength(int code, @NotNull BitReader reader) {
-        if (code < LENGTH_CODES.length) {
-            int base = LENGTH_CODES[code];
-            int extraBits = code < LENGTH_EXTRA_BITS.length ? LENGTH_EXTRA_BITS[code] : 0;
-            return base + (extraBits > 0 ? reader.readBits(extraBits) : 0);
-        }
-
-        return 1;
+        return getCopyDistance(code, reader);
     }
 
     /**
-     * Decodes a 2D distance from a VP8L distance code, applying the
-     * VP8L distance mapping for image-width-aware backward references.
-     *
-     * @param distCode the raw distance code from the Huffman symbol
-     * @param reader the bit reader for extra bits
-     * @param imageWidth the image width (used for 2D distance mapping)
-     * @return the decoded linear distance
-     */
-    static int decodeDistance(int distCode, @NotNull BitReader reader, int imageWidth) {
-        // VP8L uses special 2D distance codes for the first 120 codes
-        if (distCode < 120)
-            return planeCodeToDistance(distCode, imageWidth);
-
-        int code = distCode - 120;
-        if (code < DISTANCE_CODES.length) {
-            int base = DISTANCE_CODES[code];
-            int extraBits = code < DISTANCE_EXTRA_BITS.length ? DISTANCE_EXTRA_BITS[code] : 0;
-            return base + (extraBits > 0 ? reader.readBits(extraBits) : 0);
-        }
-
-        return 1;
-    }
-
-    /**
-     * Converts a VP8L 2D plane code to a linear distance.
+     * Decodes a 2D linear distance from a VP8L distance Huffman symbol.
      * <p>
-     * The first 120 distance codes map to 2D offsets relative to the
-     * current pixel position, enabling efficient backward references
-     * to pixels in nearby rows.
+     * Two-stage: the Huffman alphabet is 40 symbols that expand to a "plane code" via
+     * {@link #getCopyDistance}, then the plane code maps to an actual pixel distance via
+     * {@link #planeCodeToDistance}. Plane codes 1-120 are 2-D offsets (dy rows down plus
+     * dx columns right, where dx is signed); plane codes above 120 are literal linear
+     * distances offset by 120.
      *
-     * @param code the 2D distance code (0-119)
-     * @param xSize the image width
-     * @return the linear distance in pixels
+     * @param distanceSymbol the 40-symbol Huffman alphabet index (0-39)
+     * @param reader the bit reader for the symbol's extra bits
+     * @param imageWidth the image width in pixels (used to linearize 2-D offsets)
+     * @return the decoded linear pixel distance ({@code >= 1})
      */
-    static int planeCodeToDistance(int code, int xSize) {
-        // Lookup table: (dy, dx) pairs for codes 0-119
-        // Based on VP8L spec Section 4.1
-        int dy = code / 8;
-        int dx = code % 8;
+    static int decodeDistance(int distanceSymbol, @NotNull BitReader reader, int imageWidth) {
+        int planeCode = getCopyDistance(distanceSymbol, reader);
+        return planeCodeToDistance(planeCode, imageWidth);
+    }
 
-        // Map to signed deltas
-        int[][] offsets = {
-            {0, 1}, {1, 0}, {1, 1}, {-1, 1},
-            {0, 2}, {2, 0}, {1, 2}, {-1, 2}
-        };
+    /**
+     * Expands a VP8L distance Huffman symbol (0-39) into a plane code using the
+     * {@code base + extra_bits + 1} formula from libwebp's {@code GetCopyDistance}.
+     */
+    static int getCopyDistance(int distanceSymbol, @NotNull BitReader reader) {
+        if (distanceSymbol < 4)
+            return distanceSymbol + 1;
 
-        if (code < 8) {
-            int dxOff = offsets[code][1];
-            int dyOff = offsets[code][0];
-            int dist = dyOff * xSize + dxOff;
-            return Math.max(1, dist);
-        }
+        int extraBits = (distanceSymbol - 2) >> 1;
+        int offset = (2 + (distanceSymbol & 1)) << extraBits;
+        return offset + reader.readBits(extraBits) + 1;
+    }
 
-        // For codes >= 8, use formula from spec
-        dy = (code >> 3);
-        dx = code & 7;
+    /**
+     * Converts a VP8L plane code to a linear pixel distance. Plane codes 1-120 use the
+     * {@link #CODE_TO_PLANE_LUT} to derive signed (dy, dx) offsets and linearize them
+     * via the image width; plane codes above 120 are literal linear distances.
+     *
+     * @param planeCode the plane code ({@code >= 1})
+     * @param xSize the image width in pixels
+     * @return the decoded linear distance ({@code >= 1})
+     */
+    static int planeCodeToDistance(int planeCode, int xSize) {
+        if (planeCode > CODE_TO_PLANE_CODES)
+            return planeCode - CODE_TO_PLANE_CODES;
 
-        int signedDx;
-        if (dx < 4)
-            signedDx = dx + 1;
-        else
-            signedDx = -(dx - 3);
-
-        int dist = dy * xSize + signedDx;
+        int distCode = CODE_TO_PLANE_LUT[planeCode - 1];
+        int yOffset = distCode >> 4;
+        int xOffset = 8 - (distCode & 0xF);
+        int dist = yOffset * xSize + xOffset;
         return Math.max(1, dist);
     }
 

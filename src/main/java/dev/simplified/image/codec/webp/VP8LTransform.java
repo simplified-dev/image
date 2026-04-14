@@ -65,27 +65,30 @@ sealed interface VP8LTransform {
 
         @Override
         public void inverseTransform(int @NotNull [] pixels, int width, int height) {
-            // Unpack palette indices to full ARGB
+            // VP8L packs palette indices into the GREEN channel of each decoded pixel,
+            // not into the low bits of the whole ARGB word. Other channels carry no
+            // index data at this stage.
             if (bitsPerPixel < 8) {
-                // Sub-pixel packed - expand from packed width to real width
+                // Sub-bit-packed: each packed pixel's green byte carries `pixelsPerByte`
+                // indices, least-significant bits first. Walk backwards so the source
+                // slot is always read before it's overwritten by the larger expanded row.
                 int pixelsPerByte = 8 / bitsPerPixel;
                 int mask = (1 << bitsPerPixel) - 1;
                 int packedWidth = (width + pixelsPerByte - 1) / pixelsPerByte;
 
-                // Work backwards to avoid overwriting
                 for (int y = height - 1; y >= 0; y--) {
                     for (int x = width - 1; x >= 0; x--) {
                         int packedX = x / pixelsPerByte;
                         int bitOffset = (x % pixelsPerByte) * bitsPerPixel;
                         int packedPixel = pixels[y * packedWidth + packedX];
-                        int index = (packedPixel >> bitOffset) & mask;
+                        int index = ((packedPixel >> 8) >> bitOffset) & mask;
                         pixels[y * width + x] = index < palette.length ? palette[index] : 0;
                     }
                 }
             } else {
-                // 1 index per pixel (8-bit)
+                // 1 index per pixel (8-bit): the index is the green byte.
                 for (int i = pixels.length - 1; i >= 0; i--) {
-                    int index = pixels[i] & 0xFF;
+                    int index = (pixels[i] >> 8) & 0xFF;
                     pixels[i] = index < palette.length ? palette[index] : 0;
                 }
             }
@@ -93,15 +96,16 @@ sealed interface VP8LTransform {
 
         @Override
         public void forwardTransform(int @NotNull [] pixels, int width, int height) {
-            // Replace ARGB values with palette indices
-            // Build reverse lookup
+            // Replace ARGB values with palette indices stored in the green channel with
+            // alpha = 0xFF (matches the inverse transform's read location).
             java.util.Map<Integer, Integer> lookup = new java.util.HashMap<>();
             for (int i = 0; i < palette.length; i++)
                 lookup.put(palette[i], i);
 
             for (int i = 0; i < pixels.length; i++) {
                 Integer index = lookup.get(pixels[i]);
-                pixels[i] = index != null ? index : 0;
+                int idx = index != null ? index : 0;
+                pixels[i] = 0xFF000000 | (idx << 8);
             }
         }
 
@@ -123,19 +127,26 @@ sealed interface VP8LTransform {
         /** Number of prediction filters defined in the VP8L spec. */
         static final int NUM_FILTERS = 14;
 
+        /** Opaque black - the implicit predictor value for the top-left pixel (mode 0). */
+        private static final int ARGB_BLACK = 0xFF000000;
+
         @Override
         public void inverseTransform(int @NotNull [] pixels, int width, int height) {
-            // First pixel is stored as-is
-            // First row: use left-pixel prediction (filter 1)
+            // Top-left pixel: add the implicit opaque-black predictor (mode 0 / ARGB_BLACK).
+            // libwebp's encoder emits the top-left residual relative to this constant; the
+            // decoder must add it back, not pass the raw pixel through.
+            pixels[0] = addPixels(pixels[0], ARGB_BLACK);
+
+            // First row: L (left-pixel) prediction for every remaining pixel.
             for (int x = 1; x < width; x++)
                 pixels[x] = addPixels(pixels[x], pixels[x - 1]);
 
             // Remaining rows
             for (int y = 1; y < height; y++) {
                 int blockY = y >> blockBits;
-
-                // First column: use top-pixel prediction (filter 2)
                 int rowStart = y * width;
+
+                // First column: T (top-pixel) prediction.
                 pixels[rowStart] = addPixels(pixels[rowStart], pixels[rowStart - width]);
 
                 for (int x = 1; x < width; x++) {
@@ -168,6 +179,8 @@ sealed interface VP8LTransform {
 
             for (int x = width - 1; x >= 1; x--)
                 pixels[x] = subPixels(pixels[x], pixels[x - 1]);
+
+            pixels[0] = subPixels(pixels[0], ARGB_BLACK);
         }
 
         private static int predict(int mode, int[] pixels, int x, int y, int width) {
