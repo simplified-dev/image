@@ -784,6 +784,55 @@ public class VP8CodecTest {
                     maxDiff, totalDiff));
         }
 
+        @Test @DisplayName("conformance: B_PRED-in-P self round-trip on sharp-edge content")
+        void bPredIntraInPSelfRoundTrip() {
+            // Base frame: solid gray. P-frame: sharp vertical bars with sub-MB-scale local
+            // texture. Motion search can't find a usable MV (source has no such pattern),
+            // and i16 DC/V/H/TM can't fit the sub-block transitions, so B_PRED-in-P must
+            // be emitted for at least some MBs. The round-trip proves our encoder's B_PRED
+            // emission (YMODE_TREE=B_PRED + BMODE_PROBA_INTER per sub-block + no Y2) is
+            // parseable by our decoder.
+            PixelBuffer base = PixelBuffer.create(32, 32);
+            base.fill(0xFF808080);
+
+            PixelBuffer bars = PixelBuffer.create(32, 32);
+            for (int y = 0; y < 32; y++)
+                for (int x = 0; x < 32; x++) {
+                    int v = ((x / 2) & 1) == 0 ? 0 : 0xFF;
+                    bars.setPixel(x, y, 0xFF000000 | (v << 16) | (v << 8) | v);
+                }
+
+            VP8EncoderSession enc = new VP8EncoderSession();
+            byte[] f0 = enc.encode(base, 1.0f, true);
+            byte[] f1 = enc.encode(bars, 1.0f, false);
+
+            assertThat("f1 is inter frame", f1[0] & 1, is(1));
+
+            VP8DecoderSession dec = new VP8DecoderSession();
+            PixelBuffer d0 = dec.decode(f0);
+            PixelBuffer d1 = dec.decode(f1);
+
+            assertThat("f0 dims", d0.width() * d0.height(), is(32 * 32));
+            assertThat("f1 dims", d1.width() * d1.height(), is(32 * 32));
+
+            // At q=1.0 the reconstruction should stay close to the source. Sharp edges
+            // still cost some PSNR due to chroma subsampling + 4x4 block structure, but
+            // anything below ~20 dB means the B_PRED-in-P wire format is broken.
+            double psnr = ConformanceHelper.pixelPsnr(bars, toArray(d1), 32, 32);
+            if (psnr < 20.0)
+                throw new AssertionError(String.format(
+                    "B_PRED-in-P self-roundtrip PSNR = %.2f dB (expected >= 20 dB)", psnr));
+        }
+
+        /** Flattens a decoded {@link PixelBuffer} into a row-major ARGB int array. */
+        private static int[] toArray(PixelBuffer buf) {
+            int[] out = new int[buf.width() * buf.height()];
+            for (int y = 0; y < buf.height(); y++)
+                for (int x = 0; x < buf.width(); x++)
+                    out[y * buf.width() + x] = buf.getPixel(x, y);
+            return out;
+        }
+
     }
 
     /**

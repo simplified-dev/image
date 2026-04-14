@@ -636,12 +636,13 @@ public final class VP8Decoder {
         int[][] subModes = null;
         if (isI4x4) {
             subModes = new int[4][4];
+            // RFC 6386 section 16.2: inter-frame B_PRED sub-block modes use the fixed
+            // context-free {@link VP8Tables#BMODE_PROBA_INTER}, not the keyframe
+            // context-dependent {@link VP8Tables#KF_BMODE_PROB[above][left]}.
             for (int by = 0; by < 4; by++) {
                 for (int bx = 0; bx < 4; bx++) {
-                    int above = by > 0 ? subModes[by - 1][bx] : s.intraT[mbX * 4 + bx];
-                    int leftM = bx > 0 ? subModes[by][bx - 1] : s.intraL[by];
                     subModes[by][bx] = br.decodeTree(
-                        VP8Tables.BMODE_TREE, VP8Tables.KF_BMODE_PROB[above][leftM]
+                        VP8Tables.BMODE_TREE, VP8Tables.BMODE_PROBA_INTER
                     );
                 }
             }

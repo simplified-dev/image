@@ -781,6 +781,56 @@ public final class VP8Encoder {
         }
     }
 
+    /**
+     * B_PRED 4x4 sub-block-mode macroblock inside a P-frame. Y-mode emits the
+     * {@link IntraPrediction#B_PRED} leaf of {@link VP8Tables#YMODE_TREE}, followed by
+     * 16 sub-block modes via the context-free {@link VP8Tables#BMODE_PROBA_INTER} per
+     * RFC 6386 section 16.2. No Y2 block (each 4x4 sub-block has its own DC + AC coefs).
+     */
+    private static final class BPredIntraInPCandidate extends InterCandidate {
+        final int uvMode;
+        final short @NotNull [] predU, predV;
+        final @NotNull BPredResult bpred;
+        final @NotNull ChromaTrellisResult u;
+        final @NotNull ChromaTrellisResult v;
+        BPredIntraInPCandidate(long sse, int rate, int lambda, int uvMode,
+                               short @NotNull [] predU, short @NotNull [] predV,
+                               @NotNull BPredResult bpred,
+                               @NotNull ChromaTrellisResult u, @NotNull ChromaTrellisResult v) {
+            super(sse, rate, lambda);
+            this.uvMode = uvMode;
+            this.predU = predU;
+            this.predV = predV;
+            this.bpred = bpred;
+            this.u = u;
+            this.v = v;
+        }
+        @Override
+        void commit(@NotNull State s, int mbX, int mbY) {
+            BooleanEncoder h = s.header;
+            h.encodeBit(INTER_SKIP_PROBA, 0);
+            h.encodeBit(INTER_PROB_INTRA, 0);
+            emitTreeLeaf(h, VP8Tables.YMODE_TREE, IntraPrediction.B_PRED, VP8Tables.YMODE_PROBA_INTER);
+            emitBPredModesInter(s, h, mbX, bpred.modes);
+            emitTreeLeaf(h, VP8Tables.UV_MODE_TREE, uvMode, VP8Tables.UV_MODE_PROBA_INTER);
+
+            int mbIdx = mbY * s.mbCols + mbX;
+            s.mbIsI4x4[mbIdx] = true;
+            s.mbIsInter[mbIdx] = false;
+            s.mbRefFrame[mbIdx] = LoopFilter.REF_INTRA;
+            s.mbModeLfIdx[mbIdx] = LoopFilter.MODE_BPRED;
+
+            commitLumaToRecon(s, mbX, mbY, bpred.recon);
+
+            BooleanEncoder tokenPart = s.tokens[mbY & (NUM_TOKEN_PARTITIONS - 1)];
+            emitLumaTokens(s, tokenPart, mbX, /*isBPred=*/ true, /*y2ZigZag=*/ null, bpred.yAc);
+            emitChromaTokensFromTrellis(s, tokenPart, mbX, u, /*isU=*/ true);
+            emitChromaTokensFromTrellis(s, tokenPart, mbX, v, /*isU=*/ false);
+            commitChromaFromDequant(s.reconU, s.chromaStride, mbX, mbY, predU, u.dequant);
+            commitChromaFromDequant(s.reconV, s.chromaStride, mbX, mbY, predV, v.dequant);
+        }
+    }
+
     /** Returns the lower-R-D of the two candidates, or {@code next} when {@code prev} is null. */
     private static @NotNull InterCandidate chooseBetter(
         @Nullable InterCandidate prev, @NotNull InterCandidate next
@@ -822,7 +872,10 @@ public final class VP8Encoder {
      *   <li><b>NEW + residual</b> - motion-searched MV with residual, when the MV is
      *       non-zero and doesn't coincide with a cheaper NEAREST / NEAR label.</li>
      *   <li><b>Intra i16x16 in P</b> - full 16x16 intra encode with inter-frame mode
-     *       probabilities (always, as the fallback for completely-new content).</li>
+     *       probabilities.</li>
+     *   <li><b>Intra B_PRED in P</b> - 4x4 sub-block-mode intra with fixed inter-frame
+     *       sub-block mode probabilities (RFC 6386 section 16.2). The fallback for
+     *       locally textured MBs where i16 is too coarse.</li>
      * </ul>
      * The winner's {@link InterCandidate#commit} emits its header + residual bits, commits
      * reconstruction into the frame planes, and updates the neighbour-mode and nz contexts.
@@ -915,6 +968,11 @@ public final class VP8Encoder {
 
         // --- Intra i16x16 in P ---
         best = chooseBetter(best, buildIntraInPCandidate(
+            s, mb, mbX, mbY, skipBit0, baseIntraHeader, lambda
+        ));
+
+        // --- Intra B_PRED in P (4x4 sub-block modes at fixed probs, RFC 6386 section 16.2) ---
+        best = chooseBetter(best, buildBPredIntraInPCandidate(
             s, mb, mbX, mbY, skipBit0, baseIntraHeader, lambda
         ));
 
@@ -1030,6 +1088,85 @@ public final class VP8Encoder {
                  + i16.rate + u.rate + v.rate;
         return new IntraInPCandidate(sse, rate, lambda, yMode16, uvMode,
             predU, predV, i16, u, v);
+    }
+
+    /**
+     * Builds a {@link BPredIntraInPCandidate} - B_PRED 4x4 sub-block-mode intra MB inside
+     * a P-frame. Runs {@link #encodeBPredLuma} for the 16 sub-blocks (each picks its best
+     * of 10 modes by per-sub-block R-D), selects a shared chroma mode via
+     * {@link #selectBestChromaMode}, and accumulates the full rate: header + Y-mode tree
+     * (B_PRED leaf) + 16 sub-block modes at fixed {@link VP8Tables#BMODE_PROBA_INTER} +
+     * UV mode + luma 4x4 token rate (no Y2) + chroma token rate.
+     */
+    private static @NotNull InterCandidate buildBPredIntraInPCandidate(
+        @NotNull State s, @NotNull Macroblock mb, int mbX, int mbY,
+        int skipBit0, int baseIntraHeader, int lambda
+    ) {
+        short[] uAbove = extractAbove(s.reconU, s.chromaStride, mbX * 8, mbY * 8, 8);
+        short[] uLeft  = extractLeft(s.reconU, s.chromaStride, mbX * 8, mbY * 8, 8);
+        short[] vAbove = extractAbove(s.reconV, s.chromaStride, mbX * 8, mbY * 8, 8);
+        short[] vLeft  = extractLeft(s.reconV, s.chromaStride, mbX * 8, mbY * 8, 8);
+        short uvAboveLeft = (mbX > 0 && mbY > 0)
+            ? s.reconU[(mbY * 8 - 1) * s.chromaStride + mbX * 8 - 1] : (short) 128;
+        short vuAboveLeft = (mbX > 0 && mbY > 0)
+            ? s.reconV[(mbY * 8 - 1) * s.chromaStride + mbX * 8 - 1] : (short) 128;
+
+        BPredResult bpred = encodeBPredLuma(s, mb.y, mbX, mbY);
+
+        short[] predU = new short[64];
+        short[] predV = new short[64];
+        int uvMode = selectBestChromaMode(
+            mb.cb, uAbove, uLeft, uvAboveLeft,
+            mb.cr, vAbove, vLeft, vuAboveLeft,
+            predU, predV
+        );
+        ChromaTrellisResult u = trellisChroma(s, mbX, mb.cb, predU, /*isU=*/ true);
+        ChromaTrellisResult v = trellisChroma(s, mbX, mb.cr, predV, /*isU=*/ false);
+
+        short[] reconU = reconstructChroma8x8(predU, u.dequant);
+        short[] reconV = reconstructChroma8x8(predV, v.dequant);
+        long sse = bpred.sse
+                 + sumSquaredError(mb.cb, reconU)
+                 + sumSquaredError(mb.cr, reconV);
+
+        int yModeRate = VP8Costs.treeLeafBitCost(
+            VP8Tables.YMODE_TREE, IntraPrediction.B_PRED, VP8Tables.YMODE_PROBA_INTER);
+        int subModesRate = 0;
+        for (int i = 0; i < 16; i++)
+            subModesRate += VP8Costs.treeLeafBitCost(
+                VP8Tables.BMODE_TREE, bpred.modes[i], VP8Tables.BMODE_PROBA_INTER);
+        int uvModeRate = VP8Costs.treeLeafBitCost(
+            VP8Tables.UV_MODE_TREE, uvMode, VP8Tables.UV_MODE_PROBA_INTER);
+        int bpredLumaTokenRate = bpredLumaTokenRate(s, mbX, bpred.yAc);
+        int rate = skipBit0 + baseIntraHeader
+                 + yModeRate + subModesRate + uvModeRate
+                 + bpredLumaTokenRate + u.rate + v.rate;
+        return new BPredIntraInPCandidate(sse, rate, lambda, uvMode,
+            predU, predV, bpred, u, v);
+    }
+
+    /**
+     * Computes the bit cost of token-coding the 16 Y AC sub-blocks of a B_PRED MB. Mirrors
+     * {@link #emitLumaTokens}'s {@code isBPred=true} walk: each sub-block is coded as
+     * {@link VP8Tables#TYPE_I4_AC} starting at coefficient index 0 with a {@code top+left}
+     * nz context that propagates through the 4x4 grid in raster order.
+     */
+    private static int bpredLumaTokenRate(@NotNull State s, int mbX, short @NotNull [] @NotNull [] yAcZigZag) {
+        int[] topLocal = { s.topNz[mbX][0], s.topNz[mbX][1], s.topNz[mbX][2], s.topNz[mbX][3] };
+        int[] leftLocal = { s.leftNz[0], s.leftNz[1], s.leftNz[2], s.leftNz[3] };
+        int rate = 0;
+        for (int by = 0; by < 4; by++) {
+            for (int bx = 0; bx < 4; bx++) {
+                int ctx = topLocal[bx] + leftLocal[by];
+                short[] zz = yAcZigZag[by * 4 + bx];
+                rate += VP8Costs.residualCost(ctx, VP8Tables.TYPE_I4_AC, 0, zz);
+                int nz = 0;
+                for (int i = 0; i < 16; i++) if (zz[i] != 0) { nz = 1; break; }
+                topLocal[bx] = nz;
+                leftLocal[by] = nz;
+            }
+        }
+        return rate;
     }
 
     /** Computes SSE between source 16x16 luma samples and the reference plane at {@code (x0, y0)}. */
@@ -1734,7 +1871,7 @@ public final class VP8Encoder {
      */
     private static void emitLumaTokens(
         @NotNull State s, @NotNull BooleanEncoder t, int mbX, boolean isBPred,
-        short @NotNull [] y2ZigZag, short @NotNull [] @NotNull [] yAcZigZag
+        short @Nullable [] y2ZigZag, short @NotNull [] @NotNull [] yAcZigZag
     ) {
         int[] top = s.topNz[mbX];
         int[] left = s.leftNz;
@@ -1788,6 +1925,27 @@ public final class VP8Encoder {
         // Update neighbour-mode context for future MBs.
         for (int bx = 0; bx < 4; bx++) s.intraT[mbX * 4 + bx] = subModes[3][bx];
         for (int by = 0; by < 4; by++) s.intraL[by] = subModes[by][3];
+    }
+
+    /**
+     * Emits the 16 sub-block modes for an inter-frame B_PRED macroblock. RFC 6386
+     * section 16.2 specifies that inter-frame B_PRED uses the <b>context-free</b>
+     * fixed {@link VP8Tables#BMODE_PROBA_INTER} per sub-block, unlike the keyframe
+     * variant in {@link #emitBPredModes} which indexes the context-dependent
+     * {@link VP8Tables#KF_BMODE_PROB} by neighbouring modes. Still updates
+     * {@code s.intraT} / {@code s.intraL} so a downstream keyframe MB (unlikely in
+     * practice but legal) sees a consistent neighbour context.
+     */
+    private static void emitBPredModesInter(
+        @NotNull State s, @NotNull BooleanEncoder h, int mbX, int @NotNull [] modes
+    ) {
+        for (int i = 0; i < 16; i++)
+            emitBMode(h, modes[i], VP8Tables.BMODE_PROBA_INTER);
+
+        // Populate cross-MB neighbour context from the bottom-row / right-column sub-blocks,
+        // matching the keyframe emitBPredModes bookkeeping.
+        for (int bx = 0; bx < 4; bx++) s.intraT[mbX * 4 + bx] = modes[3 * 4 + bx];
+        for (int by = 0; by < 4; by++) s.intraL[by] = modes[by * 4 + 3];
     }
 
     /**

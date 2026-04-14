@@ -390,6 +390,15 @@ final class VP8Tables {
     static final int[] UV_MODE_PROBA_INTER = { 162, 101, 204 };
 
     /**
+     * Default fixed probabilities for inter-frame B_PRED sub-block modes (9 entries, one
+     * per internal node of {@link #BMODE_TREE}). Unlike the keyframe path which uses
+     * {@link #KF_BMODE_PROB} indexed by the {@code (above, left)} neighbour modes, inter
+     * frames code each sub-block's B-mode with these fixed, context-free probabilities
+     * per RFC 6386 section 16.2 / libvpx {@code vp8_bmode_prob}.
+     */
+    static final int[] BMODE_PROBA_INTER = { 120, 90, 79, 133, 87, 85, 80, 111, 151 };
+
+    /**
      * Macroblock MV-reference tree (5 leaves: ZEROMV, NEARESTMV, NEARMV, NEWMV, SPLITMV).
      * Matches libvpx's {@code vp8_mv_ref_tree} in {@code vp8/common/entropymode.c}.
      * ZEROMV is the first leaf (one bit at {@code prob[0]}) - the common case for
