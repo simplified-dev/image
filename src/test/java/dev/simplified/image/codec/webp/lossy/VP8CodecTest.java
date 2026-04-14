@@ -885,6 +885,62 @@ public class VP8CodecTest {
                     throw new AssertionError("ALTREF mutated by default P-frame at index " + i);
         }
 
+        @Test @DisplayName("conformance: quarter-pel MV refinement beats half-pel on a 1.25-pel translation")
+        void quarterPelRefinementOutperformsHalfPelOnSubPelShift() {
+            // Pure-translation test: frame 1 is frame 0's linear gradient content shifted by
+            // 1.25 pixels horizontally. The 6-tap sub-pel filter evaluated at wire col = 5
+            // (1.25 pel) reconstructs the gradient near-exactly; the closest half-pel MVs
+            // (col = 4 or 6) each miss by 0.25 pel. Quarter-pel refinement lets the encoder
+            // pick wire col = 5, driving reconstruction PSNR well above the half-pel-only
+            // bound. The threshold is chosen empirically to be unreachable under half-pel
+            // alone on this gradient.
+            int w = 32, h = 32;
+            PixelBuffer f0 = PixelBuffer.create(w, h);
+            PixelBuffer f1 = PixelBuffer.create(w, h);
+            for (int y = 0; y < h; y++) {
+                for (int x = 0; x < w; x++) {
+                    // ref[x] = x*6 + 40. Keeps samples in [40, 226] with headroom for
+                    // quant noise. src[x] = (x - 1.25)*6 + 40 = x*6 + 32.5, which rounds to
+                    // 32 or 33 alternating - use the exact float and round to nearest.
+                    int ref = x * 6 + 40;
+                    int src = (int) Math.round((x - 1.25) * 6 + 40);
+                    f0.setPixel(x, y, 0xFF000000 | (ref << 16) | (ref << 8) | ref);
+                    f1.setPixel(x, y, 0xFF000000 | (src << 16) | (src << 8) | src);
+                }
+            }
+
+            VP8EncoderSession encSess = new VP8EncoderSession();
+            byte[] b0 = encSess.encode(f0, 1.0f, true);
+            byte[] b1 = encSess.encode(f1, 1.0f, false);
+            assertThat("b1 is inter frame", b1[0] & 1, is(1));
+
+            VP8DecoderSession decSess = new VP8DecoderSession();
+            decSess.decode(b0);
+            PixelBuffer d1 = decSess.decode(b1);
+
+            // PSNR on the interior MBs only - the leftmost MB can't use a negative MV,
+            // so its reconstruction is expected to degrade. Measuring x >= 16 keeps the
+            // comparison fair.
+            long sumSq = 0;
+            int n = 0;
+            for (int y = 0; y < h; y++) {
+                for (int x = 16; x < w; x++) {
+                    int src = f1.getPixel(x, y);
+                    int dec = d1.getPixel(x, y);
+                    for (int shift : new int[] { 0, 8, 16 }) {
+                        int diff = ((src >> shift) & 0xFF) - ((dec >> shift) & 0xFF);
+                        sumSq += (long) diff * diff;
+                        n++;
+                    }
+                }
+            }
+            double mse = sumSq / (double) n;
+            double psnr = mse == 0 ? Double.POSITIVE_INFINITY : 10.0 * Math.log10(255.0 * 255.0 / mse);
+            if (psnr < 35.0)
+                throw new AssertionError(String.format(
+                    "quarter-pel 1.25-shift PSNR %.2f dB below 35 dB threshold", psnr));
+        }
+
         @Test @DisplayName("conformance: NearMvs flips cross-reference MVs when sign bias differs (RFC 6386 section 18.3)")
         void nearMvsFlipsCrossReferenceMvWhenSignBiasDiffers() {
             // 3x1 MB layout: left(0) = GOLDEN with MV (10, -20), middle(1) = LAST dummy to

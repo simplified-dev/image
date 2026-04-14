@@ -1224,9 +1224,15 @@ public final class VP8Encoder {
 
     /**
      * Full-search integer motion estimation at 1-pel luma granularity followed by an
-     * 8-neighbour half-pel refinement. Returns the best wire-format MV (quarter-pel
-     * units, component order {@code [row, col]}) or {@code null} if no valid candidate
-     * fits (should not happen in practice - at minimum the {@code (0, 0)} MV is valid).
+     * 8-neighbour half-pel refinement and an 8-neighbour quarter-pel refinement.
+     * Returns the best wire-format MV (quarter-pel units, component order
+     * {@code [row, col]}) or {@code null} if no valid candidate fits (should not happen
+     * in practice - at minimum the {@code (0, 0)} MV is valid).
+     * <p>
+     * The quarter-pel pass runs only when half-pel improved on the integer result;
+     * otherwise motion is integer-aligned and refining further wastes 8 MC evaluations
+     * per MB. The 6-tap sub-pel filter in {@link SubpelPrediction} supports all wire
+     * positions, so no new MC path is needed for the +/-1 wire-step neighbours.
      */
     private static int @org.jetbrains.annotations.Nullable [] findBestMv(
         @NotNull State s, @NotNull Macroblock mb, int mbX, int mbY
@@ -1256,20 +1262,42 @@ public final class VP8Encoder {
         }
 
         // Half-pel refinement. Wire step of 2 in quarter-pel = 0.5 luma pel.
-        int bestWireRow = bestDy * 4;
-        int bestWireCol = bestDx * 4;
+        int integerWireRow = bestDy * 4;
+        int integerWireCol = bestDx * 4;
+        int bestWireRow = integerWireRow;
+        int bestWireCol = integerWireCol;
         long bestSse = sseNewMvAtWire(s, mb, mbX, mbY, bestWireRow, bestWireCol);
 
         for (int dy = -2; dy <= 2; dy += 2) {
             for (int dx = -2; dx <= 2; dx += 2) {
                 if (dy == 0 && dx == 0) continue;
-                int wireRow = bestDy * 4 + dy;
-                int wireCol = bestDx * 4 + dx;
+                int wireRow = integerWireRow + dy;
+                int wireCol = integerWireCol + dx;
                 long sse = sseNewMvAtWire(s, mb, mbX, mbY, wireRow, wireCol);
                 if (sse < bestSse) {
                     bestSse = sse;
                     bestWireRow = wireRow;
                     bestWireCol = wireCol;
+                }
+            }
+        }
+
+        // Quarter-pel refinement (wire step 1 = 0.25 luma pel). Skip when half-pel
+        // didn't improve - motion is integer-aligned and 8 more MC evals won't help.
+        if (bestWireRow != integerWireRow || bestWireCol != integerWireCol) {
+            int halfPelBestRow = bestWireRow;
+            int halfPelBestCol = bestWireCol;
+            for (int dy = -1; dy <= 1; dy++) {
+                for (int dx = -1; dx <= 1; dx++) {
+                    if (dy == 0 && dx == 0) continue;
+                    int wireRow = halfPelBestRow + dy;
+                    int wireCol = halfPelBestCol + dx;
+                    long sse = sseNewMvAtWire(s, mb, mbX, mbY, wireRow, wireCol);
+                    if (sse < bestSse) {
+                        bestSse = sse;
+                        bestWireRow = wireRow;
+                        bestWireCol = wireCol;
+                    }
                 }
             }
         }
