@@ -266,6 +266,52 @@ class WebPRoundTripTest {
     }
 
     @Test
+    @DisplayName("animated lossy + alpha decodes through libwebp with bit-exact alpha per frame")
+    void animatedLossyAlphaLibwebpRoundTrip() throws Exception {
+        // 3 frames with SOURCE blending so libwebp's animated decoder emits each frame's
+        // alpha uncomposited against prior frames; alpha comes through VP8L (lossless) so
+        // it must reconstruct bit-exactly.
+        ConcurrentList<ImageFrame> frames = Concurrent.newList();
+        for (int f = 0; f < 3; f++) {
+            PixelBuffer fb = PixelBuffer.create(16, 16);
+            int phase = f * 40;
+            for (int y = 0; y < 16; y++)
+                for (int x = 0; x < 16; x++) {
+                    int alpha = Math.min(255, phase + (x + y) * 7);
+                    fb.setPixel(x, y, (alpha << 24) | 0x000000FF);
+                }
+            frames.add(ImageFrame.of(fb, 100, 0, 0,
+                FrameDisposal.DO_NOT_DISPOSE, FrameBlend.SOURCE));
+        }
+
+        AnimatedImageData anim = AnimatedImageData.builder()
+            .withWidth(16).withHeight(16)
+            .withFrames(frames)
+            .withLoopCount(0)
+            .withBackgroundColor(0)
+            .build();
+
+        File out = outputDir.resolve("anim_alpha_libwebp.webp").toFile();
+        new ImageFactory().toFile(anim, ImageFormat.WEBP, out,
+            WebPWriteOptions.builder().isLossless(false).withQuality(0.9f).build());
+
+        int[][] decoded = decodeAnimatedAlphaWithLibwebp(out, 16, 16, 3);
+
+        for (int f = 0; f < 3; f++) {
+            int phase = f * 40;
+            for (int y = 0; y < 16; y++)
+                for (int x = 0; x < 16; x++) {
+                    int expectedAlpha = Math.min(255, phase + (x + y) * 7);
+                    int gotAlpha = decoded[f][y * 16 + x];
+                    if (gotAlpha != expectedAlpha)
+                        throw new AssertionError(String.format(
+                            "libwebp frame %d alpha @ (%d,%d): expected %d, got %d",
+                            f, x, y, expectedAlpha, gotAlpha));
+                }
+        }
+    }
+
+    @Test
     @DisplayName("uncompressed ALPH (compression=0) round-trips through our reader")
     void uncompressedAlphaSelfRoundTrip() {
         PixelBuffer buf = PixelBuffer.create(8, 8);
@@ -358,6 +404,94 @@ class WebPRoundTripTest {
                 "expected " + alpha.length + " alpha values, got " + alphaIdx
                 + "\nfull stdout:\n" + stdout);
         return alpha;
+    }
+
+    /**
+     * Decodes all frames of an animated WebP via libwebp's {@code WebPAnimDecoderNew}
+     * through Python's {@code webp._webp} ffi. Returns {@code alpha[frameIdx][y * w + x]}
+     * as integers in {@code 0..255}. {@code webp.load_image} does not support animated
+     * WebPs, so this uses the low-level animation decoder directly.
+     */
+    private static int[][] decodeAnimatedAlphaWithLibwebp(
+        File file, int expectedW, int expectedH, int expectedFrames
+    ) throws Exception {
+        String script =
+            "import sys, warnings\n" +
+            "warnings.filterwarnings('ignore')\n" +
+            "try:\n" +
+            "    from webp import _webp, ffi\n" +
+            "except ImportError:\n" +
+            "    print('NO_WEBP'); sys.exit(2)\n" +
+            "with open(r'" + file.getAbsolutePath() + "', 'rb') as f: data = f.read()\n" +
+            "options = ffi.new('WebPAnimDecoderOptions*')\n" +
+            "_webp.lib.WebPAnimDecoderOptionsInit(options)\n" +
+            "wd = ffi.new('WebPData*')\n" +
+            "buf = ffi.new('uint8_t[]', data); wd.bytes = buf; wd.size = len(data)\n" +
+            "dec = _webp.lib.WebPAnimDecoderNew(wd, options)\n" +
+            "if dec == ffi.NULL:\n" +
+            "    print('DECODE_FAIL'); sys.exit(3)\n" +
+            "info = ffi.new('WebPAnimInfo*')\n" +
+            "_webp.lib.WebPAnimDecoderGetInfo(dec, info)\n" +
+            "w, h = info.canvas_width, info.canvas_height\n" +
+            "print(f'DIMS {w} {h}')\n" +
+            "print(f'FRAMES {info.frame_count}')\n" +
+            "while _webp.lib.WebPAnimDecoderHasMoreFrames(dec):\n" +
+            "    ptr = ffi.new('uint8_t**'); ts = ffi.new('int*')\n" +
+            "    if _webp.lib.WebPAnimDecoderGetNext(dec, ptr, ts) == 0:\n" +
+            "        print('FRAME_FAIL'); sys.exit(4)\n" +
+            "    pixels = ffi.buffer(ptr[0], w * h * 4)[:]\n" +
+            "    print('FRAME')\n" +
+            "    for i in range(3, len(pixels), 4):\n" +
+            "        print(f'A {pixels[i]}')\n" +
+            "_webp.lib.WebPAnimDecoderDelete(dec)\n";
+
+        Process p = null;
+        for (String cmd : new String[]{"python3", "python", "py"}) {
+            try {
+                ProcessBuilder pb = new ProcessBuilder(cmd, "-c", script);
+                pb.redirectErrorStream(true);
+                p = pb.start();
+                break;
+            } catch (java.io.IOException ignored) { }
+        }
+        if (p == null)
+            throw new org.opentest4j.TestAbortedException("No python3/python/py on PATH");
+
+        String stdout = new String(p.getInputStream().readAllBytes());
+        int exit = p.waitFor();
+        if (exit == 2 && stdout.contains("NO_WEBP"))
+            throw new org.opentest4j.TestAbortedException("Python webp package not installed");
+        if (exit != 0)
+            throw new AssertionError("libwebp rejected our animated WebP:\n" + stdout);
+
+        int w = -1, h = -1, frameCount = -1;
+        int[][] frames = new int[expectedFrames][expectedW * expectedH];
+        int frameIdx = -1;
+        int alphaIdx = 0;
+        for (String line : stdout.split("\\R")) {
+            if (line.startsWith("DIMS ")) {
+                String[] dims = line.substring(5).split("\\s+");
+                w = Integer.parseInt(dims[0]);
+                h = Integer.parseInt(dims[1]);
+            } else if (line.startsWith("FRAMES ")) {
+                frameCount = Integer.parseInt(line.substring(7).trim());
+            } else if (line.equals("FRAME")) {
+                frameIdx++;
+                alphaIdx = 0;
+            } else if (line.startsWith("A ") && frameIdx >= 0 && frameIdx < expectedFrames) {
+                if (alphaIdx < frames[frameIdx].length)
+                    frames[frameIdx][alphaIdx++] = Integer.parseInt(line.substring(2));
+            }
+        }
+        if (w != expectedW || h != expectedH)
+            throw new AssertionError(
+                "dims " + w + "x" + h + " != expected " + expectedW + "x" + expectedH
+                + "\nfull stdout:\n" + stdout);
+        if (frameCount != expectedFrames)
+            throw new AssertionError(
+                "frame count " + frameCount + " != expected " + expectedFrames
+                + "\nfull stdout:\n" + stdout);
+        return frames;
     }
 
     @Test

@@ -557,12 +557,12 @@ public class VP8CodecTest {
 
             PixelBuffer decoded = VP8Decoder.decode(vp8);
             double psnr = sourcePsnr(src, decoded);
-            // Loose threshold - libwebp at quality 100 emits normal-filter and fancy-upsampling
-            // dependent artifacts that our decoder doesn't apply yet. 20 dB confirms the
-            // basic parse path works end-to-end; tighter tolerances are follow-up work.
-            if (psnr < 20.0)
+            // Normal-filter support + fancy bilinear chroma upsampling landed in commit
+            // 6449249, raising this from the old 20 dB smoke-test threshold to a real
+            // parity check. Measured ~31.8 dB locally; 28 dB leaves ~3.5 dB of margin.
+            if (psnr < 28.0)
                 throw new AssertionError(String.format(
-                    "PSNR decoding libwebp q=100 gradient = %.2f dB (expected >= 20 dB)", psnr));
+                    "PSNR decoding libwebp q=100 gradient = %.2f dB (expected >= 28 dB)", psnr));
         }
 
         private static double sourcePsnr(PixelBuffer src, PixelBuffer decoded) {
