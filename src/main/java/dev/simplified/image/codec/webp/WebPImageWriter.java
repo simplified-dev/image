@@ -44,21 +44,6 @@ public class WebPImageWriter implements ImageWriter {
             alphaCompression = webpOptions.isAlphaCompression();
         }
 
-        // Lossy VP8 output is gated off: the current VP8Encoder is a rough sketch. It
-        // emits DCT coefficients as fixed-width 11-bit signed values instead of VP8's
-        // prefix-coded token trees, skips the Y2 DC block for 16x16 modes, and omits
-        // most of the frame-header fields (token-partition counts, QP deltas, loop filter
-        // params, reference frame refresh flags). No reference decoder accepts the
-        // output. Until a spec-complete rewrite lands, force lossless so callers get a
-        // valid file rather than silently corrupt bytes. See VP8Encoder javadoc.
-        if (!lossless) {
-            throw new UnsupportedOperationException(
-                "Lossy VP8 encoding is currently not supported - the VP8 encoder is a placeholder "
-                + "that does not produce spec-compliant bitstreams. Use WebPWriteOptions.isLossless() "
-                + "(VP8L) for now."
-            );
-        }
-
         if (data instanceof AnimatedImageData animated) {
             if (loopCount == 0 && animated.getLoopCount() != 0)
                 loopCount = animated.getLoopCount();

@@ -103,24 +103,22 @@ class WebPRoundTripTest {
     }
 
     @Test
-    @DisplayName("lossy VP8 path is explicitly unsupported and throws")
-    void lossyVp8Rejected() {
+    @DisplayName("lossy VP8 32x32 writes a RIFF/WEBP file libwebp can parse")
+    void lossyVp8WritesValidFile() throws IOException {
         PixelBuffer buf = PixelBuffer.create(32, 32);
+        for (int y = 0; y < 32; y++)
+            for (int x = 0; x < 32; x++)
+                buf.setPixel(x, y, 0xFF000000 | ((x * 8) << 16) | ((y * 8) << 8));
+
         var image = new StaticImageData(ImageFrame.of(buf));
         File out = outputDir.resolve("lossy_vp8.webp").toFile();
-        try {
-            new ImageFactory().toFile(image, ImageFormat.WEBP, out,
-                WebPWriteOptions.builder().isLossless(false).withQuality(0.75f).build());
-        } catch (Exception e) {
-            // ImageFactory may wrap the encoder exception; unwrap one level and check.
-            Throwable cause = e;
-            while (cause != null && !(cause instanceof UnsupportedOperationException))
-                cause = cause.getCause();
-            assertThat("lossy VP8 should raise UnsupportedOperationException",
-                cause instanceof UnsupportedOperationException, is(true));
-            return;
-        }
-        assertThat("lossy VP8 should have thrown, but it didn't", false, is(true));
+        new ImageFactory().toFile(image, ImageFormat.WEBP, out,
+            WebPWriteOptions.builder().isLossless(false).withQuality(0.9f).build());
+
+        byte[] bytes = Files.readAllBytes(out.toPath());
+        assertThat("RIFF header",  new String(bytes, 0, 4), is("RIFF"));
+        assertThat("WEBP id",       new String(bytes, 8, 4), is("WEBP"));
+        assertThat("file non-trivial", bytes.length > 30, is(true));
     }
 
     @Test
