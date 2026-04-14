@@ -240,6 +240,133 @@ public class WebPCodecTest {
 
     }
 
+    // ──── BooleanEncoder / BooleanDecoder (VP8 range coder) ────
+
+    @Nested
+    class BooleanCoderTests {
+
+        @Test @DisplayName("round-trips a single equal-probability bit")
+        void singleBoolRoundTrip() {
+            for (int bit : new int[]{0, 1}) {
+                BooleanEncoder enc = new BooleanEncoder(16);
+                enc.encodeBool(bit);
+                byte[] out = enc.toByteArray();
+
+                BooleanDecoder dec = new BooleanDecoder(out, 0, out.length);
+                assertThat("bit=" + bit, dec.decodeBool(), is(bit));
+            }
+        }
+
+        @Test @DisplayName("round-trips a mixed-probability bit sequence")
+        void mixedProbSequence() {
+            // (prob, bit) pairs - deliberately includes extreme probabilities.
+            int[][] pairs = {
+                { 1, 0 }, { 1, 1 },
+                { 128, 0 }, { 128, 1 },
+                { 255, 0 }, { 255, 1 },
+                { 64, 0 }, { 64, 1 }, { 192, 1 }, { 192, 0 },
+                { 100, 1 }, { 50, 0 }, { 200, 1 }, { 10, 0 }, { 240, 1 }
+            };
+            BooleanEncoder enc = new BooleanEncoder(64);
+            for (int[] p : pairs) enc.encodeBit(p[0], p[1]);
+            byte[] out = enc.toByteArray();
+
+            BooleanDecoder dec = new BooleanDecoder(out, 0, out.length);
+            for (int i = 0; i < pairs.length; i++) {
+                int got = dec.decodeBit(pairs[i][0]);
+                assertThat("idx=" + i + " prob=" + pairs[i][0], got, is(pairs[i][1]));
+            }
+        }
+
+        @Test @DisplayName("round-trips unsigned integers of various widths")
+        void uintRoundTrip() {
+            int[] values = { 0, 1, 0x7F, 0xFF, 0x1234, 0xABCDE };
+            int[] widths = { 1, 2, 7, 8, 13, 20 };
+            BooleanEncoder enc = new BooleanEncoder(64);
+            for (int i = 0; i < values.length; i++) enc.encodeUint(values[i], widths[i]);
+            byte[] out = enc.toByteArray();
+
+            BooleanDecoder dec = new BooleanDecoder(out, 0, out.length);
+            for (int i = 0; i < values.length; i++)
+                assertThat("width=" + widths[i], dec.decodeUint(widths[i]), is(values[i]));
+        }
+
+        @Test @DisplayName("round-trips signed integers including zero and negatives")
+        void sintRoundTrip() {
+            int[] values = { 0, 1, -1, 5, -5, 63, -63 };
+            BooleanEncoder enc = new BooleanEncoder(64);
+            for (int v : values) enc.encodeSint(v, 7);
+            byte[] out = enc.toByteArray();
+
+            BooleanDecoder dec = new BooleanDecoder(out, 0, out.length);
+            for (int v : values)
+                assertThat(dec.decodeSint(7), is(v));
+        }
+
+        @Test @DisplayName("stress test - 1000 random (prob, bit) pairs")
+        void stressRandomPairs() {
+            java.util.Random rng = new java.util.Random(0xC0FFEE);
+            int n = 1000;
+            int[] probs = new int[n];
+            int[] bits = new int[n];
+            BooleanEncoder enc = new BooleanEncoder(256);
+            for (int i = 0; i < n; i++) {
+                probs[i] = 1 + rng.nextInt(255);      // 1..255
+                bits[i] = rng.nextInt(2);
+                enc.encodeBit(probs[i], bits[i]);
+            }
+            byte[] out = enc.toByteArray();
+
+            BooleanDecoder dec = new BooleanDecoder(out, 0, out.length);
+            for (int i = 0; i < n; i++) {
+                int got = dec.decodeBit(probs[i]);
+                assertThat("idx=" + i + " prob=" + probs[i], got, is(bits[i]));
+            }
+        }
+
+        @Test @DisplayName("round-trips tree decoding with real VP8 key-frame Y-mode probs")
+        void treeRoundTrip() {
+            // KF_YMODE_TREE / KF_YMODE_PROB from RFC 6386 section 11.2
+            int[] tree = { -0, 2, -1, 4, -2, 6, -3, -4 }; // B_PRED=0, DC=1, V=2, H=3, TM=4
+            int[] probs = { 145, 156, 163, 128 };
+
+            int[] sequence = { 0, 1, 2, 3, 4, 0, 4, 2, 1, 3 };
+            BooleanEncoder enc = new BooleanEncoder(64);
+            for (int leaf : sequence) encodeTree(enc, tree, probs, leaf);
+            byte[] out = enc.toByteArray();
+
+            BooleanDecoder dec = new BooleanDecoder(out, 0, out.length);
+            for (int expected : sequence)
+                assertThat(dec.decodeTree(tree, probs), is(expected));
+        }
+
+        /** Walks the tree toward {@code leaf} and emits each branch bit via {@code enc}. */
+        private static void encodeTree(BooleanEncoder enc, int[] tree, int[] probs, int leaf) {
+            // Build the bit-path by DFS over the flat tree.
+            int[] path = new int[16];
+            int[] nodes = new int[16];
+            int depth = findPath(tree, 0, -leaf, path, nodes, 0);
+            for (int i = 0; i < depth; i++)
+                enc.encodeBit(probs[nodes[i] >> 1], path[i]);
+        }
+
+        private static int findPath(int[] tree, int node, int target, int[] path, int[] nodes, int depth) {
+            for (int branch = 0; branch < 2; branch++) {
+                int next = tree[node + branch];
+                path[depth] = branch;
+                nodes[depth] = node;
+                if (next <= 0) {
+                    if (next == target) return depth + 1;
+                } else {
+                    int d = findPath(tree, next, target, path, nodes, depth + 1);
+                    if (d > 0) return d;
+                }
+            }
+            return 0;
+        }
+
+    }
+
     // ──── ColorCache ────
 
     @Nested
