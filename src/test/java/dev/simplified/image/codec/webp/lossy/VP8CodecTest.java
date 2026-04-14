@@ -351,6 +351,30 @@ public class VP8CodecTest {
             return br.decodeUint(6);
         }
 
+        @Test @DisplayName("B_PRED encode: text-like sharp edges round-trip through libwebp")
+        void bPredSharpEdgesLibwebpRoundTrip() throws Exception {
+            // Vertical bars create sharp intra-block gradients that strongly favor B_PRED
+            // over 16x16 DC. Verifies the B_PRED wire format is libwebp-compatible.
+            PixelBuffer buf = PixelBuffer.create(16, 16);
+            for (int y = 0; y < 16; y++)
+                for (int x = 0; x < 16; x++) {
+                    int v = ((x / 2) & 1) == 0 ? 0 : 0xFF;
+                    buf.setPixel(x, y, 0xFF000000 | (v << 16) | (v << 8) | v);
+                }
+            byte[] vp8 = VP8Encoder.encode(buf, 1.0f);
+            ConcurrentList<WebPChunk> chunks = Concurrent.newList();
+            chunks.add(RiffContainer.createChunk(WebPChunk.Type.VP8, vp8));
+            byte[] riff = RiffContainer.write(chunks);
+
+            int[] decoded = decodeWithLibwebp(riff, 16, 16);
+            double psnr = computePsnr(buf, decoded, 16, 16);
+            // Sharp bars are hard at QI=0 with our simple SSE-based B_PRED picker; 20 dB
+            // confirms libwebp parses the B_PRED bitstream without rejecting it.
+            if (psnr < 20.0)
+                throw new AssertionError(String.format(
+                    "B_PRED bars PSNR = %.2f dB (expected >= 20 dB)", psnr));
+        }
+
         @Test @DisplayName("16x16 gradient reconstructs through libwebp with bounded error at high quality")
         void pixelFidelityGradient() throws Exception {
             PixelBuffer buf = PixelBuffer.create(16, 16);

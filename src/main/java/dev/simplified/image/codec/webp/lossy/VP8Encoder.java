@@ -50,6 +50,13 @@ public final class VP8Encoder {
         // leftNz[0..3]=luma rows, [4..5]=U rows, [6..7]=V rows, [8]=Y2 - reset each MB row.
         final int[] leftNz = new int[9];
 
+        // Sub-block mode context for B_PRED neighbour lookup. Mirrors VP8Decoder.State:
+        //   intraT[mbX*4 + bx] = bottom-row sub-block mode of the MB above
+        //   intraL[by]         = right-column sub-block mode of the MB to the left
+        // For 16x16 macroblocks, both are filled with the analogous B_*_PRED constant.
+        final int[] intraT;
+        final int[] intraL = new int[4];
+
         // Quantizer steps.
         final int y1Dc, y1Ac, y2Dc, y2Ac, uvDc, uvAc;
 
@@ -65,6 +72,7 @@ public final class VP8Encoder {
             this.reconU = new short[chromaStride * mbRows * 8];
             this.reconV = new short[chromaStride * mbRows * 8];
             this.topNz = new int[mbCols][9];
+            this.intraT = new int[mbCols * 4];
 
             this.y1Dc = VP8Tables.DC_Q_LOOKUP[qi];
             this.y1Ac = VP8Tables.AC_Q_LOOKUP[qi];
@@ -99,6 +107,7 @@ public final class VP8Encoder {
         int[] argb = pixels.pixels();
         for (int mbY = 0; mbY < s.mbRows; mbY++) {
             java.util.Arrays.fill(s.leftNz, 0);
+            java.util.Arrays.fill(s.intraL, IntraPrediction.B_DC_PRED);
             for (int mbX = 0; mbX < s.mbCols; mbX++) {
                 encodeMacroblock(s, argb, width, height, mbX, mbY);
             }
@@ -182,7 +191,8 @@ public final class VP8Encoder {
         Macroblock mb = new Macroblock();
         mb.fromARGB(argb, mbX, mbY, width, height);
 
-        // 2. Extract neighbors for intra prediction.
+        // 2. Extract neighbors for chroma intra prediction (luma neighbors are computed
+        //    inside the per-mode evaluation paths below).
         short[] yAbove = extractAbove(s.reconY, s.lumaStride, mbX * 16, mbY * 16, 16);
         short[] yLeft  = extractLeft(s.reconY, s.lumaStride, mbX * 16, mbY * 16, 16);
         short yAboveLeft = (mbX > 0 && mbY > 0)
@@ -196,11 +206,28 @@ public final class VP8Encoder {
         short vuAboveLeft = (mbX > 0 && mbY > 0)
             ? s.reconV[(mbY * 8 - 1) * s.chromaStride + mbX * 8 - 1] : (short) 128;
 
-        // 3. Select best luma 16x16 mode by SSE against the source.
-        short[] predY = new short[256];
-        int yMode = selectBest16x16Mode(mb.y, yAbove, yLeft, yAboveLeft, predY);
+        // 3. 16x16 luma path - DCT, quantize, and reconstruct into a local 256-sample buffer.
+        short[] predY16 = new short[256];
+        int yMode16 = selectBest16x16Mode(mb.y, yAbove, yLeft, yAboveLeft, predY16);
+        short[] y2 = new short[16];
+        short[][] yAc16 = new short[16][16];
+        forwardY(mb.y, predY16, y2, yAc16, s.y1Ac);
+        short[] y2Coef = new short[16];
+        DCT.forwardWHT(y2, y2Coef);
+        y2Coef[0] = (short) (y2Coef[0] / s.y2Dc);
+        for (int i = 1; i < 16; i++) y2Coef[i] = (short) (y2Coef[i] / s.y2Ac);
+        short[] recon16 = reconstructLuma16x16(s, predY16, y2Coef, yAc16);
+        long sse16 = sumSquaredError(mb.y, recon16);
 
-        // 4. Select best chroma 8x8 mode (shared between U and V, joint SSE).
+        // 4. B_PRED luma path - per-sub-block mode + reconstruct into a local 256-sample buffer.
+        BPredResult bpred = encodeBPredLuma(s, mb.y, mbX, mbY);
+
+        // 5. Pick the winner. Plain SSE comparison; libwebp's PickBestIntra4 adds a bit-cost
+        //    lambda we don't have yet, but at sharp boundaries (text, glyph edges) B_PRED's
+        //    SSE drops far enough to dominate the implicit overhead anyway.
+        boolean useBPred = bpred.sse < sse16;
+
+        // 6. Chroma: select shared mode + DCT + quant.
         short[] predU = new short[64];
         short[] predV = new short[64];
         int uvMode = selectBestChromaMode(
@@ -208,36 +235,232 @@ public final class VP8Encoder {
             mb.cr, vAbove, vLeft, vuAboveLeft,
             predU, predV
         );
-
-        // 3. Forward-DCT each 4x4 Y sub-block. Collect DCs into a Y2 block, quantize ACs.
-        short[] y2 = new short[16];          // 16 DC coefficients for Y2 WHT
-        short[][] yAc = new short[16][16];   // 16 AC-only Y sub-block coefficients
-        forwardY(mb.y, predY, y2, yAc, s.y1Ac);
-
-        // 4. Forward-WHT on the DCs, quantize.
-        short[] y2Coef = new short[16];
-        DCT.forwardWHT(y2, y2Coef);
-        y2Coef[0] = (short) (y2Coef[0] / s.y2Dc);
-        for (int i = 1; i < 16; i++) y2Coef[i] = (short) (y2Coef[i] / s.y2Ac);
-
-        // 5. Chroma DCT + quant.
         short[][] uCoef = new short[4][16];
         short[][] vCoef = new short[4][16];
         forwardChroma(mb.cb, predU, uCoef, s.uvDc, s.uvAc);
         forwardChroma(mb.cr, predV, vCoef, s.uvDc, s.uvAc);
 
-        // 6. Emit the MB header in the first partition (16x16 mode, no skip bit).
+        // 7. Commit luma reconstruction to the frame's reconY plane.
+        commitLumaToRecon(s, mbX, mbY, useBPred ? bpred.recon : recon16);
+
+        // 8. Emit per-MB header + tokens.
         BooleanEncoder h = s.header;
-        h.encodeBit(145, 1);       // !is_i4x4  -> 16x16 prediction
-        emitYMode16x16(h, yMode);
+        if (useBPred) {
+            h.encodeBit(145, 0);                            // is_i4x4 = true
+            emitBPredModes(s, h, mbX, bpred.modes);
+        } else {
+            h.encodeBit(145, 1);                            // 16x16 prediction
+            emitYMode16x16(h, yMode16);
+            // Fill sub-block neighbour context with the analogous B_*_PRED for future MBs.
+            int ctxMode = mb16ToSubMode(yMode16);
+            java.util.Arrays.fill(s.intraT, mbX * 4, mbX * 4 + 4, ctxMode);
+            java.util.Arrays.fill(s.intraL, ctxMode);
+        }
         emitUvMode(h, uvMode);
 
-        // 7. Emit the residual tokens in the token partition, in libwebp's order:
-        //    Y2 (type=1, first=0), 16 Y AC blocks (type=0, first=1), 4 U + 4 V (type=2, first=0).
-        emitMbTokens(s, mbX, y2Coef, yAc, uCoef, vCoef);
+        emitMbTokens(s, mbX, useBPred, y2Coef, useBPred ? bpred.yAc : yAc16, uCoef, vCoef);
 
-        // 8. Reconstruct the MB's samples for future neighbor prediction.
-        reconstructMb(s, mb, predY, predU, predV, y2Coef, yAc, uCoef, vCoef, mbX, mbY);
+        // 9. Commit chroma reconstruction.
+        reconstructChroma(s.reconU, s.chromaStride, mbX, mbY, predU, uCoef, s.uvDc, s.uvAc);
+        reconstructChroma(s.reconV, s.chromaStride, mbX, mbY, predV, vCoef, s.uvDc, s.uvAc);
+    }
+
+    /** Output of the per-MB B_PRED evaluation path. */
+    private static final class BPredResult {
+        final int[] modes;          // 16 sub-block modes, raster order (by * 4 + bx)
+        final short[][] yAc;        // 16 quantized coefficient blocks, raster order
+        final short[] recon;        // 256 reconstructed luma samples, MB-local raster
+        final long sse;             // sum-of-squared-error vs source
+
+        BPredResult(int[] modes, short[][] yAc, short[] recon, long sse) {
+            this.modes = modes;
+            this.yAc = yAc;
+            this.recon = recon;
+            this.sse = sse;
+        }
+    }
+
+    /**
+     * Evaluates the B_PRED path: for each of 16 sub-blocks in raster order, picks the best
+     * of the 10 4x4 prediction modes by SSE, forward-DCTs + quantizes the residual, and
+     * reconstructs into a local 256-sample buffer that subsequent sub-blocks use as
+     * intra neighbours. Does NOT mutate {@code s.reconY}.
+     */
+    private static @NotNull BPredResult encodeBPredLuma(@NotNull State s, short @NotNull [] src, int mbX, int mbY) {
+        int[] modes = new int[16];
+        short[][] yAc = new short[16][];
+        short[] recon = new short[256];
+        long totalSse = 0;
+
+        // Sub-block mode neighbour context tracked locally (so we don't update s.intraT/L
+        // until after we know B_PRED has won).
+        int[] localTop = new int[4];
+        for (int bx = 0; bx < 4; bx++) localTop[bx] = s.intraT[mbX * 4 + bx];
+        int[] localLeft = s.intraL.clone();
+
+        for (int by = 0; by < 4; by++) {
+            for (int bx = 0; bx < 4; bx++) {
+                short[] above = neighborAbove8(s, recon, mbX, mbY, bx, by);
+                short[] left = neighborLeft4(s, recon, mbX, mbY, bx, by);
+                short aboveLeft = neighborAboveLeft(s, recon, mbX, mbY, bx, by);
+
+                short[] srcBlock = new short[16];
+                for (int yy = 0; yy < 4; yy++)
+                    for (int xx = 0; xx < 4; xx++)
+                        srcBlock[yy * 4 + xx] = src[(by * 4 + yy) * 16 + bx * 4 + xx];
+
+                short[] bestRecon = new short[16];
+                short[] bestCoef = new short[16];
+                int bestMode = -1;
+                long bestSse = Long.MAX_VALUE;
+                short[] cand = new short[16];
+                short[] candResidual = new short[16];
+                short[] candCoef = new short[16];
+                short[] candDeq = new short[16];
+                short[] candReconBlk = new short[16];
+
+                for (int mode = 0; mode < IntraPrediction.NUM_4x4_MODES; mode++) {
+                    IntraPrediction.predict4x4(cand, above, left, aboveLeft, mode);
+                    for (int i = 0; i < 16; i++)
+                        candResidual[i] = (short) (srcBlock[i] - cand[i]);
+                    DCT.forwardDCT(candResidual, candCoef);
+                    candDeq[0] = (short) ((candCoef[0] / s.y1Dc) * s.y1Dc);
+                    candCoef[0] = (short) (candCoef[0] / s.y1Dc);
+                    for (int i = 1; i < 16; i++) {
+                        candCoef[i] = (short) (candCoef[i] / s.y1Ac);
+                        candDeq[i] = (short) (candCoef[i] * s.y1Ac);
+                    }
+                    short[] candResidualReconstructed = new short[16];
+                    DCT.inverseDCT(candDeq, candResidualReconstructed);
+                    for (int i = 0; i < 16; i++)
+                        candReconBlk[i] = (short) Math.clamp(cand[i] + candResidualReconstructed[i], 0, 255);
+                    long sse = sumSquaredError(srcBlock, candReconBlk);
+                    if (sse < bestSse) {
+                        bestSse = sse;
+                        bestMode = mode;
+                        System.arraycopy(candReconBlk, 0, bestRecon, 0, 16);
+                        System.arraycopy(candCoef, 0, bestCoef, 0, 16);
+                    }
+                }
+
+                modes[by * 4 + bx] = bestMode;
+                yAc[by * 4 + bx] = bestCoef;
+                totalSse += bestSse;
+
+                // Write reconstructed sub-block into the local 16x16 buffer.
+                for (int yy = 0; yy < 4; yy++)
+                    for (int xx = 0; xx < 4; xx++)
+                        recon[(by * 4 + yy) * 16 + bx * 4 + xx] = bestRecon[yy * 4 + xx];
+
+                localTop[bx] = bestMode;     // for next row's above-neighbour context
+                localLeft[by] = bestMode;    // for next column's left-neighbour context
+            }
+        }
+
+        return new BPredResult(modes, yAc, recon, totalSse);
+    }
+
+    /** Maps a 16x16 luma macroblock mode to the analogous B_PRED sub-block constant. */
+    private static int mb16ToSubMode(int mbMode) {
+        return switch (mbMode) {
+            case IntraPrediction.V_PRED -> IntraPrediction.B_VE_PRED;
+            case IntraPrediction.H_PRED -> IntraPrediction.B_HE_PRED;
+            case IntraPrediction.TM_PRED -> IntraPrediction.B_TM_PRED;
+            default -> IntraPrediction.B_DC_PRED;
+        };
+    }
+
+    /**
+     * Above-row neighbours for sub-block ({@code by}, {@code bx}): 4 above + 4 above-right,
+     * sourced from {@code mbRecon} for sub-blocks within the current MB and from
+     * {@code s.reconY} for the prior MB row. Above-right past the current MB's right edge
+     * is replicated from the rightmost in-MB pixel (matching {@link VP8Decoder}).
+     */
+    private static short[] neighborAbove8(@NotNull State s, short @NotNull [] mbRecon, int mbX, int mbY, int bx, int by) {
+        if (by == 0 && mbY == 0) return null;
+        short[] above = new short[8];
+        for (int i = 0; i < 8; i++) {
+            int relX = bx * 4 + i;
+            if (by == 0) {
+                int absX = mbX * 16 + relX;
+                int rightLimit = s.lumaStride - 1;
+                int x = Math.min(absX, rightLimit);
+                above[i] = s.reconY[(mbY * 16 - 1) * s.lumaStride + x];
+            } else {
+                int rightLimit = 15;
+                int x = Math.min(relX, rightLimit);
+                above[i] = mbRecon[(by * 4 - 1) * 16 + x];
+            }
+        }
+        return above;
+    }
+
+    /** Left-column 4 neighbours for sub-block ({@code by}, {@code bx}). */
+    private static short[] neighborLeft4(@NotNull State s, short @NotNull [] mbRecon, int mbX, int mbY, int bx, int by) {
+        if (bx == 0 && mbX == 0) return null;
+        short[] left = new short[4];
+        for (int i = 0; i < 4; i++) {
+            int relY = by * 4 + i;
+            if (bx == 0) {
+                left[i] = s.reconY[(mbY * 16 + relY) * s.lumaStride + mbX * 16 - 1];
+            } else {
+                left[i] = mbRecon[relY * 16 + bx * 4 - 1];
+            }
+        }
+        return left;
+    }
+
+    private static short neighborAboveLeft(@NotNull State s, short @NotNull [] mbRecon, int mbX, int mbY, int bx, int by) {
+        int absX = mbX * 16 + bx * 4 - 1;
+        int absY = mbY * 16 + by * 4 - 1;
+        if (absX < 0 || absY < 0) return 128;
+        if (by > 0 && bx > 0)
+            return mbRecon[(by * 4 - 1) * 16 + bx * 4 - 1];
+        if (by == 0 && bx > 0)
+            return s.reconY[(mbY * 16 - 1) * s.lumaStride + mbX * 16 + bx * 4 - 1];
+        if (bx == 0 && by > 0)
+            return s.reconY[(mbY * 16 + by * 4 - 1) * s.lumaStride + mbX * 16 - 1];
+        return s.reconY[(mbY * 16 - 1) * s.lumaStride + mbX * 16 - 1];
+    }
+
+    /**
+     * Reconstructs a 16x16 luma macroblock from a 16x16 prediction plus quantized Y2/Y AC
+     * coefficients, returning a 256-sample MB-local buffer (does not mutate {@code s.reconY}).
+     */
+    private static short[] reconstructLuma16x16(
+        @NotNull State s, short @NotNull [] predY,
+        short @NotNull [] y2Coef, short @NotNull [] @NotNull [] yAc
+    ) {
+        short[] dq = new short[16];
+        dq[0] = (short) (y2Coef[0] * s.y2Dc);
+        for (int i = 1; i < 16; i++) dq[i] = (short) (y2Coef[i] * s.y2Ac);
+        short[] dcValues = new short[16];
+        DCT.inverseWHT(dq, dcValues);
+
+        short[] recon = new short[256];
+        for (int by = 0; by < 4; by++) {
+            for (int bx = 0; bx < 4; bx++) {
+                short[] coef = yAc[by * 4 + bx].clone();
+                coef[0] = dcValues[by * 4 + bx];
+                for (int i = 1; i < 16; i++) coef[i] = (short) (coef[i] * s.y1Ac);
+                short[] residual = new short[16];
+                DCT.inverseDCT(coef, residual);
+                for (int yy = 0; yy < 4; yy++)
+                    for (int xx = 0; xx < 4; xx++) {
+                        int idx = (by * 4 + yy) * 16 + bx * 4 + xx;
+                        recon[idx] = (short) clamp(predY[idx] + residual[yy * 4 + xx]);
+                    }
+            }
+        }
+        return recon;
+    }
+
+    /** Copies a 16x16 MB-local reconstruction buffer to the appropriate region of {@code s.reconY}. */
+    private static void commitLumaToRecon(@NotNull State s, int mbX, int mbY, short @NotNull [] recon) {
+        for (int yy = 0; yy < 16; yy++) {
+            int dst = (mbY * 16 + yy) * s.lumaStride + mbX * 16;
+            System.arraycopy(recon, yy * 16, s.reconY, dst, 16);
+        }
     }
 
     /**
@@ -292,9 +515,17 @@ public final class VP8Encoder {
         }
     }
 
-    /** Emits all coefficient tokens for one MB in libwebp's raster order. */
+    /**
+     * Emits all coefficient tokens for one MB in libwebp's raster order.
+     * <p>
+     * For 16x16 macroblocks the order is Y2 (type=1, first=0), then 16 Y AC blocks
+     * (type=0, first=1), then 4 U + 4 V (type=2, first=0). For B_PRED the Y2 block is
+     * absent: 16 Y blocks emit at first=0 with type=I4_AC, then chroma as before.
+     *
+     * @param y2 quantized Y2 coefficients - ignored when {@code isBPred} is true
+     */
     private static void emitMbTokens(
-        @NotNull State s, int mbX,
+        @NotNull State s, int mbX, boolean isBPred,
         short @NotNull [] y2, short @NotNull [] @NotNull [] yAc,
         short @NotNull [] @NotNull [] uCoef, short @NotNull [] @NotNull [] vCoef
     ) {
@@ -302,20 +533,30 @@ public final class VP8Encoder {
         int[] top = s.topNz[mbX];
         int[] left = s.leftNz;
 
-        // Y2 block (DC coefficients of all 16 Y sub-blocks).
-        {
+        int yFirst;
+        int yType;
+        if (isBPred) {
+            yFirst = 0;
+            yType = VP8Tables.TYPE_I4_AC;
+            // B_PRED MBs have no Y2 block - per libwebp ParseResiduals, neither encoder
+            // nor decoder touches the Y2 nz context bits (top[8]/left[8]) here. They
+            // retain whatever the prior i16x16 MB last wrote (or zero from row reset).
+        } else {
+            // Y2 block (DC coefficients of all 16 Y sub-blocks).
             short[] zz = toZigzag(y2);
             int ctx = top[8] + left[8];
             int nz = VP8TokenEncoder.emit(t, zz, 0, ctx, VP8Tables.TYPE_I16_DC, VP8Tables.COEFFS_PROBA_0);
             top[8] = left[8] = nz;
+            yFirst = 1;
+            yType = VP8Tables.TYPE_I16_AC;
         }
 
-        // Y AC blocks - 16 blocks in raster order, first=1 (DC was already in Y2).
+        // Y blocks - 16 blocks in raster order.
         for (int y = 0; y < 4; y++) {
             for (int x = 0; x < 4; x++) {
                 short[] zz = toZigzag(yAc[y * 4 + x]);
                 int ctx = top[x] + left[y];
-                int nz = VP8TokenEncoder.emit(t, zz, 1, ctx, VP8Tables.TYPE_I16_AC, VP8Tables.COEFFS_PROBA_0);
+                int nz = VP8TokenEncoder.emit(t, zz, yFirst, ctx, yType, VP8Tables.COEFFS_PROBA_0);
                 top[x] = left[y] = nz;
             }
         }
@@ -349,45 +590,62 @@ public final class VP8Encoder {
     }
 
     /**
-     * Inverse-quantize, inverse-transform, add prediction, clamp, and write the
-     * result back to the reconstructed Y/U/V planes so the next MB can reference it.
+     * Emits the 16 sub-block modes via the {@link VP8Tables#BMODE_TREE} tree at the
+     * context-dependent {@link VP8Tables#KF_BMODE_PROB} probabilities. Updates
+     * {@code s.intraT}/{@code s.intraL} so subsequent MBs see the correct neighbour modes.
      */
-    private static void reconstructMb(
-        @NotNull State s, @NotNull Macroblock mb,
-        short @NotNull [] predY, short @NotNull [] predU, short @NotNull [] predV,
-        short @NotNull [] y2Coef,
-        short @NotNull [] @NotNull [] yAc,
-        short @NotNull [] @NotNull [] uCoef, short @NotNull [] @NotNull [] vCoef,
-        int mbX, int mbY
-    ) {
-        // Inverse-WHT to get the 16 reconstructed DC values (still quantized).
-        short[] dq = new short[16];
-        dq[0] = (short) (y2Coef[0] * s.y2Dc);
-        for (int i = 1; i < 16; i++) dq[i] = (short) (y2Coef[i] * s.y2Ac);
-        short[] dcValues = new short[16];
-        DCT.inverseWHT(dq, dcValues);
+    private static void emitBPredModes(@NotNull State s, @NotNull BooleanEncoder h, int mbX, int @NotNull [] modes) {
+        int[][] subModes = new int[4][4];
+        for (int by = 0; by < 4; by++)
+            for (int bx = 0; bx < 4; bx++)
+                subModes[by][bx] = modes[by * 4 + bx];
 
-        // Reconstruct luma: for each 4x4 block, dequant AC, fold in the corresponding DC.
         for (int by = 0; by < 4; by++) {
             for (int bx = 0; bx < 4; bx++) {
-                short[] coef = yAc[by * 4 + bx].clone();
-                coef[0] = dcValues[by * 4 + bx];       // DC from WHT
-                for (int i = 1; i < 16; i++) coef[i] = (short) (coef[i] * s.y1Ac);
-                short[] residual = new short[16];
-                DCT.inverseDCT(coef, residual);
-                for (int y = 0; y < 4; y++)
-                    for (int x = 0; x < 4; x++) {
-                        int mbIdx = (by * 4 + y) * 16 + bx * 4 + x;
-                        int reconIdx = (mbY * 16 + by * 4 + y) * s.lumaStride
-                            + mbX * 16 + bx * 4 + x;
-                        s.reconY[reconIdx] = (short) clamp(predY[mbIdx] + residual[y * 4 + x]);
-                    }
+                int aboveMode = by > 0 ? subModes[by - 1][bx] : s.intraT[mbX * 4 + bx];
+                int leftMode = bx > 0 ? subModes[by][bx - 1] : s.intraL[by];
+                int[] probs = VP8Tables.KF_BMODE_PROB[aboveMode][leftMode];
+                emitBMode(h, subModes[by][bx], probs);
             }
         }
 
-        // Reconstruct chroma similarly.
-        reconstructChroma(s.reconU, s.chromaStride, mbX, mbY, predU, uCoef, s.uvDc, s.uvAc);
-        reconstructChroma(s.reconV, s.chromaStride, mbX, mbY, predV, vCoef, s.uvDc, s.uvAc);
+        // Update neighbour-mode context for future MBs.
+        for (int bx = 0; bx < 4; bx++) s.intraT[mbX * 4 + bx] = subModes[3][bx];
+        for (int by = 0; by < 4; by++) s.intraL[by] = subModes[by][3];
+    }
+
+    /**
+     * Walks {@link VP8Tables#BMODE_TREE} to the {@code mode} leaf, emitting one bit per
+     * internal node at the corresponding probability. Inverse of
+     * {@link BooleanDecoder#decodeTree}.
+     */
+    private static void emitBMode(@NotNull BooleanEncoder h, int mode, int @NotNull [] probs) {
+        int[] tree = VP8Tables.BMODE_TREE;
+        int node = 0;
+        // Trees can have at most ~9 internal-node hops for the bmode tree.
+        int[] pathBranches = new int[9];
+        int[] pathNodes = new int[9];
+        int depth = findTreePath(tree, 0, -mode, pathBranches, pathNodes, 0);
+        for (int i = 0; i < depth; i++)
+            h.encodeBit(probs[pathNodes[i] >> 1], pathBranches[i]);
+    }
+
+    /** Depth-first walks {@code tree} looking for {@code targetLeaf}, recording the branch
+     *  bits taken to reach it. Returns the depth on success, 0 on failure. */
+    private static int findTreePath(int[] tree, int node, int targetLeaf,
+                                    int[] branches, int[] nodes, int depth) {
+        for (int branch = 0; branch < 2; branch++) {
+            int next = tree[node + branch];
+            branches[depth] = branch;
+            nodes[depth] = node;
+            if (next <= 0) {
+                if (next == targetLeaf) return depth + 1;
+            } else {
+                int d = findTreePath(tree, next, targetLeaf, branches, nodes, depth + 1);
+                if (d > 0) return d;
+            }
+        }
+        return 0;
     }
 
     /**
