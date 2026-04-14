@@ -18,14 +18,19 @@ final class IntraPrediction {
     /** Per-sub-block prediction mode - each 4x4 block has its own mode. */
     static final int B_PRED = 4;
 
-    /** 4x4 sub-block prediction modes. */
+    /**
+     * 4x4 sub-block prediction modes. Numerical values match libwebp's enum in
+     * {@code src/dec/common_dec.h} so {@link VP8Tables#KF_BMODE_PROB} (which uses
+     * libwebp's ordering) and {@link VP8Tables#BMODE_TREE} (whose leaves are
+     * {@code -mode} per libwebp's positional layout) are consistent.
+     */
     static final int B_DC_PRED = 0;
     static final int B_TM_PRED = 1;
     static final int B_VE_PRED = 2;
     static final int B_HE_PRED = 3;
-    static final int B_LD_PRED = 4;
-    static final int B_RD_PRED = 5;
-    static final int B_VR_PRED = 6;
+    static final int B_RD_PRED = 4;
+    static final int B_VR_PRED = 5;
+    static final int B_LD_PRED = 6;
     static final int B_VL_PRED = 7;
     static final int B_HD_PRED = 8;
     static final int B_HU_PRED = 9;
@@ -57,29 +62,41 @@ final class IntraPrediction {
         short aboveLeft,
         int mode
     ) {
+        // Materialize the neighbour pixels with libwebp's default fills so the per-mode
+        // formulas stay simple and bit-compatible: 127 for missing top, 129 for missing
+        // left, 128 for missing above-left. Matches libwebp's dsp/dec.c predictors,
+        // which rely on the surrounding buffer being pre-seeded with those values.
+        short[] top = above;
+        if (top == null) {
+            top = new short[8];
+            java.util.Arrays.fill(top, (short) 127);
+        }
+        short[] lt = left;
+        if (lt == null) {
+            lt = new short[4];
+            java.util.Arrays.fill(lt, (short) 129);
+        }
+        final int P = aboveLeft;
+        final int A = top[0], B = top[1], C = top[2], D = top[3];
+        final int E = top[4], F = top[5], G = top[6], H = top[7];
+        final int I = lt[0], J = lt[1], K = lt[2], L = lt[3];
+
         switch (mode) {
             case B_DC_PRED -> {
-                int sum = 0;
-                int count = 0;
-                if (above != null) { for (int i = 0; i < 4; i++) sum += above[i]; count += 4; }
-                if (left != null) { for (short v : left) sum += v; count += 4; }
-                short dc = count > 0 ? (short) ((sum + count / 2) / count) : (short) 128;
+                int sum = 4 + A + B + C + D + I + J + K + L;
+                short dc = (short) (sum >> 3);
                 java.util.Arrays.fill(predicted, dc);
             }
             case B_TM_PRED -> {
                 for (int y = 0; y < 4; y++)
-                    for (int x = 0; x < 4; x++) {
-                        int a = above != null ? above[x] : 127;
-                        int l = left != null ? left[y] : 129;
-                        predicted[y * 4 + x] = (short) clamp(a + l - aboveLeft);
-                    }
+                    for (int x = 0; x < 4; x++)
+                        predicted[y * 4 + x] = (short) clamp(top[x] + lt[y] - P);
             }
             case B_VE_PRED -> {
-                if (above == null) { java.util.Arrays.fill(predicted, (short) 127); return; }
-                short c0 = avg3(aboveLeft, above[0], above[1]);
-                short c1 = avg3(above[0], above[1], above[2]);
-                short c2 = avg3(above[1], above[2], above[3]);
-                short c3 = avg3(above[2], above[3], above[4]);
+                short c0 = avg3((short) P, (short) A, (short) B);
+                short c1 = avg3((short) A, (short) B, (short) C);
+                short c2 = avg3((short) B, (short) C, (short) D);
+                short c3 = avg3((short) C, (short) D, (short) E);
                 for (int y = 0; y < 4; y++) {
                     predicted[y * 4] = c0;
                     predicted[y * 4 + 1] = c1;
@@ -88,11 +105,10 @@ final class IntraPrediction {
                 }
             }
             case B_HE_PRED -> {
-                if (left == null) { java.util.Arrays.fill(predicted, (short) 129); return; }
-                short r0 = avg3(aboveLeft, left[0], left[1]);
-                short r1 = avg3(left[0], left[1], left[2]);
-                short r2 = avg3(left[1], left[2], left[3]);
-                short r3 = avg3(left[2], left[3], left[3]);
+                short r0 = avg3((short) P, (short) I, (short) J);
+                short r1 = avg3((short) I, (short) J, (short) K);
+                short r2 = avg3((short) J, (short) K, (short) L);
+                short r3 = avg3((short) K, (short) L, (short) L);
                 for (int x = 0; x < 4; x++) {
                     predicted[x] = r0;
                     predicted[4 + x] = r1;
@@ -101,87 +117,66 @@ final class IntraPrediction {
                 }
             }
             case B_LD_PRED -> {
-                if (above == null) { java.util.Arrays.fill(predicted, (short) 128); return; }
-                predicted[0] = avg3(above[0], above[1], above[2]);
-                predicted[1] = predicted[4] = avg3(above[1], above[2], above[3]);
-                predicted[2] = predicted[5] = predicted[8] = avg3(above[2], above[3], above[4]);
-                predicted[3] = predicted[6] = predicted[9] = predicted[12] = avg3(above[3], above[4], above[5]);
-                predicted[7] = predicted[10] = predicted[13] = avg3(above[4], above[5], above[6]);
-                predicted[11] = predicted[14] = avg3(above[5], above[6], above[7]);
-                predicted[15] = avg3(above[6], above[7], above[7]);
+                predicted[0] = avg3((short) A, (short) B, (short) C);
+                predicted[1] = predicted[4] = avg3((short) B, (short) C, (short) D);
+                predicted[2] = predicted[5] = predicted[8] = avg3((short) C, (short) D, (short) E);
+                predicted[3] = predicted[6] = predicted[9] = predicted[12] = avg3((short) D, (short) E, (short) F);
+                predicted[7] = predicted[10] = predicted[13] = avg3((short) E, (short) F, (short) G);
+                predicted[11] = predicted[14] = avg3((short) F, (short) G, (short) H);
+                predicted[15] = avg3((short) G, (short) H, (short) H);
             }
             case B_RD_PRED -> {
-                int P = aboveLeft;
-                int A = above != null ? above[0] : 128, B = above != null ? above[1] : 128;
-                int C = above != null ? above[2] : 128, D = above != null ? above[3] : 128;
-                int I = left != null ? left[0] : 128, J = left != null ? left[1] : 128;
-                int K = left != null ? left[2] : 128, L = left != null ? left[3] : 128;
-                predicted[12] = avg3(J, K, L);
-                predicted[8] = predicted[13] = avg3(I, J, K);
-                predicted[4] = predicted[9] = predicted[14] = avg3(P, I, J);
-                predicted[0] = predicted[5] = predicted[10] = predicted[15] = avg3(I, P, A);
-                predicted[1] = predicted[6] = predicted[11] = avg3(P, A, B);
-                predicted[2] = predicted[7] = avg3(A, B, C);
-                predicted[3] = avg3(B, C, D);
+                predicted[12] = avg3((short) J, (short) K, (short) L);
+                predicted[8] = predicted[13] = avg3((short) I, (short) J, (short) K);
+                predicted[4] = predicted[9] = predicted[14] = avg3((short) P, (short) I, (short) J);
+                predicted[0] = predicted[5] = predicted[10] = predicted[15] = avg3((short) I, (short) P, (short) A);
+                predicted[1] = predicted[6] = predicted[11] = avg3((short) P, (short) A, (short) B);
+                predicted[2] = predicted[7] = avg3((short) A, (short) B, (short) C);
+                predicted[3] = avg3((short) B, (short) C, (short) D);
             }
             case B_VR_PRED -> {
-                int P = aboveLeft;
-                int A = above != null ? above[0] : 128, B = above != null ? above[1] : 128;
-                int C = above != null ? above[2] : 128, D = above != null ? above[3] : 128;
-                int I = left != null ? left[0] : 128, J = left != null ? left[1] : 128;
-                int K = left != null ? left[2] : 128;
-                predicted[12] = avg3(K, J, I);
-                predicted[8] = avg3(J, I, P);
-                predicted[4] = predicted[13] = avg3(I, P, A);
-                predicted[0] = predicted[9] = avg2(P, A);
-                predicted[5] = predicted[14] = avg3(P, A, B);
-                predicted[1] = predicted[10] = avg2(A, B);
-                predicted[6] = predicted[15] = avg3(A, B, C);
-                predicted[2] = predicted[11] = avg2(B, C);
-                predicted[7] = avg3(B, C, D);
-                predicted[3] = avg2(C, D);
+                predicted[12] = avg3((short) K, (short) J, (short) I);
+                predicted[8] = avg3((short) J, (short) I, (short) P);
+                predicted[4] = predicted[13] = avg3((short) I, (short) P, (short) A);
+                predicted[0] = predicted[9] = avg2((short) P, (short) A);
+                predicted[5] = predicted[14] = avg3((short) P, (short) A, (short) B);
+                predicted[1] = predicted[10] = avg2((short) A, (short) B);
+                predicted[6] = predicted[15] = avg3((short) A, (short) B, (short) C);
+                predicted[2] = predicted[11] = avg2((short) B, (short) C);
+                predicted[7] = avg3((short) B, (short) C, (short) D);
+                predicted[3] = avg2((short) C, (short) D);
             }
             case B_VL_PRED -> {
-                if (above == null) { java.util.Arrays.fill(predicted, (short) 128); return; }
-                int A = above[0], B = above[1], C = above[2], D = above[3];
-                int E = above[4], F = above[5], G = above[6];
-                predicted[0] = avg2(A, B);
-                predicted[4] = avg3(A, B, C);
-                predicted[1] = predicted[8] = avg2(B, C);
-                predicted[5] = predicted[12] = avg3(B, C, D);
-                predicted[2] = predicted[9] = avg2(C, D);
-                predicted[6] = predicted[13] = avg3(C, D, E);
-                predicted[3] = predicted[10] = avg2(D, E);
-                predicted[7] = predicted[14] = avg3(D, E, F);
-                predicted[11] = avg2(E, F);
-                predicted[15] = avg3(E, F, G);
+                predicted[0] = avg2((short) A, (short) B);
+                predicted[4] = avg3((short) A, (short) B, (short) C);
+                predicted[1] = predicted[8] = avg2((short) B, (short) C);
+                predicted[5] = predicted[12] = avg3((short) B, (short) C, (short) D);
+                predicted[2] = predicted[9] = avg2((short) C, (short) D);
+                predicted[6] = predicted[13] = avg3((short) C, (short) D, (short) E);
+                predicted[3] = predicted[10] = avg2((short) D, (short) E);
+                predicted[7] = predicted[14] = avg3((short) D, (short) E, (short) F);
+                predicted[11] = avg2((short) E, (short) F);
+                predicted[15] = avg3((short) E, (short) F, (short) G);
             }
             case B_HD_PRED -> {
-                int P = aboveLeft;
-                int A = above != null ? above[0] : 128, B = above != null ? above[1] : 128;
-                int C = above != null ? above[2] : 128;
-                int I = left != null ? left[0] : 128, J = left != null ? left[1] : 128;
-                int K = left != null ? left[2] : 128, L = left != null ? left[3] : 128;
-                predicted[12] = avg2(L, K);
-                predicted[13] = avg3(L, K, J);
-                predicted[8] = predicted[14] = avg2(K, J);
-                predicted[9] = predicted[15] = avg3(K, J, I);
-                predicted[4] = predicted[10] = avg2(J, I);
-                predicted[5] = predicted[11] = avg3(J, I, P);
-                predicted[0] = predicted[6] = avg2(I, P);
-                predicted[1] = predicted[7] = avg3(I, P, A);
-                predicted[2] = avg3(P, A, B);
-                predicted[3] = avg3(A, B, C);
+                predicted[12] = avg2((short) L, (short) K);
+                predicted[13] = avg3((short) L, (short) K, (short) J);
+                predicted[8] = predicted[14] = avg2((short) K, (short) J);
+                predicted[9] = predicted[15] = avg3((short) K, (short) J, (short) I);
+                predicted[4] = predicted[10] = avg2((short) J, (short) I);
+                predicted[5] = predicted[11] = avg3((short) J, (short) I, (short) P);
+                predicted[0] = predicted[6] = avg2((short) I, (short) P);
+                predicted[1] = predicted[7] = avg3((short) I, (short) P, (short) A);
+                predicted[2] = avg3((short) P, (short) A, (short) B);
+                predicted[3] = avg3((short) A, (short) B, (short) C);
             }
             case B_HU_PRED -> {
-                if (left == null) { java.util.Arrays.fill(predicted, (short) 128); return; }
-                int I = left[0], J = left[1], K = left[2], L = left[3];
-                predicted[0] = avg2(I, J);
-                predicted[1] = avg3(I, J, K);
-                predicted[2] = predicted[4] = avg2(J, K);
-                predicted[3] = predicted[5] = avg3(J, K, L);
-                predicted[6] = predicted[8] = avg2(K, L);
-                predicted[7] = predicted[9] = avg3(K, L, L);
+                predicted[0] = avg2((short) I, (short) J);
+                predicted[1] = avg3((short) I, (short) J, (short) K);
+                predicted[2] = predicted[4] = avg2((short) J, (short) K);
+                predicted[3] = predicted[5] = avg3((short) J, (short) K, (short) L);
+                predicted[6] = predicted[8] = avg2((short) K, (short) L);
+                predicted[7] = predicted[9] = avg3((short) K, (short) L, (short) L);
                 predicted[10] = predicted[11] = predicted[12] = predicted[13] =
                     predicted[14] = predicted[15] = (short) L;
             }
