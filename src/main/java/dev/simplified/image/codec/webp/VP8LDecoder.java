@@ -78,18 +78,36 @@ final class VP8LDecoder {
                 throw new ImageDecodeException("Invalid color cache bits: %d", colorCacheBits);
         }
 
-        // Read Huffman codes
-        int numDistanceCodes = 120; // VP8L 2D distance codes
+        // Meta-prefix flag. VP8L places this between color-cache-info and the entropy
+        // header for spatially-coded images. The encoder currently never emits a meta
+        // prefix image, so the flag is always 0 and we reject non-zero values here.
+        if (reader.readBit() == 1)
+            throw new ImageDecodeException("VP8L meta-prefix images are not supported");
+
+        // Read Huffman codes. Distance alphabet is 40 symbols per VP8L spec - each
+        // Huffman symbol expands through base+extra-bits into a plane code, which is
+        // then mapped to a linear pixel distance during LZ77 decoding.
+        int numDistanceCodes = 40;
         HuffmanTree[] trees = readHuffmanCodes(reader, colorCacheBits, numDistanceCodes);
 
-        // Decode pixels
-        int[] pixels = new int[effectiveWidth * height];
+        // Decode pixels. The buffer is oversized to the full-image dimensions when any
+        // sub-bit-packed ColorIndexing transform will expand pixels in place from the
+        // packed width up to the real width during the inverse pass.
+        int packedSize = effectiveWidth * height;
+        int fullSize = width * height;
+        int[] pixels = new int[Math.max(packedSize, fullSize)];
         ColorCache cache = new ColorCache(colorCacheBits);
         decodePixels(reader, trees, pixels, effectiveWidth, height, cache);
 
         // Apply inverse transforms in reverse order
         for (int i = transforms.size() - 1; i >= 0; i--)
             transforms.get(i).inverseTransform(pixels, width, height);
+
+        if (pixels.length != fullSize) {
+            int[] trimmed = new int[fullSize];
+            System.arraycopy(pixels, 0, trimmed, 0, fullSize);
+            pixels = trimmed;
+        }
 
         return PixelBuffer.of(pixels, width, height);
     }
@@ -106,7 +124,7 @@ final class VP8LDecoder {
                 throw new ImageDecodeException("Invalid color cache bits in sub-image");
         }
 
-        HuffmanTree[] trees = readHuffmanCodes(reader, colorCacheBits, 120);
+        HuffmanTree[] trees = readHuffmanCodes(reader, colorCacheBits, 40);
         int[] pixels = new int[width * height];
         ColorCache cache = new ColorCache(colorCacheBits);
         decodePixels(reader, trees, pixels, width, height, cache);
@@ -159,65 +177,68 @@ final class VP8LDecoder {
 
     private static @NotNull HuffmanTree @NotNull [] readHuffmanCodes(@NotNull BitReader reader, int colorCacheBits, int numDistanceCodes) {
         int numGreenCodes = NUM_LITERAL_CODES + NUM_LENGTH_CODES + (colorCacheBits > 0 ? (1 << colorCacheBits) : 0);
-
-        // Check for simple code (1 or 2 symbols)
-        if (reader.readBit() == 1) {
-            // Simple code length code
-            return readSimpleHuffmanCodes(reader, numGreenCodes, numDistanceCodes);
-        }
-
-        // Normal code length codes
-        HuffmanTree[] trees = new HuffmanTree[NUM_CODE_GROUPS];
         int[] alphabetSizes = {numGreenCodes, 256, 256, 256, numDistanceCodes};
 
-        // Read code length code
+        // VP8L emits five independent prefix-code declarations (G, R, B, A, distance).
+        // Each one starts with an is_simple bit; simple mode is a 1- or 2-symbol shortcut
+        // while normal mode carries a full CLC header plus per-symbol code lengths.
+        HuffmanTree[] trees = new HuffmanTree[NUM_CODE_GROUPS];
+        for (int g = 0; g < NUM_CODE_GROUPS; g++)
+            trees[g] = readSinglePrefixCode(reader, alphabetSizes[g]);
+
+        return trees;
+    }
+
+    private static @NotNull HuffmanTree readSinglePrefixCode(@NotNull BitReader reader, int alphabetSize) {
+        if (reader.readBit() == 1)
+            return readSimplePrefixCode(reader);
+
+        // Normal mode: CLC header followed by CLC-coded per-symbol lengths.
         int numCodeLengthCodes = reader.readBits(4) + 4;
         int[] codeLengthCodeLengths = new int[CODE_LENGTH_CODES];
-
         for (int i = 0; i < numCodeLengthCodes; i++)
             codeLengthCodeLengths[CODE_LENGTH_ORDER[i]] = reader.readBits(3);
 
         HuffmanTree codeLengthTree = HuffmanTree.fromCodeLengths(codeLengthCodeLengths);
 
-        // Read each alphabet's code lengths
-        for (int g = 0; g < NUM_CODE_GROUPS; g++) {
-            int[] codeLengths = readCodeLengths(reader, codeLengthTree, alphabetSizes[g]);
-            trees[g] = HuffmanTree.fromCodeLengths(codeLengths);
+        // max_symbol: when bit=0, max_symbol = alphabetSize; otherwise read explicit value.
+        int maxSymbol = alphabetSize;
+        if (reader.readBit() == 1) {
+            int lengthNbits = 2 + 2 * reader.readBits(3);
+            maxSymbol = 2 + reader.readBits(lengthNbits);
+            if (maxSymbol > alphabetSize)
+                throw new ImageDecodeException("VP8L max_symbol %d exceeds alphabet size %d", maxSymbol, alphabetSize);
         }
 
-        return trees;
+        int[] codeLengths = readCodeLengths(reader, codeLengthTree, alphabetSize, maxSymbol);
+        return HuffmanTree.fromCodeLengths(codeLengths);
     }
 
-    private static @NotNull HuffmanTree @NotNull [] readSimpleHuffmanCodes(@NotNull BitReader reader, int numGreenCodes, int numDistanceCodes) {
+    private static @NotNull HuffmanTree readSimplePrefixCode(@NotNull BitReader reader) {
         int numSymbols = reader.readBit() + 1;
         int firstSymbolBits = reader.readBit() == 0 ? 1 : 8;
         int symbol0 = reader.readBits(firstSymbolBits);
 
-        HuffmanTree[] trees = new HuffmanTree[NUM_CODE_GROUPS];
+        if (numSymbols == 1)
+            return HuffmanTree.singleSymbol(symbol0);
 
-        if (numSymbols == 1) {
-            trees[0] = HuffmanTree.singleSymbol(symbol0);
-            for (int i = 1; i < NUM_CODE_GROUPS; i++)
-                trees[i] = HuffmanTree.singleSymbol(0);
-        } else {
-            int symbol1 = reader.readBits(8);
-            int[] codeLengths = new int[Math.max(symbol0, symbol1) + 1];
-            codeLengths[symbol0] = 1;
-            codeLengths[symbol1] = 1;
-            trees[0] = HuffmanTree.fromCodeLengths(codeLengths);
-            for (int i = 1; i < NUM_CODE_GROUPS; i++)
-                trees[i] = HuffmanTree.singleSymbol(0);
-        }
-
-        return trees;
+        int symbol1 = reader.readBits(8);
+        int[] codeLengths = new int[Math.max(symbol0, symbol1) + 1];
+        codeLengths[symbol0] = 1;
+        codeLengths[symbol1] = 1;
+        return HuffmanTree.fromCodeLengths(codeLengths);
     }
 
-    private static int @NotNull [] readCodeLengths(@NotNull BitReader reader, @NotNull HuffmanTree codeLengthTree, int numSymbols) {
-        int[] codeLengths = new int[numSymbols];
+    private static int @NotNull [] readCodeLengths(@NotNull BitReader reader, @NotNull HuffmanTree codeLengthTree, int alphabetSize, int maxSymbol) {
+        int[] codeLengths = new int[alphabetSize];
         int prevCodeLen = 8;
         int i = 0;
+        int tokensRemaining = maxSymbol;
 
-        while (i < numSymbols) {
+        // Per VP8L spec, max_symbol is decremented per CLC token read (literal or RLE),
+        // not per output symbol. Loop exits when alphabet is filled or budget exhausted.
+        while (i < alphabetSize && tokensRemaining > 0) {
+            tokensRemaining--;
             int code = codeLengthTree.readSymbol(reader);
 
             if (code < 16) {
@@ -226,15 +247,21 @@ final class VP8LDecoder {
             } else if (code == 16) {
                 // Repeat previous length 3-6 times
                 int repeat = 3 + reader.readBits(2);
-                for (int j = 0; j < repeat && i < numSymbols; j++)
+                if (i + repeat > alphabetSize)
+                    throw new ImageDecodeException("VP8L RLE overflow reading code lengths");
+                for (int j = 0; j < repeat; j++)
                     codeLengths[i++] = prevCodeLen;
             } else if (code == 17) {
                 // Repeat zero 3-10 times
                 int repeat = 3 + reader.readBits(3);
+                if (i + repeat > alphabetSize)
+                    throw new ImageDecodeException("VP8L RLE overflow reading code lengths");
                 i += repeat;
             } else if (code == 18) {
                 // Repeat zero 11-138 times
                 int repeat = 11 + reader.readBits(7);
+                if (i + repeat > alphabetSize)
+                    throw new ImageDecodeException("VP8L RLE overflow reading code lengths");
                 i += repeat;
             }
         }

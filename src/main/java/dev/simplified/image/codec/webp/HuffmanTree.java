@@ -24,6 +24,12 @@ final class HuffmanTree {
     private int[] tree;
     private int treeSize;
 
+    // Degenerate "single symbol" tree: VP8L prefix codes with one used symbol consume
+    // zero bits per read and always emit the same value. Flagged explicitly because the
+    // normal flat-table lookup relies on len>0 to signal a valid entry.
+    private boolean degenerate;
+    private int degenerateSymbol;
+
     private HuffmanTree(int numSymbols) {
         this.numSymbols = numSymbols;
         this.table = new int[TABLE_SIZE];
@@ -43,20 +49,28 @@ final class HuffmanTree {
         int numSymbols = codeLengths.length;
         HuffmanTree tree = new HuffmanTree(numSymbols);
 
-        // Find max code length
+        // Find max code length and count non-zero entries
         int maxLen = 0;
-        for (int len : codeLengths)
+        int nonZero = 0;
+        int firstNonZero = 0;
+        for (int i = 0; i < codeLengths.length; i++) {
+            int len = codeLengths[i];
             if (len > maxLen) maxLen = len;
-
-        if (maxLen == 0) {
-            // All zeros - single symbol tree
-            for (int i = 0; i < numSymbols; i++) {
-                if (codeLengths[i] == 0) {
-                    // First symbol becomes the only symbol
-                    java.util.Arrays.fill(tree.table, i);
-                    return tree;
-                }
+            if (len > 0) {
+                if (nonZero == 0) firstNonZero = i;
+                nonZero++;
             }
+        }
+
+        if (maxLen == 0)
+            return tree; // empty tree (never decoded from)
+
+        // A tree with a single non-zero length describes a degenerate alphabet with
+        // exactly one reachable symbol. VP8L simple-mode prefix codes produce this shape
+        // and require zero bits per symbol. Mark as degenerate so readSymbol short-circuits.
+        if (nonZero == 1) {
+            tree.degenerate = true;
+            tree.degenerateSymbol = firstNonZero;
             return tree;
         }
 
@@ -105,7 +119,8 @@ final class HuffmanTree {
      */
     static @NotNull HuffmanTree singleSymbol(int symbol) {
         HuffmanTree tree = new HuffmanTree(symbol + 1);
-        java.util.Arrays.fill(tree.table, symbol);
+        tree.degenerate = true;
+        tree.degenerateSymbol = symbol;
         return tree;
     }
 
@@ -117,6 +132,8 @@ final class HuffmanTree {
      * @throws ImageDecodeException if the code is invalid
      */
     int readSymbol(@NotNull BitReader reader) {
+        if (degenerate) return degenerateSymbol;
+
         int bits = reader.peekBits(TABLE_BITS);
         int entry = table[bits];
         int len = entry >>> 16;
