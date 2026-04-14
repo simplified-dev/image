@@ -162,13 +162,32 @@ final class VP8Encoder {
         Macroblock mb = new Macroblock();
         mb.fromARGB(argb, mbX, mbY, width, height);
 
-        // 2. Build DC predictions (luma 16x16, chroma 8x8) from reconstructed neighbors.
+        // 2. Extract neighbors for intra prediction.
+        short[] yAbove = extractAbove(s.reconY, s.lumaStride, mbX * 16, mbY * 16, 16);
+        short[] yLeft  = extractLeft(s.reconY, s.lumaStride, mbX * 16, mbY * 16, 16);
+        short yAboveLeft = (mbX > 0 && mbY > 0)
+            ? s.reconY[(mbY * 16 - 1) * s.lumaStride + mbX * 16 - 1] : (short) 128;
+        short[] uAbove = extractAbove(s.reconU, s.chromaStride, mbX * 8, mbY * 8, 8);
+        short[] uLeft  = extractLeft(s.reconU, s.chromaStride, mbX * 8, mbY * 8, 8);
+        short[] vAbove = extractAbove(s.reconV, s.chromaStride, mbX * 8, mbY * 8, 8);
+        short[] vLeft  = extractLeft(s.reconV, s.chromaStride, mbX * 8, mbY * 8, 8);
+        short uvAboveLeft = (mbX > 0 && mbY > 0)
+            ? s.reconU[(mbY * 8 - 1) * s.chromaStride + mbX * 8 - 1] : (short) 128;
+        short vuAboveLeft = (mbX > 0 && mbY > 0)
+            ? s.reconV[(mbY * 8 - 1) * s.chromaStride + mbX * 8 - 1] : (short) 128;
+
+        // 3. Select best luma 16x16 mode by SSE against the source.
         short[] predY = new short[256];
+        int yMode = selectBest16x16Mode(mb.y, yAbove, yLeft, yAboveLeft, predY);
+
+        // 4. Select best chroma 8x8 mode (shared between U and V, joint SSE).
         short[] predU = new short[64];
         short[] predV = new short[64];
-        buildDcPrediction16x16(predY, s.reconY, s.lumaStride, mbX, mbY);
-        buildDcPrediction8x8(predU, s.reconU, s.chromaStride, mbX, mbY);
-        buildDcPrediction8x8(predV, s.reconV, s.chromaStride, mbX, mbY);
+        int uvMode = selectBestChromaMode(
+            mb.cb, uAbove, uLeft, uvAboveLeft,
+            mb.cr, vAbove, vLeft, vuAboveLeft,
+            predU, predV
+        );
 
         // 3. Forward-DCT each 4x4 Y sub-block. Collect DCs into a Y2 block, quantize ACs.
         short[] y2 = new short[16];          // 16 DC coefficients for Y2 WHT
@@ -187,12 +206,11 @@ final class VP8Encoder {
         forwardChroma(mb.cb, predU, uCoef, s.uvDc, s.uvAc);
         forwardChroma(mb.cr, predV, vCoef, s.uvDc, s.uvAc);
 
-        // 6. Emit the MB header in the first partition (i16x16 mode, no skip bit).
+        // 6. Emit the MB header in the first partition (16x16 mode, no skip bit).
         BooleanEncoder h = s.header;
         h.encodeBit(145, 1);       // !is_i4x4  -> 16x16 prediction
-        h.encodeBit(156, 0);       // ymode tree: DC_PRED
-        h.encodeBit(163, 0);
-        h.encodeBit(142, 0);       // uvmode tree: DC_PRED
+        emitYMode16x16(h, yMode);
+        emitUvMode(h, uvMode);
 
         // 7. Emit the residual tokens in the token partition, in libwebp's order:
         //    Y2 (type=1, first=0), 16 Y AC blocks (type=0, first=1), 4 U + 4 V (type=2, first=0).
@@ -200,47 +218,6 @@ final class VP8Encoder {
 
         // 8. Reconstruct the MB's samples for future neighbor prediction.
         reconstructMb(s, mb, predY, predU, predV, y2Coef, yAc, uCoef, vCoef, mbX, mbY);
-    }
-
-    /**
-     * 16x16 DC prediction: average of the row above + column to the left, or 128
-     * when neither is available. Matches {@link IntraPrediction#predict16x16} DC_PRED.
-     */
-    private static void buildDcPrediction16x16(
-        short @NotNull [] dst, short @NotNull [] recon, int stride, int mbX, int mbY
-    ) {
-        int sum = 0, count = 0;
-        if (mbY > 0) {
-            int rowOff = (mbY * 16 - 1) * stride + mbX * 16;
-            for (int x = 0; x < 16; x++) sum += recon[rowOff + x];
-            count += 16;
-        }
-        if (mbX > 0) {
-            int colOff = mbY * 16 * stride + mbX * 16 - 1;
-            for (int y = 0; y < 16; y++) sum += recon[colOff + y * stride];
-            count += 16;
-        }
-        short dc = count > 0 ? (short) ((sum + count / 2) / count) : (short) 128;
-        java.util.Arrays.fill(dst, dc);
-    }
-
-    /** 8x8 DC prediction for chroma. Same formula as 16x16 but over 8-pixel edges. */
-    private static void buildDcPrediction8x8(
-        short @NotNull [] dst, short @NotNull [] recon, int stride, int mbX, int mbY
-    ) {
-        int sum = 0, count = 0;
-        if (mbY > 0) {
-            int rowOff = (mbY * 8 - 1) * stride + mbX * 8;
-            for (int x = 0; x < 8; x++) sum += recon[rowOff + x];
-            count += 8;
-        }
-        if (mbX > 0) {
-            int colOff = mbY * 8 * stride + mbX * 8 - 1;
-            for (int y = 0; y < 8; y++) sum += recon[colOff + y * stride];
-            count += 8;
-        }
-        short dc = count > 0 ? (short) ((sum + count / 2) / count) : (short) 128;
-        java.util.Arrays.fill(dst, dc);
     }
 
     /**
@@ -391,10 +368,136 @@ final class VP8Encoder {
         // Reconstruct chroma similarly.
         reconstructChroma(s.reconU, s.chromaStride, mbX, mbY, predU, uCoef, s.uvDc, s.uvAc);
         reconstructChroma(s.reconV, s.chromaStride, mbX, mbY, predV, vCoef, s.uvDc, s.uvAc);
+    }
 
-        // Make the (still populated) Macroblock object feel useful - avoids an unused-var warning.
-        mb.yMode = IntraPrediction.DC_PRED;
-        mb.uvMode = IntraPrediction.DC_PRED;
+    /**
+     * Picks the 16x16 luma mode whose prediction minimises SSE against the
+     * source samples. Fills {@code predOut} with that prediction.
+     *
+     * @return the selected {@link IntraPrediction} mode constant
+     */
+    private static int selectBest16x16Mode(
+        short @NotNull [] src, short[] above, short[] left, short aboveLeft,
+        short @NotNull [] predOut
+    ) {
+        int[] modes = { IntraPrediction.DC_PRED, IntraPrediction.V_PRED,
+                        IntraPrediction.H_PRED, IntraPrediction.TM_PRED };
+        int bestMode = IntraPrediction.DC_PRED;
+        long bestScore = Long.MAX_VALUE;
+        short[] candidate = new short[256];
+        for (int mode : modes) {
+            IntraPrediction.predict16x16(candidate, above, left, aboveLeft, mode);
+            long sse = sumSquaredError(src, candidate);
+            if (sse < bestScore) {
+                bestScore = sse;
+                bestMode = mode;
+                System.arraycopy(candidate, 0, predOut, 0, 256);
+            }
+        }
+        return bestMode;
+    }
+
+    /**
+     * Picks the shared chroma 8x8 mode that minimises combined SSE across
+     * both U and V. Fills {@code predU}/{@code predV} with that prediction.
+     */
+    private static int selectBestChromaMode(
+        short @NotNull [] srcU, short[] aboveU, short[] leftU, short aboveLeftU,
+        short @NotNull [] srcV, short[] aboveV, short[] leftV, short aboveLeftV,
+        short @NotNull [] predU, short @NotNull [] predV
+    ) {
+        int[] modes = { IntraPrediction.DC_PRED, IntraPrediction.V_PRED,
+                        IntraPrediction.H_PRED, IntraPrediction.TM_PRED };
+        int bestMode = IntraPrediction.DC_PRED;
+        long bestScore = Long.MAX_VALUE;
+        short[] candU = new short[64];
+        short[] candV = new short[64];
+        for (int mode : modes) {
+            IntraPrediction.predict8x8(candU, aboveU, leftU, aboveLeftU, mode);
+            IntraPrediction.predict8x8(candV, aboveV, leftV, aboveLeftV, mode);
+            long sse = sumSquaredError(srcU, candU) + sumSquaredError(srcV, candV);
+            if (sse < bestScore) {
+                bestScore = sse;
+                bestMode = mode;
+                System.arraycopy(candU, 0, predU, 0, 64);
+                System.arraycopy(candV, 0, predV, 0, 64);
+            }
+        }
+        return bestMode;
+    }
+
+    private static long sumSquaredError(short @NotNull [] a, short @NotNull [] b) {
+        long sum = 0;
+        for (int i = 0; i < a.length; i++) {
+            int d = a[i] - b[i];
+            sum += (long) d * d;
+        }
+        return sum;
+    }
+
+    /**
+     * Emits the 4-way 16x16 luma mode tree, matching libwebp's
+     * {@code PutI16Mode} (src/enc/tree_enc.c). Mode bits:
+     * <pre>
+     *   DC_PRED -> (0, 0) at probs (156, 163)
+     *   V_PRED  -> (0, 1) at probs (156, 163)
+     *   H_PRED  -> (1, 0) at probs (156, 128)
+     *   TM_PRED -> (1, 1) at probs (156, 128)
+     * </pre>
+     */
+    private static void emitYMode16x16(@NotNull BooleanEncoder e, int mode) {
+        boolean tmOrH = (mode == IntraPrediction.TM_PRED || mode == IntraPrediction.H_PRED);
+        e.encodeBit(156, tmOrH ? 1 : 0);
+        if (tmOrH)
+            e.encodeBit(128, mode == IntraPrediction.TM_PRED ? 1 : 0);
+        else
+            e.encodeBit(163, mode == IntraPrediction.V_PRED ? 1 : 0);
+    }
+
+    /**
+     * Emits the 4-way chroma mode tree, matching libwebp's {@code PutUVMode}.
+     * <pre>
+     *   DC_PRED -> (0)       at prob 142
+     *   V_PRED  -> (1, 0)    at probs (142, 114)
+     *   H_PRED  -> (1, 1, 0) at probs (142, 114, 183)
+     *   TM_PRED -> (1, 1, 1) at probs (142, 114, 183)
+     * </pre>
+     */
+    private static void emitUvMode(@NotNull BooleanEncoder e, int mode) {
+        if (mode == IntraPrediction.DC_PRED) {
+            e.encodeBit(142, 0);
+            return;
+        }
+        e.encodeBit(142, 1);
+        if (mode == IntraPrediction.V_PRED) {
+            e.encodeBit(114, 0);
+            return;
+        }
+        e.encodeBit(114, 1);
+        e.encodeBit(183, mode == IntraPrediction.TM_PRED ? 1 : 0);
+    }
+
+    /**
+     * Extracts the bottom row of the MB above (length {@code n}, or {@code null}
+     * when this is the top MB row).
+     */
+    private static short[] extractAbove(short @NotNull [] plane, int stride, int x0, int y0, int n) {
+        if (y0 == 0) return null;
+        short[] row = new short[n];
+        int off = (y0 - 1) * stride + x0;
+        System.arraycopy(plane, off, row, 0, n);
+        return row;
+    }
+
+    /**
+     * Extracts the right column of the MB to the left (length {@code n}, or
+     * {@code null} when this is the first MB in a row).
+     */
+    private static short[] extractLeft(short @NotNull [] plane, int stride, int x0, int y0, int n) {
+        if (x0 == 0) return null;
+        short[] col = new short[n];
+        for (int i = 0; i < n; i++) col[i] = plane[(y0 + i) * stride + x0 - 1];
+        return col;
     }
 
     private static void reconstructChroma(

@@ -506,6 +506,28 @@ public class WebPCodecTest {
             assertLibwebpDecodesPixel(buf, 1.0f, 0xFF, 0x00, 0x00, 16);
         }
 
+        @Test @DisplayName("horizontal stripes pick V_PRED when available")
+        void modeSelectionPicksVertical() throws Exception {
+            // Two stacked 16x16 MBs where the lower MB's best Y16 mode should be V_PRED:
+            // the top MB forces a strong vertical gradient that the lower MB can inherit.
+            PixelBuffer buf = PixelBuffer.create(16, 32);
+            for (int y = 0; y < 32; y++)
+                for (int x = 0; x < 16; x++) {
+                    int g = (y * 255) / 31;
+                    buf.setPixel(x, y, 0xFF000000 | (g << 16) | (g << 8) | g);
+                }
+            byte[] vp8Payload = VP8Encoder.encode(buf, 1.0f);
+            ConcurrentList<WebPChunk> chunks = Concurrent.newList();
+            chunks.add(RiffContainer.createChunk(WebPChunkType.VP8, vp8Payload));
+            byte[] riff = RiffContainer.write(chunks);
+
+            int[] decoded = decodeWithLibwebp(riff, 16, 32);
+            double psnr = computePsnr(buf, decoded, 16, 32);
+            if (psnr < 32.0)
+                throw new AssertionError(String.format(
+                    "vertical stripes PSNR = %.2f dB (expected >= 32 dB with V_PRED picked)", psnr));
+        }
+
         @Test @DisplayName("16x16 gradient reconstructs through libwebp with bounded error at high quality")
         void pixelFidelityGradient() throws Exception {
             PixelBuffer buf = PixelBuffer.create(16, 16);
@@ -519,24 +541,27 @@ public class WebPCodecTest {
             byte[] riff = RiffContainer.write(chunks);
 
             int[] decoded = decodeWithLibwebp(riff, 16, 16);
-            // Compute mean squared error against the source.
+            double psnr = computePsnr(buf, decoded, 16, 16);
+            if (psnr < 30.0)
+                throw new AssertionError(String.format(
+                    "gradient PSNR = %.2f dB (expected >= 30 dB at quality 1.0)", psnr));
+        }
+
+        private static double computePsnr(PixelBuffer src, int[] decoded, int w, int h) {
             long sumSq = 0;
             int n = 0;
-            for (int y = 0; y < 16; y++)
-                for (int x = 0; x < 16; x++) {
-                    int src = buf.getPixel(x, y);
-                    int dst = decoded[y * 16 + x];
+            for (int y = 0; y < h; y++)
+                for (int x = 0; x < w; x++) {
+                    int s = src.getPixel(x, y);
+                    int d = decoded[y * w + x];
                     for (int shift : new int[]{0, 8, 16}) {
-                        int diff = ((src >> shift) & 0xFF) - ((dst >> shift) & 0xFF);
+                        int diff = ((s >> shift) & 0xFF) - ((d >> shift) & 0xFF);
                         sumSq += (long) diff * diff;
                         n++;
                     }
                 }
             double mse = sumSq / (double) n;
-            double psnr = 10.0 * Math.log10(255.0 * 255.0 / mse);
-            if (psnr < 30.0)
-                throw new AssertionError(String.format(
-                    "gradient PSNR = %.2f dB (expected >= 30 dB at quality 1.0)", psnr));
+            return mse == 0 ? Double.POSITIVE_INFINITY : 10.0 * Math.log10(255.0 * 255.0 / mse);
         }
 
         private static void assertLibwebpDecodesPixel(
