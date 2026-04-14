@@ -14,6 +14,7 @@ import dev.simplified.image.codec.ImageWriteOptions;
 import dev.simplified.image.codec.ImageWriter;
 import dev.simplified.image.codec.webp.lossless.VP8LEncoder;
 import dev.simplified.image.codec.webp.lossy.VP8Encoder;
+import dev.simplified.image.codec.webp.lossy.VP8EncoderSession;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -37,6 +38,7 @@ public class WebPImageWriter implements ImageWriter {
         int loopCount = 0;
         boolean multithreaded = true;
         boolean alphaCompression = true;
+        boolean usePFrames = false;
 
         if (options instanceof WebPWriteOptions webpOptions) {
             lossless = webpOptions.isLossless();
@@ -44,13 +46,14 @@ public class WebPImageWriter implements ImageWriter {
             loopCount = webpOptions.getLoopCount();
             multithreaded = webpOptions.isMultithreaded();
             alphaCompression = webpOptions.isAlphaCompression();
+            usePFrames = webpOptions.isUsePFrames();
         }
 
         if (data instanceof AnimatedImageData animated) {
             if (loopCount == 0 && animated.getLoopCount() != 0)
                 loopCount = animated.getLoopCount();
 
-            return writeAnimated(animated, lossless, quality, loopCount, multithreaded);
+            return writeAnimated(animated, lossless, quality, loopCount, multithreaded, usePFrames);
         }
 
         return writeStatic(data, lossless, quality, alphaCompression);
@@ -90,17 +93,36 @@ public class WebPImageWriter implements ImageWriter {
         boolean lossless,
         float quality,
         int loopCount,
-        boolean multithreaded
+        boolean multithreaded,
+        boolean usePFrames
     ) {
         ConcurrentList<ImageFrame> frames = data.getFrames();
         boolean hasAlpha = data.hasAlpha();
         // Per-frame lossy + alpha: emit an ALPH sub-chunk before the VP8 sub-chunk.
         boolean perFrameAlpha = hasAlpha && !lossless;
 
-        // Encode all frames (optionally in parallel)
+        // Encode all frames. Lossy animated with usePFrames enabled runs sequentially so
+        // a shared VP8EncoderSession can carry reference-frame state across frames and
+        // emit P-frames for stationary macroblocks. Otherwise the existing per-frame
+        // independent path is used (optionally parallel).
         ConcurrentList<byte[]> encodedPayloads;
         ConcurrentList<byte[]> alphaPayloads;
-        if (multithreaded) {
+        if (!lossless && usePFrames) {
+            VP8EncoderSession vp8Session = new VP8EncoderSession();
+            encodedPayloads = Concurrent.newList();
+            for (int i = 0; i < frames.size(); i++) {
+                ImageFrame frame = frames.get(i);
+                boolean forceKey = (i == 0);
+                encodedPayloads.add(vp8Session.encode(frame.pixels(), quality, forceKey));
+            }
+            if (perFrameAlpha) {
+                alphaPayloads = frames.stream()
+                    .map(frame -> encodeAlphaPlane(frame.pixels(), true))
+                    .collect(Concurrent.toList());
+            } else {
+                alphaPayloads = null;
+            }
+        } else if (multithreaded) {
             var futures = frames.stream()
                 .map(frame -> CompletableFuture.supplyAsync(
                     () -> encodeFrame(frame, lossless, quality),

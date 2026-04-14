@@ -14,6 +14,7 @@ import dev.simplified.image.codec.ImageReadOptions;
 import dev.simplified.image.codec.ImageReader;
 import dev.simplified.image.codec.webp.lossless.VP8LDecoder;
 import dev.simplified.image.codec.webp.lossy.VP8Decoder;
+import dev.simplified.image.codec.webp.lossy.VP8DecoderSession;
 import dev.simplified.image.exception.ImageDecodeException;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -105,6 +106,10 @@ public class WebPImageReader implements ImageReader {
 
         ConcurrentList<ImageFrame> frames = Concurrent.newList();
 
+        // Shared VP8 decoder session for animated lossy frames - enables P-frame decoding
+        // where a frame references the prior frame's reconstruction.
+        VP8DecoderSession vp8Session = new VP8DecoderSession();
+
         for (WebPChunk chunk : chunks) {
             if (chunk.type() != WebPChunk.Type.ANMF) continue;
 
@@ -155,7 +160,7 @@ public class WebPImageReader implements ImageReader {
             if (vp8lSub != null) {
                 framePixels = VP8LDecoder.decode(vp8lSub);
             } else if (vp8Sub != null) {
-                framePixels = VP8Decoder.decode(vp8Sub);
+                framePixels = vp8Session.decode(vp8Sub);
                 if (alphSub != null)
                     mergeAlphaPlane(framePixels, alphSub);
             } else {

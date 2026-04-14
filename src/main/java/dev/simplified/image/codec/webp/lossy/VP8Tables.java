@@ -349,6 +349,145 @@ final class VP8Tables {
           {238,   1, 255, 128, 128, 128, 128, 128, 128, 128, 128}}}
     };
 
+    // ──────────────────────────────────────────────────────────────────────
+    // Inter-frame tables (RFC 6386 section 16 + libwebp src/dec/tree_dec.c)
+    // ──────────────────────────────────────────────────────────────────────
+
+    /**
+     * Inter-frame intra Y-mode tree (5 leaves: DC, V, H, TM, B_PRED). Each pair of
+     * entries is a tree node; positive entries index into the array and negative
+     * entries encode the leaf as the corresponding {@link IntraPrediction} constant.
+     * Matches libwebp's {@code kYModeTree} in {@code src/dec/tree_dec.c}.
+     */
+    static final int[] YMODE_TREE = {
+        -IntraPrediction.DC_PRED,  2,
+         4,                         6,
+        -IntraPrediction.V_PRED,   -IntraPrediction.H_PRED,
+        -IntraPrediction.TM_PRED,  -IntraPrediction.B_PRED
+    };
+
+    /**
+     * Inter-frame UV-mode tree (4 leaves: DC, V, H, TM). Same layout as the keyframe
+     * UV tree; the distinction is in {@link #UV_MODE_PROBA_INTER} vs the keyframe
+     * hardcoded probs in {@link VP8Decoder}.
+     */
+    static final int[] UV_MODE_TREE = {
+        -IntraPrediction.DC_PRED,  2,
+        -IntraPrediction.V_PRED,   4,
+        -IntraPrediction.H_PRED,  -IntraPrediction.TM_PRED
+    };
+
+    /**
+     * Default probabilities for the inter-frame Y-mode tree (one per internal node
+     * of {@link #YMODE_TREE}). RFC 6386 section 16.2 {@code ymode_prob}.
+     */
+    static final int[] YMODE_PROBA_INTER = { 112, 86, 140, 37 };
+
+    /**
+     * Default probabilities for the inter-frame UV-mode tree (one per internal node
+     * of {@link #UV_MODE_TREE}). RFC 6386 section 16.2 {@code uv_mode_prob}.
+     */
+    static final int[] UV_MODE_PROBA_INTER = { 162, 101, 204 };
+
+    /**
+     * Macroblock MV-reference tree (5 leaves: ZEROMV, NEARESTMV, NEARMV, NEWMV, SPLITMV).
+     * Matches libvpx's {@code vp8_mv_ref_tree} in {@code vp8/common/entropymode.c}.
+     * ZEROMV is the first leaf (one bit at {@code prob[0]}) - the common case for
+     * stationary MBs in P-frames.
+     */
+    static final int[] MV_REF_TREE = {
+        -0, 2,   // 0 = ZEROMV
+        -1, 4,   // 1 = NEARESTMV
+        -2, 6,   // 2 = NEARMV
+        -3, -4   // 3 = NEWMV, 4 = SPLITMV
+    };
+
+    /**
+     * Context-lookup table for the MV-reference tree probabilities. Indexed by
+     * {@code [cnt_value][column]} where {@code cnt_value} is the per-slot neighbour
+     * vote count (0-5) and {@code column} picks which tree-level probability to
+     * produce. Reproduces libvpx's {@code vp8_mode_contexts} table in
+     * {@code vp8/common/modecont.c}.
+     * <p>
+     * Derivation per libvpx's {@code vp8_find_near_mvs}: for each of the 3 neighbours
+     * (above, left, above-left with weights 2, 2, 1), classify the neighbour as intra,
+     * ZERO-MV, or distinct non-zero MV, incrementing the matching {@code cnt[]} slot.
+     * The final MV-ref probabilities are then
+     * {@code probs[i] = MODE_CONTEXTS[min(cnt[i], 5)][i]}.
+     */
+    static final int[][] MODE_CONTEXTS = {
+        {   7,   1,   1, 143 },
+        {  14,  18,  14, 107 },
+        { 135,  64,  57,  68 },
+        {  60,  56, 128,  65 },
+        { 159, 134, 128,  34 },
+        { 234, 188, 128,  28 },
+    };
+
+    /** Number of MV probabilities per component in the inter-frame header. */
+    static final int NUM_MV_PROBAS = 19;
+
+    /** Magnitude values 0..7 emitted via the small-MV tree (libvpx {@code mvnum_short}). */
+    static final int MV_SHORT_COUNT = 8;
+
+    /** Long-MV magnitude probability slots (libvpx {@code mvlong_width}). */
+    static final int MV_LONG_BITS = 10;
+
+    /** Probability index for the "is short (mag &lt; 8)" bit in a component's proba vector. */
+    static final int MVP_IS_SHORT = 0;
+
+    /** Probability index for the sign bit. */
+    static final int MVP_SIGN = 1;
+
+    /** First probability index of the small-MV tree (7 entries follow). */
+    static final int MVP_SHORT = 2;
+
+    /** First probability index of the long-MV magnitude bits (10 entries follow). */
+    static final int MVP_BITS = MVP_SHORT + MV_SHORT_COUNT - 1;
+
+    /**
+     * Small-MV magnitude tree (libvpx {@code vp8_small_mvtree}). 7 internal nodes,
+     * 8 leaves labelled 0..7 matching the magnitude values 0..7.
+     */
+    static final int[] MV_SMALL_TREE = {
+         2,  8,
+         4,  6,
+        -0, -1,
+        -2, -3,
+        10, 12,
+        -4, -5,
+        -6, -7
+    };
+
+    /**
+     * Default MV context probabilities per component (libvpx {@code vp8_default_mv_context}).
+     * Dimensions {@code [component][slot]}: 2 components (row=0, col=1) x 19 slots
+     * ({@link #NUM_MV_PROBAS}). Layout: slot {@link #MVP_IS_SHORT} = short flag,
+     * {@link #MVP_SIGN} = sign, slots {@code MVP_SHORT..MVP_SHORT+6} = small-tree probs,
+     * slots {@code MVP_BITS..MVP_BITS+9} = long-magnitude bit probs.
+     */
+    static final int[][] MV_DEFAULT_PROBA = {
+        // row
+        { 162, 128, 225, 146, 172, 147, 214,  39, 156,
+          128, 129, 132,  75, 145, 178, 206, 239, 254, 254 },
+        // col
+        { 164, 128, 204, 170, 119, 235, 140, 230, 228,
+          128, 130, 130,  74, 148, 180, 203, 236, 254, 254 }
+    };
+
+    /**
+     * Probabilities used for the "update this MV probability?" flag per MV-probability
+     * slot in the inter-frame header. Matches libwebp's {@code kMVUpdateProba} in
+     * {@code src/dec/tree_dec.c}. Dimensions: {@code [component][slot]} with 2 components
+     * (horizontal + vertical) and {@link #NUM_MV_PROBAS} slots per component.
+     */
+    static final int[][] MV_UPDATE_PROBA = {
+        { 237, 246, 253, 253, 254, 254, 254, 254, 254,
+          254, 254, 254, 254, 254, 250, 250, 252, 254, 254 },
+        { 231, 243, 245, 253, 254, 254, 254, 254, 254,
+          254, 254, 254, 254, 254, 251, 251, 254, 254, 254 }
+    };
+
     /**
      * Probabilities used for the "update this coefficient probability?" bit
      * in the per-frame token probability update section. RFC 6386 paragraph 13.

@@ -465,6 +465,78 @@ final class VP8Costs {
     }
 
     /**
+     * Cost in {@code 1/256} bits of walking {@code tree} from the root to leaf
+     * {@code -leaf}, emitting one bit per internal node at the matching
+     * {@code probs[node >> 1]}. Mirrors the bit accounting of the emission-side
+     * {@code emitTreeLeaf}. Used for scoring inter-mode-tree candidates without
+     * touching a {@link BooleanEncoder}.
+     *
+     * @param tree tree-array laid out like {@link VP8Tables#MV_REF_TREE}
+     * @param leaf non-negative leaf label whose cost is sought
+     * @param probs one probability per internal node (indexed by {@code node >> 1})
+     * @return bit cost in {@code 1/256} bits, or 0 when the leaf is unreachable
+     */
+    static int treeLeafBitCost(int @NotNull [] tree, int leaf, int @NotNull [] probs) {
+        return walkTreeCost(tree, 0, -leaf, probs);
+    }
+
+    private static int walkTreeCost(int[] tree, int node, int targetLeaf, int[] probs) {
+        for (int branch = 0; branch < 2; branch++) {
+            int next = tree[node + branch];
+            int step = bitCost(branch, probs[node >> 1]);
+            if (next <= 0) {
+                if (next == targetLeaf) return step;
+            } else {
+                int rest = walkTreeCost(tree, next, targetLeaf, probs);
+                if (rest >= 0) return step + rest;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * Cost in {@code 1/256} bits of emitting a single MV component in wire form.
+     * Mirrors the emission-side {@code emitMvComponent} exactly, walking the small-MV
+     * tree for {@code |v| &lt; 8} and the long-magnitude bit pattern otherwise, then a
+     * sign bit for non-zero values.
+     *
+     * @param v the component value in quarter-pel wire units
+     * @param probs the 19-element probability vector for this component
+     * @return bit cost in {@code 1/256} bits
+     */
+    static int mvComponentBitCost(int v, int @NotNull [] probs) {
+        int x = Math.abs(v);
+        int cost;
+        if (x < VP8Tables.MV_SHORT_COUNT) {
+            cost = bitCost(0, probs[VP8Tables.MVP_IS_SHORT]);
+            int[] smallProbs = new int[VP8Tables.MV_SHORT_COUNT - 1];
+            System.arraycopy(probs, VP8Tables.MVP_SHORT, smallProbs, 0, smallProbs.length);
+            cost += treeLeafBitCost(VP8Tables.MV_SMALL_TREE, x, smallProbs);
+            if (x == 0) return cost;
+        } else {
+            cost = bitCost(1, probs[VP8Tables.MVP_IS_SHORT]);
+            for (int i = 0; i < 3; i++)
+                cost += bitCost((x >> i) & 1, probs[VP8Tables.MVP_BITS + i]);
+            for (int i = VP8Tables.MV_LONG_BITS - 1; i > 3; i--)
+                cost += bitCost((x >> i) & 1, probs[VP8Tables.MVP_BITS + i]);
+            if ((x & 0xFFF0) != 0)
+                cost += bitCost((x >> 3) & 1, probs[VP8Tables.MVP_BITS + 3]);
+        }
+        cost += bitCost(v < 0 ? 1 : 0, probs[VP8Tables.MVP_SIGN]);
+        return cost;
+    }
+
+    /**
+     * Cost in {@code 1/256} bits of emitting the (row, col) pair of a NEWMV wire
+     * motion vector. Sum of the two component costs using the default per-component
+     * probability vectors in {@link VP8Tables#MV_DEFAULT_PROBA}.
+     */
+    static int mvWireBitCost(int wireRow, int wireCol) {
+        return mvComponentBitCost(wireRow, VP8Tables.MV_DEFAULT_PROBA[0])
+             + mvComponentBitCost(wireCol, VP8Tables.MV_DEFAULT_PROBA[1]);
+    }
+
+    /**
      * Estimates the bit cost (in {@code 1/256} bits) of token-coding a 4x4 coefficient block
      * that has already been quantized into zig-zag order. Line-for-line port of libwebp's
      * {@code GetResidualCost_C} ({@code src/enc/cost.c}).
