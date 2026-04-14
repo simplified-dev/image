@@ -1,4 +1,4 @@
-package dev.simplified.image.codec.webp;
+package dev.simplified.image.codec.webp.lossless;
 
 /**
  * A power-of-2 hash table of recently used ARGB pixel values for VP8L

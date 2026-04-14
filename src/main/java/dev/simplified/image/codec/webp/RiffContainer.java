@@ -13,7 +13,7 @@ import org.jetbrains.annotations.NotNull;
  * Each chunk is {@code [4-byte FourCC] [4-byte LE size] [payload] [padding]}.
  * Chunks are word-aligned (padded to even byte boundaries).
  */
-final class RiffContainer {
+public final class RiffContainer {
 
     private RiffContainer() { }
 
@@ -27,7 +27,7 @@ final class RiffContainer {
      * @return the parsed chunks
      * @throws ImageDecodeException if the RIFF/WEBP header is invalid
      */
-    static @NotNull ConcurrentList<WebPChunk> parse(byte @NotNull [] data) {
+    public static @NotNull ConcurrentList<WebPChunk> parse(byte @NotNull [] data) {
         if (data.length < 12)
             throw new ImageDecodeException("Data too short for RIFF header");
 
@@ -53,7 +53,7 @@ final class RiffContainer {
             if (payloadOffset + chunkSize > data.length)
                 break;
 
-            WebPChunkType type = WebPChunkType.of(fourCC);
+            WebPChunk.Type type = WebPChunk.Type.of(fourCC);
             chunks.add(new WebPChunk(type, fourCC, data, payloadOffset, chunkSize));
 
             // Advance past payload + word-alignment padding
@@ -70,7 +70,7 @@ final class RiffContainer {
      * @return the assembled WebP file bytes
      * @throws ImageEncodeException if assembly fails
      */
-    static byte @NotNull [] write(@NotNull ConcurrentList<WebPChunk> chunks) {
+    public static byte @NotNull [] write(@NotNull ConcurrentList<WebPChunk> chunks) {
         // Calculate total size
         int dataSize = 4; // "WEBP"
 
@@ -117,7 +117,7 @@ final class RiffContainer {
      * @param payload the chunk payload
      * @return a new chunk wrapping the payload
      */
-    static @NotNull WebPChunk createChunk(@NotNull WebPChunkType type, byte @NotNull [] payload) {
+    public static @NotNull WebPChunk createChunk(@NotNull WebPChunk.Type type, byte @NotNull [] payload) {
         return new WebPChunk(type, type.getFourCC(), payload, 0, payload.length);
     }
 

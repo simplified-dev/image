@@ -1,4 +1,4 @@
-package dev.simplified.image.codec.webp;
+package dev.simplified.image.codec.webp.lossless;
 
 import dev.simplified.image.pixel.PixelBuffer;
 import dev.simplified.image.exception.ImageDecodeException;
@@ -14,7 +14,7 @@ import java.util.List;
  * LZ77 backward references, color cache, and four reversible transforms
  * (predictor, color, subtract-green, color-indexing).
  */
-final class VP8LDecoder {
+public final class VP8LDecoder {
 
     /** Number of Huffman code groups in VP8L: green+length, red, blue, alpha, distance. */
     private static final int NUM_CODE_GROUPS = 5;
@@ -37,7 +37,7 @@ final class VP8LDecoder {
      * @return the decoded pixel buffer
      * @throws ImageDecodeException if decoding fails
      */
-    static @NotNull PixelBuffer decode(byte @NotNull [] data) {
+    public static @NotNull PixelBuffer decode(byte @NotNull [] data) {
         if (data.length < 5)
             throw new ImageDecodeException("VP8L data too short");
 

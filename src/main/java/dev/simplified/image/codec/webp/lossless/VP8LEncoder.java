@@ -1,4 +1,4 @@
-package dev.simplified.image.codec.webp;
+package dev.simplified.image.codec.webp.lossless;
 
 import dev.simplified.image.pixel.PixelBuffer;
 import org.jetbrains.annotations.NotNull;
@@ -23,7 +23,7 @@ import org.jetbrains.annotations.NotNull;
  * solid-colored regions like the lore tooltip background is essentially always) -
  * that's the root of the long-standing "webp contains errors" diagnostic.
  */
-final class VP8LEncoder {
+public final class VP8LEncoder {
 
     private static final int VP8L_SIGNATURE = 0x2F;
     private static final int VP8L_VERSION = 0;
@@ -56,7 +56,7 @@ final class VP8LEncoder {
      * @param pixels the ARGB source buffer
      * @return the encoded VP8L bitstream
      */
-    static byte @NotNull [] encode(@NotNull PixelBuffer pixels) {
+    public static byte @NotNull [] encode(@NotNull PixelBuffer pixels) {
         int width = pixels.width();
         int height = pixels.height();
         int[] pixelData = pixels.pixels();

@@ -1,4 +1,4 @@
-package dev.simplified.image.codec.webp;
+package dev.simplified.image.codec.webp.lossless;
 
 import org.jetbrains.annotations.NotNull;
 

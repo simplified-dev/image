@@ -12,6 +12,8 @@ import dev.simplified.image.pixel.PixelBuffer;
 import dev.simplified.image.data.StaticImageData;
 import dev.simplified.image.codec.ImageReadOptions;
 import dev.simplified.image.codec.ImageReader;
+import dev.simplified.image.codec.webp.lossless.VP8LDecoder;
+import dev.simplified.image.codec.webp.lossy.VP8Decoder;
 import dev.simplified.image.exception.ImageDecodeException;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -40,19 +42,19 @@ public class WebPImageReader implements ImageReader {
             throw new ImageDecodeException("WebP file contains no chunks");
 
         // Check for VP8X extended header
-        WebPChunk vp8xChunk = findChunk(chunks, WebPChunkType.VP8X);
+        WebPChunk vp8xChunk = findChunk(chunks, WebPChunk.Type.VP8X);
 
         if (vp8xChunk != null)
             return readExtended(chunks, vp8xChunk);
 
         // Simple lossy (VP8)
-        WebPChunk vp8Chunk = findChunk(chunks, WebPChunkType.VP8);
+        WebPChunk vp8Chunk = findChunk(chunks, WebPChunk.Type.VP8);
 
         if (vp8Chunk != null)
             return decodeVP8(vp8Chunk);
 
         // Simple lossless (VP8L)
-        WebPChunk vp8lChunk = findChunk(chunks, WebPChunkType.VP8L);
+        WebPChunk vp8lChunk = findChunk(chunks, WebPChunk.Type.VP8L);
 
         if (vp8lChunk != null)
             return decodeVP8L(vp8lChunk);
@@ -78,11 +80,11 @@ public class WebPImageReader implements ImageReader {
 
         if (!hasAnimation) {
             // Static extended image (may have alpha + VP8 or VP8L)
-            WebPChunk vp8l = findChunk(chunks, WebPChunkType.VP8L);
+            WebPChunk vp8l = findChunk(chunks, WebPChunk.Type.VP8L);
             if (vp8l != null) return decodeVP8L(vp8l);
 
-            WebPChunk vp8 = findChunk(chunks, WebPChunkType.VP8);
-            WebPChunk alph = hasAlpha ? findChunk(chunks, WebPChunkType.ALPH) : null;
+            WebPChunk vp8 = findChunk(chunks, WebPChunk.Type.VP8);
+            WebPChunk alph = hasAlpha ? findChunk(chunks, WebPChunk.Type.ALPH) : null;
 
             if (vp8 != null)
                 return decodeVP8WithAlpha(vp8, alph);
@@ -91,7 +93,7 @@ public class WebPImageReader implements ImageReader {
         }
 
         // Animated
-        WebPChunk animChunk = findChunk(chunks, WebPChunkType.ANIM);
+        WebPChunk animChunk = findChunk(chunks, WebPChunk.Type.ANIM);
         int backgroundColor = 0;
         int loopCount = 0;
 
@@ -104,7 +106,7 @@ public class WebPImageReader implements ImageReader {
         ConcurrentList<ImageFrame> frames = Concurrent.newList();
 
         for (WebPChunk chunk : chunks) {
-            if (chunk.type() != WebPChunkType.ANMF) continue;
+            if (chunk.type() != WebPChunk.Type.ANMF) continue;
 
             byte[] anmf = chunk.payload();
 
@@ -204,7 +206,7 @@ public class WebPImageReader implements ImageReader {
         return VP8Decoder.decode(bitstream);
     }
 
-    private static @Nullable WebPChunk findChunk(@NotNull ConcurrentList<WebPChunk> chunks, @NotNull WebPChunkType type) {
+    private static @Nullable WebPChunk findChunk(@NotNull ConcurrentList<WebPChunk> chunks, @NotNull WebPChunk.Type type) {
         return chunks.stream()
             .filter(chunk -> chunk.type() == type)
             .findFirst()

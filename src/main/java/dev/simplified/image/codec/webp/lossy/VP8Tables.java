@@ -1,4 +1,4 @@
-package dev.simplified.image.codec.webp;
+package dev.simplified.image.codec.webp.lossy;
 
 /**
  * Default probability tables used by VP8 keyframe encoding and decoding.

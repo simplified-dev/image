@@ -12,6 +12,8 @@ import dev.simplified.image.data.ImageFrame;
 import dev.simplified.image.pixel.PixelBuffer;
 import dev.simplified.image.codec.ImageWriteOptions;
 import dev.simplified.image.codec.ImageWriter;
+import dev.simplified.image.codec.webp.lossless.VP8LEncoder;
+import dev.simplified.image.codec.webp.lossy.VP8Encoder;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -62,7 +64,7 @@ public class WebPImageWriter implements ImageWriter {
             payload = VP8LEncoder.encode(pixels);
             // Simple lossless: just RIFF [ VP8L ]
             ConcurrentList<WebPChunk> chunks = Concurrent.newList();
-            chunks.add(RiffContainer.createChunk(WebPChunkType.VP8L, payload));
+            chunks.add(RiffContainer.createChunk(WebPChunk.Type.VP8L, payload));
             return RiffContainer.write(chunks);
         }
 
@@ -73,11 +75,11 @@ public class WebPImageWriter implements ImageWriter {
 
         if (hasAlpha) {
             // Extended: VP8X + ALPH + VP8
-            chunks.add(RiffContainer.createChunk(WebPChunkType.VP8X, buildVP8XPayload(pixels.width(), pixels.height(), false, true)));
-            chunks.add(RiffContainer.createChunk(WebPChunkType.ALPH, encodeAlphaPlane(pixels, alphaCompression)));
-            chunks.add(RiffContainer.createChunk(WebPChunkType.VP8, payload));
+            chunks.add(RiffContainer.createChunk(WebPChunk.Type.VP8X, buildVP8XPayload(pixels.width(), pixels.height(), false, true)));
+            chunks.add(RiffContainer.createChunk(WebPChunk.Type.ALPH, encodeAlphaPlane(pixels, alphaCompression)));
+            chunks.add(RiffContainer.createChunk(WebPChunk.Type.VP8, payload));
         } else {
-            chunks.add(RiffContainer.createChunk(WebPChunkType.VP8, payload));
+            chunks.add(RiffContainer.createChunk(WebPChunk.Type.VP8, payload));
         }
 
         return RiffContainer.write(chunks);
@@ -114,18 +116,18 @@ public class WebPImageWriter implements ImageWriter {
         ConcurrentList<WebPChunk> chunks = Concurrent.newList();
 
         // VP8X
-        chunks.add(RiffContainer.createChunk(WebPChunkType.VP8X,
+        chunks.add(RiffContainer.createChunk(WebPChunk.Type.VP8X,
             buildVP8XPayload(data.getWidth(), data.getHeight(), true, data.hasAlpha())));
 
         // ANIM
-        chunks.add(RiffContainer.createChunk(WebPChunkType.ANIM, buildAnimPayload(data.getBackgroundColor(), loopCount)));
+        chunks.add(RiffContainer.createChunk(WebPChunk.Type.ANIM, buildAnimPayload(data.getBackgroundColor(), loopCount)));
 
         // ANMF frames
-        WebPChunkType innerType = lossless ? WebPChunkType.VP8L : WebPChunkType.VP8;
+        WebPChunk.Type innerType = lossless ? WebPChunk.Type.VP8L : WebPChunk.Type.VP8;
         for (int i = 0; i < frames.size(); i++) {
             ImageFrame frame = frames.get(i);
             byte[] framePayload = encodedPayloads.get(i);
-            chunks.add(RiffContainer.createChunk(WebPChunkType.ANMF,
+            chunks.add(RiffContainer.createChunk(WebPChunk.Type.ANMF,
                 buildAnmfPayload(frame, framePayload, innerType)));
         }
 
@@ -184,7 +186,7 @@ public class WebPImageWriter implements ImageWriter {
     private static byte @NotNull [] buildAnmfPayload(
         @NotNull ImageFrame frame,
         byte @NotNull [] frameBitstream,
-        @NotNull WebPChunkType innerType
+        @NotNull WebPChunk.Type innerType
     ) {
         int innerPayloadLen = frameBitstream.length;
         int innerPad = innerPayloadLen & 1;

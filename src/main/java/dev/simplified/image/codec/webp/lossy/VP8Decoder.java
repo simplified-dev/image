@@ -1,4 +1,4 @@
-package dev.simplified.image.codec.webp;
+package dev.simplified.image.codec.webp.lossy;
 
 import dev.simplified.image.pixel.PixelBuffer;
 import dev.simplified.image.exception.ImageDecodeException;
@@ -12,7 +12,7 @@ import org.jetbrains.annotations.NotNull;
  * Supports both 16x16 prediction modes and B_PRED (per-sub-block 4x4
  * prediction with all 10 intra modes).
  */
-final class VP8Decoder {
+public final class VP8Decoder {
 
     // @formatter:off
 
@@ -190,7 +190,7 @@ final class VP8Decoder {
      * @return the decoded pixel buffer
      * @throws ImageDecodeException if decoding fails
      */
-    static @NotNull PixelBuffer decode(byte @NotNull [] data) {
+    public static @NotNull PixelBuffer decode(byte @NotNull [] data) {
         if (data.length < 10)
             throw new ImageDecodeException("VP8 data too short");
 
