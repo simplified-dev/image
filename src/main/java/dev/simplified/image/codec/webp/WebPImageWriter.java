@@ -93,9 +93,13 @@ public class WebPImageWriter implements ImageWriter {
         boolean multithreaded
     ) {
         ConcurrentList<ImageFrame> frames = data.getFrames();
+        boolean hasAlpha = data.hasAlpha();
+        // Per-frame lossy + alpha: emit an ALPH sub-chunk before the VP8 sub-chunk.
+        boolean perFrameAlpha = hasAlpha && !lossless;
 
         // Encode all frames (optionally in parallel)
         ConcurrentList<byte[]> encodedPayloads;
+        ConcurrentList<byte[]> alphaPayloads;
         if (multithreaded) {
             var futures = frames.stream()
                 .map(frame -> CompletableFuture.supplyAsync(
@@ -106,10 +110,30 @@ public class WebPImageWriter implements ImageWriter {
             encodedPayloads = futures.stream()
                 .map(CompletableFuture::join)
                 .collect(Concurrent.toList());
+            if (perFrameAlpha) {
+                var alphaFutures = frames.stream()
+                    .map(frame -> CompletableFuture.supplyAsync(
+                        () -> encodeAlphaPlane(frame.pixels(), true),
+                        java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()
+                    ))
+                    .collect(Concurrent.toList());
+                alphaPayloads = alphaFutures.stream()
+                    .map(CompletableFuture::join)
+                    .collect(Concurrent.toList());
+            } else {
+                alphaPayloads = null;
+            }
         } else {
             encodedPayloads = frames.stream()
                 .map(frame -> encodeFrame(frame, lossless, quality))
                 .collect(Concurrent.toList());
+            if (perFrameAlpha) {
+                alphaPayloads = frames.stream()
+                    .map(frame -> encodeAlphaPlane(frame.pixels(), true))
+                    .collect(Concurrent.toList());
+            } else {
+                alphaPayloads = null;
+            }
         }
 
         // Assemble RIFF
@@ -117,7 +141,7 @@ public class WebPImageWriter implements ImageWriter {
 
         // VP8X
         chunks.add(RiffContainer.createChunk(WebPChunk.Type.VP8X,
-            buildVP8XPayload(data.getWidth(), data.getHeight(), true, data.hasAlpha())));
+            buildVP8XPayload(data.getWidth(), data.getHeight(), true, hasAlpha)));
 
         // ANIM
         chunks.add(RiffContainer.createChunk(WebPChunk.Type.ANIM, buildAnimPayload(data.getBackgroundColor(), loopCount)));
@@ -127,8 +151,9 @@ public class WebPImageWriter implements ImageWriter {
         for (int i = 0; i < frames.size(); i++) {
             ImageFrame frame = frames.get(i);
             byte[] framePayload = encodedPayloads.get(i);
+            byte[] alphaPayload = alphaPayloads != null ? alphaPayloads.get(i) : null;
             chunks.add(RiffContainer.createChunk(WebPChunk.Type.ANMF,
-                buildAnmfPayload(frame, framePayload, innerType)));
+                buildAnmfPayload(frame, framePayload, innerType, alphaPayload)));
         }
 
         return RiffContainer.write(chunks);
@@ -176,21 +201,27 @@ public class WebPImageWriter implements ImageWriter {
     /**
      * Builds the payload of an ANMF (Animation Frame) chunk.
      * <p>
-     * Per the WebP Extended File Format spec, the 16-byte animation header is followed by
-     * <i>sub-chunks</i> (a VP8L/VP8 chunk, optionally preceded by ALPH) each with its own
-     * 8-byte FourCC + size header. Writing the raw encoded bitstream directly - without
-     * wrapping it in its own FourCC-prefixed sub-chunk - produces a file that libwebp will
-     * reject with {@code VP8_STATUS_BITSTREAM_ERROR}, which was the source of the "file
-     * contains errors" diagnostic.
+     * Per the WebP Extended File Format spec, the 16-byte animation header is followed
+     * by <i>sub-chunks</i> (an optional ALPH followed by exactly one VP8L or VP8) each
+     * with its own 8-byte FourCC + size header plus an optional pad byte to keep the
+     * total even-aligned. Writing the raw encoded bitstream directly - without wrapping
+     * it in its own FourCC-prefixed sub-chunk - produces a file that libwebp will
+     * reject with {@code VP8_STATUS_BITSTREAM_ERROR}.
+     *
+     * @param alphaPayload optional ALPH chunk payload (compressed alpha bytes); pass
+     *                     {@code null} for lossless or alpha-less frames
      */
     private static byte @NotNull [] buildAnmfPayload(
         @NotNull ImageFrame frame,
         byte @NotNull [] frameBitstream,
-        @NotNull WebPChunk.Type innerType
+        @NotNull WebPChunk.Type innerType,
+        byte @org.jetbrains.annotations.Nullable [] alphaPayload
     ) {
+        int alphaSubSize = alphaPayload != null ? 8 + alphaPayload.length + (alphaPayload.length & 1) : 0;
         int innerPayloadLen = frameBitstream.length;
         int innerPad = innerPayloadLen & 1;
-        byte[] payload = new byte[16 + 8 + innerPayloadLen + innerPad];
+        int innerSubSize = 8 + innerPayloadLen + innerPad;
+        byte[] payload = new byte[16 + alphaSubSize + innerSubSize];
 
         int x = frame.offsetX() / 2;
         int y = frame.offsetY() / 2;
@@ -219,19 +250,32 @@ public class WebPImageWriter implements ImageWriter {
         if (frame.blend() == FrameBlend.SOURCE) flags |= 0x02;
         payload[15] = (byte) flags;
 
-        // Inner sub-chunk header: 4-byte FourCC + 4-byte LE size + payload + optional pad.
-        byte[] fourCC = innerType.getFourCC().getBytes();
-        payload[16] = fourCC[0];
-        payload[17] = fourCC[1];
-        payload[18] = fourCC[2];
-        payload[19] = fourCC[3];
-        payload[20] = (byte) (innerPayloadLen & 0xFF);
-        payload[21] = (byte) ((innerPayloadLen >> 8) & 0xFF);
-        payload[22] = (byte) ((innerPayloadLen >> 16) & 0xFF);
-        payload[23] = (byte) ((innerPayloadLen >> 24) & 0xFF);
-        System.arraycopy(frameBitstream, 0, payload, 24, innerPayloadLen);
-        // innerPad byte at the end is already zero-initialized.
+        int offset = 16;
+        if (alphaPayload != null)
+            offset = writeSubChunk(payload, offset, "ALPH", alphaPayload);
+        writeSubChunk(payload, offset, innerType.getFourCC(), frameBitstream);
         return payload;
+    }
+
+    /**
+     * Writes a {@code FourCC + LE32 size + payload + optional pad} sub-chunk into
+     * {@code dst} starting at {@code offset}, returning the offset just past the
+     * sub-chunk (including the pad byte).
+     */
+    private static int writeSubChunk(byte @NotNull [] dst, int offset, @NotNull String fourCC, byte @NotNull [] body) {
+        byte[] fc = fourCC.getBytes();
+        dst[offset]     = fc[0];
+        dst[offset + 1] = fc[1];
+        dst[offset + 2] = fc[2];
+        dst[offset + 3] = fc[3];
+        int size = body.length;
+        dst[offset + 4] = (byte) (size & 0xFF);
+        dst[offset + 5] = (byte) ((size >> 8) & 0xFF);
+        dst[offset + 6] = (byte) ((size >> 16) & 0xFF);
+        dst[offset + 7] = (byte) ((size >> 24) & 0xFF);
+        System.arraycopy(body, 0, dst, offset + 8, size);
+        // Trailing pad byte (if any) is already zero from array allocation.
+        return offset + 8 + size + (size & 1);
     }
 
     private static byte @NotNull [] encodeAlphaPlane(@NotNull PixelBuffer pixels, boolean compressed) {
@@ -242,18 +286,26 @@ public class WebPImageWriter implements ImageWriter {
             rawAlpha[i] = (byte) ((data[i] >> 24) & 0xFF);
 
         if (compressed) {
-            // VP8L-compressed alpha: header byte with compression flag + VP8L bitstream of alpha channel
-            byte[] header = new byte[]{0x01}; // filtering=0, compression=1 (VP8L)
+            // VP8L-compressed ALPH: alpha bytes are packed into the GREEN channel of a
+            // synthetic ARGB image (matching libwebp's WebPDispatchAlphaToGreen, see
+            // src/enc/alpha_enc.c), then VP8L-encoded. The standard 5-byte VP8L header
+            // (signature + dimensions + version) is stripped because libwebp's ALPH
+            // decoder calls DecodeImageStream directly without parsing the standalone
+            // VP8L header (see VP8LDecodeAlphaHeader in src/dec/vp8l_dec.c) - dimensions
+            // are inferred from the parent VP8 chunk instead.
             PixelBuffer alphaBuf = PixelBuffer.of(
                 java.util.stream.IntStream.range(0, data.length)
-                    .map(i -> (rawAlpha[i] & 0xFF) << 24) // pack alpha into ARGB alpha channel
+                    .map(i -> 0xFF000000 | ((rawAlpha[i] & 0xFF) << 8))
                     .toArray(),
                 pixels.width(), pixels.height()
             );
             byte[] vp8lPayload = VP8LEncoder.encode(alphaBuf);
-            byte[] result = new byte[1 + vp8lPayload.length];
-            result[0] = header[0];
-            System.arraycopy(vp8lPayload, 0, result, 1, vp8lPayload.length);
+            // Strip the 5-byte VP8L header. The remainder is byte-aligned because the
+            // header is exactly 40 bits.
+            int headerBytes = 5;
+            byte[] result = new byte[1 + (vp8lPayload.length - headerBytes)];
+            result[0] = 0x01; // filtering=0, compression=1 (VP8L)
+            System.arraycopy(vp8lPayload, headerBytes, result, 1, vp8lPayload.length - headerBytes);
             return result;
         }
 

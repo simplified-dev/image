@@ -5,6 +5,9 @@ import dev.simplified.collection.ConcurrentList;
 import dev.simplified.image.ImageData;
 import dev.simplified.image.ImageFactory;
 import dev.simplified.image.ImageFormat;
+import dev.simplified.image.data.AnimatedImageData;
+import dev.simplified.image.data.FrameBlend;
+import dev.simplified.image.data.FrameDisposal;
 import dev.simplified.image.data.ImageFrame;
 import dev.simplified.image.pixel.PixelBuffer;
 import org.jetbrains.annotations.NotNull;
@@ -142,6 +145,219 @@ class WebPRoundTripTest {
                 int expected = 0xFF000000 | ((x * 8) << 16) | ((y * 8) << 8) | ((x + y) * 4);
                 assertThat("pixel @ " + x + "," + y, got.getPixel(x, y), is(expected));
             }
+    }
+
+    @Test
+    @DisplayName("lossy + alpha self round-trip: alpha plane survives encode/decode")
+    void lossyAlphaSelfRoundTrip() {
+        // 16x16 image with smooth alpha gradient + solid red color.
+        PixelBuffer buf = PixelBuffer.create(16, 16);
+        for (int y = 0; y < 16; y++)
+            for (int x = 0; x < 16; x++) {
+                int alpha = ((x + y) * 255) / 30;     // ramps 0..255
+                buf.setPixel(x, y, (alpha << 24) | 0x00FF0000);
+            }
+
+        var image = new StaticImageData(ImageFrame.of(buf));
+        File out = outputDir.resolve("lossy_alpha_selfrt.webp").toFile();
+        ImageFactory factory = new ImageFactory();
+        factory.toFile(image, ImageFormat.WEBP, out,
+            WebPWriteOptions.builder().isLossless(false).withQuality(0.9f).build());
+
+        ImageData decoded = factory.fromFile(out);
+        PixelBuffer got = decoded.getFrames().getFirst().pixels();
+        assertThat(got.width(), is(16));
+        assertThat(got.height(), is(16));
+        // Alpha is VP8L-encoded so it is lossless; values must match exactly.
+        for (int y = 0; y < 16; y++)
+            for (int x = 0; x < 16; x++) {
+                int expectedAlpha = ((x + y) * 255) / 30;
+                int gotAlpha = (got.getPixel(x, y) >>> 24) & 0xFF;
+                if (gotAlpha != expectedAlpha)
+                    throw new AssertionError(String.format(
+                        "alpha mismatch at (%d,%d): expected %d, got %d", x, y, expectedAlpha, gotAlpha));
+            }
+    }
+
+    @Test
+    @DisplayName("lossy + alpha decodes through libwebp with bit-exact alpha")
+    void lossyAlphaLibwebpRoundTrip() throws Exception {
+        PixelBuffer buf = PixelBuffer.create(16, 16);
+        for (int y = 0; y < 16; y++)
+            for (int x = 0; x < 16; x++) {
+                int alpha = ((x + y) * 255) / 30;
+                buf.setPixel(x, y, (alpha << 24) | 0x00FF0000);
+            }
+
+        var image = new StaticImageData(ImageFrame.of(buf));
+        File out = outputDir.resolve("lossy_alpha_libwebp.webp").toFile();
+        new ImageFactory().toFile(image, ImageFormat.WEBP, out,
+            WebPWriteOptions.builder().isLossless(false).withQuality(0.9f).build());
+
+        int[] decoded;
+        try {
+            decoded = decodeAlphaWithLibwebp(out, 16, 16);
+        } catch (org.opentest4j.TestAbortedException abort) {
+            throw abort;
+        }
+
+        // Alpha is lossless via VP8L ALPH; libwebp must reconstruct it bit-exact.
+        for (int y = 0; y < 16; y++)
+            for (int x = 0; x < 16; x++) {
+                int expectedAlpha = ((x + y) * 255) / 30;
+                int gotAlpha = decoded[y * 16 + x];
+                if (gotAlpha != expectedAlpha)
+                    throw new AssertionError(String.format(
+                        "libwebp alpha mismatch at (%d,%d): expected %d, got %d",
+                        x, y, expectedAlpha, gotAlpha));
+            }
+    }
+
+    @Test
+    @DisplayName("animated lossy + alpha self round-trip: alpha preserved per frame")
+    void animatedLossyAlphaSelfRoundTrip() {
+        // 3-frame animation; each frame fills with a different alpha gradient.
+        ConcurrentList<ImageFrame> frames = Concurrent.newList();
+        for (int f = 0; f < 3; f++) {
+            PixelBuffer fb = PixelBuffer.create(16, 16);
+            int phase = f * 40;
+            for (int y = 0; y < 16; y++)
+                for (int x = 0; x < 16; x++) {
+                    int alpha = Math.min(255, phase + (x + y) * 7);
+                    fb.setPixel(x, y, (alpha << 24) | 0x000000FF);   // blue
+                }
+            frames.add(ImageFrame.of(fb, 100, 0, 0,
+                FrameDisposal.DO_NOT_DISPOSE, FrameBlend.OVER));
+        }
+
+        AnimatedImageData anim = AnimatedImageData.builder()
+            .withWidth(16).withHeight(16)
+            .withFrames(frames)
+            .withLoopCount(0)
+            .withBackgroundColor(0)
+            .build();
+
+        File out = outputDir.resolve("anim_alpha_selfrt.webp").toFile();
+        ImageFactory factory = new ImageFactory();
+        factory.toFile(anim, ImageFormat.WEBP, out,
+            WebPWriteOptions.builder().isLossless(false).withQuality(0.9f).build());
+
+        ImageData decoded = factory.fromFile(out);
+        if (!(decoded instanceof AnimatedImageData decAnim))
+            throw new AssertionError("expected AnimatedImageData, got " + decoded.getClass());
+
+        ConcurrentList<ImageFrame> outFrames = decAnim.getFrames();
+        if (outFrames.size() != 3)
+            throw new AssertionError("frame count mismatch: " + outFrames.size());
+
+        for (int f = 0; f < 3; f++) {
+            PixelBuffer fb = outFrames.get(f).pixels();
+            int phase = f * 40;
+            for (int y = 0; y < 16; y++)
+                for (int x = 0; x < 16; x++) {
+                    int expectedAlpha = Math.min(255, phase + (x + y) * 7);
+                    int gotAlpha = (fb.getPixel(x, y) >>> 24) & 0xFF;
+                    if (gotAlpha != expectedAlpha)
+                        throw new AssertionError(String.format(
+                            "frame %d alpha @ (%d,%d): expected %d got %d",
+                            f, x, y, expectedAlpha, gotAlpha));
+                }
+        }
+    }
+
+    @Test
+    @DisplayName("uncompressed ALPH (compression=0) round-trips through our reader")
+    void uncompressedAlphaSelfRoundTrip() {
+        PixelBuffer buf = PixelBuffer.create(8, 8);
+        for (int y = 0; y < 8; y++)
+            for (int x = 0; x < 8; x++) {
+                int alpha = (x * 16 + y * 4) & 0xFF;
+                buf.setPixel(x, y, (alpha << 24) | 0x0000FF00);
+            }
+
+        var image = new StaticImageData(ImageFrame.of(buf));
+        File out = outputDir.resolve("uncompressed_alpha.webp").toFile();
+        ImageFactory factory = new ImageFactory();
+        factory.toFile(image, ImageFormat.WEBP, out,
+            WebPWriteOptions.builder()
+                .isLossless(false).withQuality(0.9f)
+                .isAlphaCompression(false)
+                .build());
+
+        ImageData decoded = factory.fromFile(out);
+        PixelBuffer got = decoded.getFrames().getFirst().pixels();
+        for (int y = 0; y < 8; y++)
+            for (int x = 0; x < 8; x++) {
+                int expectedAlpha = (x * 16 + y * 4) & 0xFF;
+                int gotAlpha = (got.getPixel(x, y) >>> 24) & 0xFF;
+                if (gotAlpha != expectedAlpha)
+                    throw new AssertionError(String.format(
+                        "uncompressed alpha @ (%d,%d): expected %d got %d",
+                        x, y, expectedAlpha, gotAlpha));
+            }
+    }
+
+    /**
+     * Decodes the alpha channel of a WebP file via Python's {@code webp} bindings
+     * and returns a {@code width * height} array of alpha values (0..255).
+     */
+    private static int[] decodeAlphaWithLibwebp(File file, int expectedW, int expectedH) throws Exception {
+        String script =
+            "import sys, warnings\n" +
+            "warnings.filterwarnings('ignore')\n" +
+            "try:\n" +
+            "    import webp\n" +
+            "except ImportError:\n" +
+            "    print('NO_WEBP'); sys.exit(2)\n" +
+            "img = webp.load_image(r'" + file.getAbsolutePath() + "').convert('RGBA')\n" +
+            "w, h = img.size\n" +
+            "print(f'DIMS {w} {h}')\n" +
+            "for px in img.getdata():\n" +
+            "    print(f'A {px[3]}')\n";
+
+        Process p = null;
+        for (String cmd : new String[]{"python3", "python", "py"}) {
+            try {
+                ProcessBuilder pb = new ProcessBuilder(cmd, "-c", script);
+                pb.redirectErrorStream(true);
+                p = pb.start();
+                break;
+            } catch (java.io.IOException ignored) { }
+        }
+        if (p == null)
+            throw new org.opentest4j.TestAbortedException("No python3/python/py on PATH");
+
+        String stdout = new String(p.getInputStream().readAllBytes());
+        int exit = p.waitFor();
+        if (exit == 2 && stdout.contains("NO_WEBP"))
+            throw new org.opentest4j.TestAbortedException("Python webp package not installed");
+        if (exit != 0)
+            throw new AssertionError("libwebp rejected our WebP file:\n" + stdout);
+
+        String[] lines = stdout.split("\\R");
+        int w = -1, h = -1;
+        int[] alpha = new int[expectedW * expectedH];
+        int alphaIdx = 0;
+        for (String line : lines) {
+            if (line.startsWith("DIMS ")) {
+                String[] dims = line.substring(5).split("\\s+");
+                w = Integer.parseInt(dims[0]);
+                h = Integer.parseInt(dims[1]);
+            } else if (line.startsWith("A ")) {
+                if (alphaIdx < alpha.length)
+                    alpha[alphaIdx++] = Integer.parseInt(line.substring(2));
+            }
+            // Ignore any other lines (Python warnings, etc.)
+        }
+        if (w != expectedW || h != expectedH)
+            throw new AssertionError(
+                "dims " + w + "x" + h + " != expected " + expectedW + "x" + expectedH
+                + "\nfull stdout:\n" + stdout);
+        if (alphaIdx != alpha.length)
+            throw new AssertionError(
+                "expected " + alpha.length + " alpha values, got " + alphaIdx
+                + "\nfull stdout:\n" + stdout);
+        return alpha;
     }
 
     @Test

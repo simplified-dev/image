@@ -114,6 +114,25 @@ public final class VP8Encoder {
         return Math.clamp((int) ((1.0f - quality) * 127f + 0.5f), 0, 127);
     }
 
+    /**
+     * Picks a deblocking filter level from the AC quantizer step, matching libwebp's
+     * {@code SetupFilterStrength} ({@code src/enc/quant_enc.c}) at sharpness 0 with the
+     * default {@code filter_strength = 60} and no per-segment beta adjustment.
+     * <pre>
+     *   qstep         = AC_Q_LOOKUP[qi] >> 2
+     *   base_strength = qstep   (for sharpness=0, kLevelsFromDelta is the identity)
+     *   level         = base_strength * (5 * 60) / 256 = base_strength * 300 / 256
+     * </pre>
+     * Values below libwebp's {@code FSTRENGTH_CUTOFF=2} are treated as zero.
+     *
+     * @return filter level in {@code [0, 63]}
+     */
+    private static int pickFilterLevel(int qi) {
+        int qstep = Math.min(VP8Tables.AC_Q_LOOKUP[qi] >> 2, 63);
+        int level = qstep * 300 / 256;
+        return level < 2 ? 0 : Math.min(level, 63);
+    }
+
     /** Emits the boolean-coded first-partition frame header up to the per-MB modes. */
     private static void writeFrameHeader(@NotNull State s, int qi) {
         BooleanEncoder e = s.header;
@@ -123,11 +142,12 @@ public final class VP8Encoder {
         e.encodeBool(0);           // clamp_type
         e.encodeBool(0);           // use_segment
 
-        // Filter header: disabled.
-        e.encodeBool(0);           // simple filter
-        e.encodeUint(0, 6);        // loop_filter_level
-        e.encodeUint(0, 3);        // sharpness
-        e.encodeBool(0);           // use_lf_delta
+        // Filter header: simple filter at qi-derived strength.
+        int filterLevel = pickFilterLevel(qi);
+        e.encodeBool(1);                // simple filter (matches LoopFilter.filterSimple)
+        e.encodeUint(filterLevel, 6);   // loop_filter_level
+        e.encodeUint(0, 3);             // sharpness
+        e.encodeBool(0);                // use_lf_delta
 
         e.encodeUint(0, 2);        // log2_num_token_partitions - single token partition
 

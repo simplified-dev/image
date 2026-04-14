@@ -127,11 +127,40 @@ public class WebPImageReader implements ImageReader {
                 ? FrameBlend.SOURCE
                 : FrameBlend.OVER;
 
-            // Frame bitstream starts at offset 16
-            byte[] frameBitstream = new byte[anmf.length - 16];
-            System.arraycopy(anmf, 16, frameBitstream, 0, frameBitstream.length);
+            // Frame body at offset 16 is a sequence of sub-chunks (4-byte FourCC + 4-byte
+            // LE size + payload + optional pad byte), per WebP Extended File Format:
+            // an optional ALPH sub-chunk followed by either VP8 or VP8L.
+            byte[] vp8Sub = null;
+            byte[] vp8lSub = null;
+            byte[] alphSub = null;
+            int subOffset = 16;
+            while (subOffset + 8 <= anmf.length) {
+                String tag = new String(anmf, subOffset, 4);
+                int subSize = readLE32(anmf, subOffset + 4);
+                int dataStart = subOffset + 8;
+                if (dataStart + subSize > anmf.length)
+                    throw new ImageDecodeException("ANMF sub-chunk %s overruns frame", tag);
+                byte[] subPayload = new byte[subSize];
+                System.arraycopy(anmf, dataStart, subPayload, 0, subSize);
+                switch (tag) {
+                    case "VP8 " -> vp8Sub = subPayload;
+                    case "VP8L" -> vp8lSub = subPayload;
+                    case "ALPH" -> alphSub = subPayload;
+                    default -> { /* unknown sub-chunk, ignore for forward compatibility */ }
+                }
+                subOffset = dataStart + subSize + (subSize & 1);
+            }
 
-            PixelBuffer framePixels = decodeFrameBitstream(frameBitstream);
+            PixelBuffer framePixels;
+            if (vp8lSub != null) {
+                framePixels = VP8LDecoder.decode(vp8lSub);
+            } else if (vp8Sub != null) {
+                framePixels = VP8Decoder.decode(vp8Sub);
+                if (alphSub != null)
+                    mergeAlphaPlane(framePixels, alphSub);
+            } else {
+                throw new ImageDecodeException("ANMF frame has no VP8 or VP8L sub-chunk");
+            }
 
             if (framePixels.width() != frameW || framePixels.height() != frameH)
                 throw new ImageDecodeException(
@@ -166,36 +195,60 @@ public class WebPImageReader implements ImageReader {
 
     private @NotNull StaticImageData decodeVP8WithAlpha(@NotNull WebPChunk vp8, @Nullable WebPChunk alph) {
         PixelBuffer colorPixels = VP8Decoder.decode(vp8.payload());
+        if (alph != null)
+            mergeAlphaPlane(colorPixels, alph.payload());
+        return StaticImageData.of(colorPixels);
+    }
 
-        if (alph == null)
-            return StaticImageData.of(colorPixels);
-
-        // Merge alpha plane into decoded color data
-        byte[] alphPayload = alph.payload();
-
-        if (alphPayload.length < 2)
-            return StaticImageData.of(colorPixels);
+    /**
+     * Merges an ALPH chunk payload into {@code colorPixels}'s alpha channel. Supports the
+     * uncompressed ({@code compression=0}) form and the VP8L-compressed
+     * ({@code compression=1}) form where alpha bytes are carried in the green channel of
+     * the VP8L bitstream (libwebp's {@code WebPDispatchAlphaToGreen}).
+     */
+    private static void mergeAlphaPlane(@NotNull PixelBuffer colorPixels, byte @NotNull [] alphPayload) {
+        if (alphPayload.length < 2) return;
 
         int header = alphPayload[0] & 0xFF;
         int compression = header & 0x03;
         int[] pixels = colorPixels.pixels();
 
         if (compression == 0) {
-            // Uncompressed alpha
             int alphaOffset = 1;
             for (int i = 0; i < pixels.length && alphaOffset + i < alphPayload.length; i++)
                 pixels[i] = (pixels[i] & 0x00FFFFFF) | ((alphPayload[alphaOffset + i] & 0xFF) << 24);
         } else if (compression == 1) {
-            // VP8L-compressed alpha
-            byte[] alphBitstream = new byte[alphPayload.length - 1];
-            System.arraycopy(alphPayload, 1, alphBitstream, 0, alphBitstream.length);
+            // ALPH-internal VP8L omits the standard 5-byte header (libwebp's
+            // VP8LDecodeAlphaHeader takes dimensions from the parent VP8 chunk).
+            // Synthesize the header from colorPixels' size before delegating to our
+            // standalone VP8L decoder.
+            byte[] alphBitstream = prependVp8lHeader(alphPayload, 1, colorPixels.width(), colorPixels.height());
             PixelBuffer alphDecoded = VP8LDecoder.decode(alphBitstream);
             int[] alphPixels = alphDecoded.pixels();
             for (int i = 0; i < pixels.length && i < alphPixels.length; i++)
-                pixels[i] = (pixels[i] & 0x00FFFFFF) | (alphPixels[i] & 0xFF000000);
+                pixels[i] = (pixels[i] & 0x00FFFFFF) | (((alphPixels[i] >> 8) & 0xFF) << 24);
         }
+    }
 
-        return StaticImageData.of(colorPixels);
+    /**
+     * Prepends a synthetic 5-byte VP8L header
+     * ({@code 0x2F | 14b w-1 | 14b h-1 | 1b alpha | 3b version}) to {@code alphPayload},
+     * skipping the 1-byte ALPH chunk header. Lets our {@link VP8LDecoder} consume an
+     * ALPH-internal VP8L stream that omits the standard header.
+     */
+    private static byte @NotNull [] prependVp8lHeader(byte @NotNull [] alphPayload, int payloadStart, int width, int height) {
+        int bodyLen = alphPayload.length - payloadStart;
+        byte[] result = new byte[5 + bodyLen];
+        result[0] = 0x2F;
+        int wM1 = width - 1;
+        int hM1 = height - 1;
+        // Bit-packed LE: bits 0..13 = wM1, 14..27 = hM1, 28 = alpha=0, 29..31 = version=0.
+        result[1] = (byte) (wM1 & 0xFF);
+        result[2] = (byte) (((wM1 >> 8) & 0x3F) | ((hM1 & 0x03) << 6));
+        result[3] = (byte) ((hM1 >> 2) & 0xFF);
+        result[4] = (byte) ((hM1 >> 10) & 0x0F);
+        System.arraycopy(alphPayload, payloadStart, result, 5, bodyLen);
+        return result;
     }
 
     private @NotNull PixelBuffer decodeFrameBitstream(byte @NotNull [] bitstream) {

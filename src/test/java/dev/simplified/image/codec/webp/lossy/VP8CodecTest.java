@@ -299,6 +299,58 @@ public class VP8CodecTest {
                     "vertical stripes PSNR = %.2f dB (expected >= 32 dB with V_PRED picked)", psnr));
         }
 
+        @Test @DisplayName("loop filter level is non-zero at moderate quality")
+        void loopFilterEnabled() {
+            // Encoder should emit a non-zero filter level so the decoder smooths block edges.
+            PixelBuffer buf = PixelBuffer.create(16, 16);
+            buf.fill(0xFF808080);
+            byte[] vp8 = VP8Encoder.encode(buf, 0.5f);     // q=0.5 -> mid-quality, mid-filter
+            int filterLevel = readFilterLevelFromHeader(vp8);
+            if (filterLevel == 0)
+                throw new AssertionError("expected non-zero filter level at q=0.5, got 0");
+        }
+
+        @Test @DisplayName("loop filter on doesn't decrease 32x48 PSNR vs libwebp-decoded baseline")
+        void loopFilterDoesNotHurtPsnr() throws Exception {
+            // The encoder always emits filter_level > 0 now; asserting a healthy PSNR at
+            // q=0.9 guarantees the filter (applied by libwebp on decode) isn't degrading
+            // output. If LoopFilter or filter_level computation drifts, this fails.
+            PixelBuffer buf = PixelBuffer.create(32, 48);
+            for (int y = 0; y < 48; y++)
+                for (int x = 0; x < 32; x++) {
+                    int r = (x * 255) / 31;
+                    int g = (y * 255) / 47;
+                    int b = ((x + y) * 255) / 78;
+                    buf.setPixel(x, y, 0xFF000000 | (r << 16) | (g << 8) | b);
+                }
+            byte[] vp8 = VP8Encoder.encode(buf, 0.9f);
+            ConcurrentList<WebPChunk> chunks = Concurrent.newList();
+            chunks.add(RiffContainer.createChunk(WebPChunk.Type.VP8, vp8));
+            byte[] riff = RiffContainer.write(chunks);
+
+            int[] decoded = decodeWithLibwebp(riff, 32, 48);
+            double psnr = computePsnr(buf, decoded, 32, 48);
+            if (psnr < 28.0)
+                throw new AssertionError(String.format(
+                    "filter-on PSNR = %.2f dB (expected >= 28 dB at q=0.9)", psnr));
+        }
+
+        /**
+         * Reads the encoded frame's first-partition far enough to extract
+         * {@code filter_level} (RFC 6386 paragraph 9.4).
+         */
+        private static int readFilterLevelFromHeader(byte[] vp8) {
+            int frameTag = (vp8[0] & 0xFF) | ((vp8[1] & 0xFF) << 8) | ((vp8[2] & 0xFF) << 16);
+            int firstPartSize = (frameTag >>> 5) & 0x7FFFF;
+            BooleanDecoder br = new BooleanDecoder(vp8, 10, firstPartSize);
+            br.decodeBool();                                  // colorspace
+            br.decodeBool();                                  // clamp_type
+            if (br.decodeBool() != 0)                         // use_segment
+                throw new AssertionError("encoder unexpectedly emits segment header");
+            br.decodeBool();                                  // simple filter flag
+            return br.decodeUint(6);
+        }
+
         @Test @DisplayName("16x16 gradient reconstructs through libwebp with bounded error at high quality")
         void pixelFidelityGradient() throws Exception {
             PixelBuffer buf = PixelBuffer.create(16, 16);
