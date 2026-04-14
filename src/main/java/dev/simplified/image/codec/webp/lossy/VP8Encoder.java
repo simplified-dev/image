@@ -149,6 +149,13 @@ public final class VP8Encoder {
         int[] refLfDelta = new int[4];
         int[] modeLfDelta = new int[4];
 
+        // Per-frame sign-bias flags for GOLDEN / ALTREF (RFC 6386 section 18.3). Consumed
+        // by {@link NearMvs#find} so cross-reference neighbours get their MVs flipped
+        // when bias differs from the current MB's ref. Default false - our encoder emits
+        // only LAST-ref MBs so the flip never triggers in self-roundtrip.
+        boolean signBiasGolden;
+        boolean signBiasAltref;
+
         State(int width, int height, int qi, boolean isKeyframe, @Nullable VP8EncoderSession session) {
             this.isKeyframe = isKeyframe;
             this.session = session;
@@ -905,7 +912,9 @@ public final class VP8Encoder {
         mb.fromARGB(argb, mbX, mbY, width, height);
 
         NearMvs.Result near = new NearMvs.Result();
-        NearMvs.find(s.mbIsInter, s.mbMvRow, s.mbMvCol, s.mbCols, mbX, mbY, near);
+        // Our encoder only emits LAST-ref MBs, so currentRefFrame is always REF_LAST here.
+        NearMvs.find(s.mbIsInter, s.mbMvRow, s.mbMvCol, s.mbRefFrame, s.mbCols, mbX, mbY,
+            LoopFilter.REF_LAST, s.signBiasGolden, s.signBiasAltref, near);
         int[] mvRefProbs = new int[4];
         NearMvs.refProbs(near.cnt, mvRefProbs);
 
