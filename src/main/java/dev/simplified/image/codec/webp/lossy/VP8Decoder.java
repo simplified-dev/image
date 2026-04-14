@@ -45,6 +45,10 @@ public final class VP8Decoder {
         final int[] intraT;
         final int[] intraL = new int[4];
 
+        // Per-MB is_i4x4 flag (row-major {@code mbY * mbCols + mbX}), consumed by the loop filter
+        // to decide whether to filter the three inner 4x4 sub-block edges inside each MB.
+        final boolean[] mbIsI4x4;
+
         // Dequantizer steps (filled after VP8ParseQuant).
         int y1Dc, y1Ac, y2Dc, y2Ac, uvDc, uvAc;
 
@@ -69,6 +73,7 @@ public final class VP8Decoder {
             this.reconV = new short[chromaStride * mbRows * 8];
             this.topNz = new int[mbCols][9];
             this.intraT = new int[mbCols * 4];
+            this.mbIsI4x4 = new boolean[mbCols * mbRows];
             this.proba = cloneProba(VP8Tables.COEFFS_PROBA_0);
         }
     }
@@ -127,7 +132,7 @@ public final class VP8Decoder {
         }
 
         // ── Filter header ──
-        br.decodeBool();                                      // simple filter
+        boolean simpleFilter = br.decodeBool() != 0;
         int filterLevel = br.decodeUint(6);
         int sharpness = br.decodeUint(3);
         if (br.decodeBool() != 0) {                           // use_lf_delta
@@ -189,25 +194,24 @@ public final class VP8Decoder {
                 decodeMacroblock(s, br, td, mbX, mbY);
         }
 
-        // Loop filter - encoder currently emits filter_level=0, so this is a no-op today.
-        if (filterLevel > 0)
-            LoopFilter.filterSimple(s.reconY, s.lumaStride, s.mbRows * 16, filterLevel, sharpness);
-
-        // ── YCbCr -> ARGB ──
-        int[] pixels = new int[width * height];
-        for (int y = 0; y < height; y++) {
-            for (int x = 0; x < width; x++) {
-                int yVal = s.reconY[y * s.lumaStride + x] - 16;
-                int cbVal = s.reconU[(y / 2) * s.chromaStride + (x / 2)] - 128;
-                int crVal = s.reconV[(y / 2) * s.chromaStride + (x / 2)] - 128;
-
-                int r = Math.clamp((298 * yVal + 409 * crVal + 128) >> 8, 0, 255);
-                int g = Math.clamp((298 * yVal - 100 * cbVal - 208 * crVal + 128) >> 8, 0, 255);
-                int b = Math.clamp((298 * yVal + 516 * cbVal + 128) >> 8, 0, 255);
-
-                pixels[y * width + x] = 0xFF000000 | (r << 16) | (g << 8) | b;
-            }
+        // Loop filter. Applied whether we emitted simple=1 (our encoder) or a libwebp-
+        // produced frame set simple=0. Chroma planes are passed for the normal filter path;
+        // the simple path ignores them.
+        if (filterLevel > 0) {
+            LoopFilter.filterFrame(
+                s.reconY, s.reconU, s.reconV,
+                s.lumaStride, s.chromaStride,
+                s.mbCols, s.mbRows,
+                simpleFilter, filterLevel, sharpness, s.mbIsI4x4
+            );
         }
+
+        // ── YCbCr -> ARGB (fancy bilinear chroma upsampling, matching libwebp) ──
+        int[] pixels = new int[width * height];
+        ChromaUpsampler.upsampleToArgb(
+            s.reconY, s.reconU, s.reconV,
+            width, height, s.lumaStride, s.chromaStride, pixels
+        );
 
         return PixelBuffer.of(pixels, width, height);
     }
@@ -232,6 +236,7 @@ public final class VP8Decoder {
 
         // is_i4x4 - bit=0 means i4x4, bit=1 means 16x16 prediction (libwebp convention).
         boolean isI4x4 = br.decodeBit(145) == 0;
+        s.mbIsI4x4[mbY * s.mbCols + mbX] = isI4x4;
 
         int yMode;
         int[][] subModes = null;
