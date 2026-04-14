@@ -31,6 +31,16 @@ import org.jetbrains.annotations.NotNull;
  */
 public final class VP8Encoder {
 
+    /**
+     * Number of token partitions we emit. Must be a power of two in {@code {1, 2, 4, 8}}.
+     * libwebp's cwebp defaults to 4. Macroblock rows are interleaved across partitions
+     * via {@code mb_y & (NUM_TOKEN_PARTITIONS - 1)}, letting multi-threaded decoders
+     * parse rows in parallel.
+     */
+    private static final int NUM_TOKEN_PARTITIONS = 4;
+    /** {@code log2(NUM_TOKEN_PARTITIONS)}; encoded into the 2-bit header field. */
+    private static final int LOG2_NUM_TOKEN_PARTITIONS = 2;
+
     private VP8Encoder() { }
 
     /** Per-frame encoding state threaded through the MB loop. */
@@ -68,8 +78,9 @@ public final class VP8Encoder {
         final int lambdaI4, lambdaUv;
         final int lambdaTrellisI4, lambdaTrellisI16, lambdaTrellisUv;
 
-        final BooleanEncoder header;   // first partition: frame header + per-MB modes
-        final BooleanEncoder tokens;   // token partition: coefficient streams
+        final BooleanEncoder header;                // first partition: frame header + per-MB modes
+        final BooleanEncoder[] tokens;              // token partitions: MB row {@code y} writes to
+                                                    // {@code tokens[y & (NUM_TOKEN_PARTITIONS - 1)]}
 
         State(int width, int height, int qi) {
             this.mbCols = (width + 15) / 16;
@@ -106,7 +117,10 @@ public final class VP8Encoder {
             this.lambdaTrellisUv = Math.max(1, (qUv * qUv) << 1);
 
             this.header = new BooleanEncoder(2048);
-            this.tokens = new BooleanEncoder(mbCols * mbRows * 1024);
+            int perPartBytes = Math.max(1024, mbCols * mbRows * 1024 / NUM_TOKEN_PARTITIONS);
+            this.tokens = new BooleanEncoder[NUM_TOKEN_PARTITIONS];
+            for (int i = 0; i < NUM_TOKEN_PARTITIONS; i++)
+                this.tokens[i] = new BooleanEncoder(perPartBytes);
         }
     }
 
@@ -137,7 +151,9 @@ public final class VP8Encoder {
         }
 
         byte[] headerBytes = s.header.toByteArray();
-        byte[] tokenBytes = s.tokens.toByteArray();
+        byte[][] tokenBytes = new byte[NUM_TOKEN_PARTITIONS][];
+        for (int i = 0; i < NUM_TOKEN_PARTITIONS; i++)
+            tokenBytes[i] = s.tokens[i].toByteArray();
         return assembleFrame(width, height, headerBytes, tokenBytes);
     }
 
@@ -181,7 +197,7 @@ public final class VP8Encoder {
         e.encodeUint(0, 3);             // sharpness
         e.encodeBool(0);                // use_lf_delta
 
-        e.encodeUint(0, 2);        // log2_num_token_partitions - single token partition
+        e.encodeUint(LOG2_NUM_TOKEN_PARTITIONS, 2);    // log2 of the number of token partitions
 
         // Quantizer: write base QI, no per-component deltas (matches State's derived steps).
         e.encodeUint(qi, 7);
@@ -271,10 +287,13 @@ public final class VP8Encoder {
         emitUvMode(h, uvMode);
 
         // 9. Emit tokens + quantize+emit chroma (using trellis in emit-time order so each
-        //    block sees the correct {@code top_nz + left_nz} context).
-        emitLumaTokens(s, mbX, useBPred, i16.y2ZigZag, useBPred ? bpred.yAc : i16.yAcZigZag);
-        ChromaResult uResult = trellisAndEmitChroma(s, mbX, mb.cb, predU, /*isU=*/ true);
-        ChromaResult vResult = trellisAndEmitChroma(s, mbX, mb.cr, predV, /*isU=*/ false);
+        //    block sees the correct {@code top_nz + left_nz} context). MB rows are
+        //    interleaved across {@code NUM_TOKEN_PARTITIONS} partitions so a multi-
+        //    threaded decoder can parse rows in parallel.
+        BooleanEncoder tokenPart = s.tokens[mbY & (NUM_TOKEN_PARTITIONS - 1)];
+        emitLumaTokens(s, tokenPart, mbX, useBPred, i16.y2ZigZag, useBPred ? bpred.yAc : i16.yAcZigZag);
+        ChromaResult uResult = trellisAndEmitChroma(s, tokenPart, mbX, mb.cb, predU, /*isU=*/ true);
+        ChromaResult vResult = trellisAndEmitChroma(s, tokenPart, mbX, mb.cr, predV, /*isU=*/ false);
 
         // 10. Commit chroma reconstruction using the dequantized coefficients from trellis.
         commitChromaFromDequant(s.reconU, s.chromaStride, mbX, mbY, predU, uResult.dequant);
@@ -390,7 +409,8 @@ public final class VP8Encoder {
      * @param isU {@code true} for U (context slots 4..5), {@code false} for V (slots 6..7)
      */
     private static @NotNull ChromaResult trellisAndEmitChroma(
-        @NotNull State s, int mbX, short @NotNull [] src, short @NotNull [] pred, boolean isU
+        @NotNull State s, @NotNull BooleanEncoder tokens, int mbX,
+        short @NotNull [] src, short @NotNull [] pred, boolean isU
     ) {
         int[] top = s.topNz[mbX];
         int[] left = s.leftNz;
@@ -414,7 +434,7 @@ public final class VP8Encoder {
                 dequant[by * 2 + bx] = dct;
 
                 int nz = VP8TokenEncoder.emit(
-                    s.tokens, zz, 0, ctx, VP8Tables.TYPE_CHROMA_A, VP8Tables.COEFFS_PROBA_0);
+                    tokens, zz, 0, ctx, VP8Tables.TYPE_CHROMA_A, VP8Tables.COEFFS_PROBA_0);
                 top[baseIdx + bx] = nz;
                 left[baseIdx + by] = nz;
             }
@@ -663,10 +683,9 @@ public final class VP8Encoder {
      * {@link State#topNz}/{@link State#leftNz} luma slots.
      */
     private static void emitLumaTokens(
-        @NotNull State s, int mbX, boolean isBPred,
+        @NotNull State s, @NotNull BooleanEncoder t, int mbX, boolean isBPred,
         short @NotNull [] y2ZigZag, short @NotNull [] @NotNull [] yAcZigZag
     ) {
-        BooleanEncoder t = s.tokens;
         int[] top = s.topNz[mbX];
         int[] left = s.leftNz;
 
@@ -900,11 +919,22 @@ public final class VP8Encoder {
     // Frame assembly
     // ──────────────────────────────────────────────────────────────────────
 
+    /**
+     * Packs the frame tag, sync code, dimensions, first partition, {@code (N-1)} token-
+     * partition size prefixes (little-endian uint24), and {@code N} concatenated token
+     * partitions into a VP8 payload. Mirrors libwebp's {@code EmitPartitionsSize} +
+     * frame-tag emission in {@code src/enc/syntax_enc.c}.
+     */
     private static byte @NotNull [] assembleFrame(
-        int width, int height, byte @NotNull [] firstPartition, byte @NotNull [] tokenPartition
+        int width, int height, byte @NotNull [] firstPartition, byte @NotNull [] @NotNull [] tokenPartitions
     ) {
         int firstSize = firstPartition.length;
-        byte[] frame = new byte[10 + firstSize + tokenPartition.length];
+        int numParts = tokenPartitions.length;
+        int sizePrefixBytes = (numParts - 1) * 3;
+        int totalTokenBytes = 0;
+        for (byte[] part : tokenPartitions) totalTokenBytes += part.length;
+
+        byte[] frame = new byte[10 + firstSize + sizePrefixBytes + totalTokenBytes];
         int offset = 0;
 
         int frameTag = (1 << 4) | (firstSize << 5);
@@ -923,7 +953,20 @@ public final class VP8Encoder {
 
         System.arraycopy(firstPartition, 0, frame, offset, firstSize);
         offset += firstSize;
-        System.arraycopy(tokenPartition, 0, frame, offset, tokenPartition.length);
+
+        // (N-1) size prefixes for partitions 0..N-2; the last partition's size is implicit.
+        for (int p = 0; p < numParts - 1; p++) {
+            int partSize = tokenPartitions[p].length;
+            frame[offset++] = (byte) (partSize & 0xFF);
+            frame[offset++] = (byte) ((partSize >>> 8) & 0xFF);
+            frame[offset++] = (byte) ((partSize >>> 16) & 0xFF);
+        }
+
+        // Concatenated partition bodies.
+        for (byte[] part : tokenPartitions) {
+            System.arraycopy(part, 0, frame, offset, part.length);
+            offset += part.length;
+        }
 
         return frame;
     }

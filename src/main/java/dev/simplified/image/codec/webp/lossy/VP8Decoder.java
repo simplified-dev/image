@@ -177,19 +177,43 @@ public final class VP8Decoder {
         if (s.useSkipProba)
             s.skipP = br.decodeUint(8);
 
-        // ── Token partition decoder ──
-        int tokenOffset = partitionEnd;
-        if (numTokenPartitions > 1)
-            tokenOffset += (numTokenPartitions - 1) * 3;
-        if (tokenOffset > data.length)
-            throw new ImageDecodeException("VP8 token partition truncated");
-        BooleanDecoder td = new BooleanDecoder(data, tokenOffset, data.length - tokenOffset);
+        // ── Token partition decoders ──
+        // The layout following the first partition is:
+        //   (numParts - 1) * 3 bytes of little-endian uint24 size prefixes for partitions 0..N-2;
+        //   concatenated partition bodies, with the last partition's size implied by file length.
+        int partSizesOffset = partitionEnd;
+        int partBodiesOffset = partSizesOffset + (numTokenPartitions - 1) * 3;
+        if (partBodiesOffset > data.length)
+            throw new ImageDecodeException("VP8 token partition size prefixes truncated");
+        BooleanDecoder[] tokenDecoders = new BooleanDecoder[numTokenPartitions];
+        int cursor = partBodiesOffset;
+        for (int p = 0; p < numTokenPartitions; p++) {
+            int partSize;
+            if (p < numTokenPartitions - 1) {
+                int o = partSizesOffset + p * 3;
+                partSize = (data[o] & 0xFF)
+                    | ((data[o + 1] & 0xFF) << 8)
+                    | ((data[o + 2] & 0xFF) << 16);
+            } else {
+                partSize = data.length - cursor;
+            }
+            if (partSize < 0 || cursor + partSize > data.length)
+                throw new ImageDecodeException(
+                    "VP8 token partition %d out of range: offset=%d size=%d total=%d",
+                    p, cursor, partSize, data.length);
+            tokenDecoders[p] = new BooleanDecoder(data, cursor, partSize);
+            cursor += partSize;
+        }
+        int partMask = numTokenPartitions - 1;
 
         // ── Macroblock loop ──
+        // MB row y reads tokens from partition (y & (numTokenPartitions - 1)), matching the
+        // encoder's interleave. Mode bits come from the first partition (br) as before.
         for (int mbY = 0; mbY < s.mbRows; mbY++) {
             java.util.Arrays.fill(s.leftNz, 0);
             java.util.Arrays.fill(s.intraL, IntraPrediction.B_DC_PRED);
 
+            BooleanDecoder td = tokenDecoders[mbY & partMask];
             for (int mbX = 0; mbX < s.mbCols; mbX++)
                 decodeMacroblock(s, br, td, mbX, mbY);
         }
