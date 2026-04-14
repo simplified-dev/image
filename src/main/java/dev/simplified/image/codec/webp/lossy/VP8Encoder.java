@@ -51,6 +51,12 @@ public final class VP8Encoder {
     private static final int INTER_SKIP_PROBA = 0x80;
 
     /**
+     * All-zero delta vector used when {@code use_lf_delta = 0} in the frame header.
+     * Shared so the encoder does not allocate a throwaway array per frame.
+     */
+    private static final int[] EMPTY_LF_DELTA = new int[4];
+
+    /**
      * Probability for the {@code prob_intra} header field in P-frames. Biased low so
      * encoding an inter-MB is cheap - our Phase 1 use case (stationary tooltip frames)
      * has most MBs inter-skip.
@@ -112,6 +118,15 @@ public final class VP8Encoder {
         final int[] mbMvRow;
         final int[] mbMvCol;
 
+        // Per-MB loop-filter classification tables (row-major mbY*mbCols + mbX):
+        //   mbRefFrame[i]   = one of LoopFilter.REF_INTRA / REF_LAST / REF_GOLDEN / REF_ALTREF
+        //   mbModeLfIdx[i]  = one of LoopFilter.MODE_NON_BPRED_INTRA / MODE_BPRED / MODE_ZEROMV
+        //                     / MODE_OTHER_INTER / MODE_SPLITMV
+        // Populated as each MB is committed and consumed at the end-of-frame loop-filter
+        // pass to apply RFC 6386 section 15 ref_lf_delta + mode_lf_delta per-MB.
+        final int[] mbRefFrame;
+        final int[] mbModeLfIdx;
+
         // Quantizer steps.
         final int y1Dc, y1Ac, y2Dc, y2Ac, uvDc, uvAc;
 
@@ -126,6 +141,13 @@ public final class VP8Encoder {
         final BooleanEncoder header;                // first partition: frame header + per-MB modes
         final BooleanEncoder[] tokens;              // token partitions: MB row {@code y} writes to
                                                     // {@code tokens[y & (NUM_TOKEN_PARTITIONS - 1)]}
+
+        // Loop-filter delta header state (RFC 6386 section 15). When useLfDelta is true,
+        // the frame header emits refLfDelta[4] and modeLfDelta[4], and the post-encode
+        // loop filter applies them when computing per-MB filter strength.
+        boolean useLfDelta;
+        int[] refLfDelta = new int[4];
+        int[] modeLfDelta = new int[4];
 
         State(int width, int height, int qi, boolean isKeyframe, @Nullable VP8EncoderSession session) {
             this.isKeyframe = isKeyframe;
@@ -143,6 +165,8 @@ public final class VP8Encoder {
             this.mbIsInter = new boolean[mbCols * mbRows];
             this.mbMvRow = new int[mbCols * mbRows];
             this.mbMvCol = new int[mbCols * mbRows];
+            this.mbRefFrame = new int[mbCols * mbRows];       // defaults to REF_INTRA = 0
+            this.mbModeLfIdx = new int[mbCols * mbRows];       // defaults to MODE_NON_BPRED_INTRA = 0
 
             this.y1Dc = VP8Tables.DC_Q_LOOKUP[qi];
             this.y1Ac = VP8Tables.AC_Q_LOOKUP[qi];
@@ -221,14 +245,46 @@ public final class VP8Encoder {
         return encodeFrame(pixels, quality, session, /*isKeyframe=*/ false);
     }
 
+    /**
+     * Test / library hook: encodes a keyframe with {@code use_lf_delta = 1} and the
+     * supplied {@code ref_lf_delta} / {@code mode_lf_delta} vectors. Enables spec
+     * conformance coverage of RFC 6386 section 15 without enabling deltas by default
+     * on the public {@link #encode(PixelBuffer, float)} entry point.
+     *
+     * @param pixels source pixel buffer
+     * @param quality encoding quality in {@code [0.0, 1.0]}
+     * @param refLfDelta 4-entry delta vector indexed by reference frame
+     *                   ({@link LoopFilter#REF_INTRA} etc.)
+     * @param modeLfDelta 4-entry delta vector (B_PRED, ZEROMV, NEW/NEAREST/NEAR, SPLITMV)
+     * @return the encoded VP8 payload bytes
+     */
+    public static byte @NotNull [] encodeWithLfDeltas(
+        @NotNull PixelBuffer pixels, float quality,
+        int @NotNull [] refLfDelta, int @NotNull [] modeLfDelta
+    ) {
+        if (refLfDelta.length != 4 || modeLfDelta.length != 4)
+            throw new IllegalArgumentException("LF delta vectors must have length 4");
+        return encodeFrame(pixels, quality, null, /*isKeyframe=*/ true, true, refLfDelta, modeLfDelta);
+    }
+
     private static byte @NotNull [] encodeFrame(
         @NotNull PixelBuffer pixels, float quality, @Nullable VP8EncoderSession session, boolean isKeyframe
+    ) {
+        return encodeFrame(pixels, quality, session, isKeyframe, false, EMPTY_LF_DELTA, EMPTY_LF_DELTA);
+    }
+
+    private static byte @NotNull [] encodeFrame(
+        @NotNull PixelBuffer pixels, float quality, @Nullable VP8EncoderSession session, boolean isKeyframe,
+        boolean useLfDelta, int @NotNull [] refLfDelta, int @NotNull [] modeLfDelta
     ) {
         int width = pixels.width();
         int height = pixels.height();
         int qi = qualityToQi(quality);
 
         State s = new State(width, height, qi, isKeyframe, session);
+        s.useLfDelta = useLfDelta;
+        System.arraycopy(refLfDelta, 0, s.refLfDelta, 0, 4);
+        System.arraycopy(modeLfDelta, 0, s.modeLfDelta, 0, 4);
 
         writeFrameHeader(s, qi);
 
@@ -255,7 +311,9 @@ public final class VP8Encoder {
                 s.reconY, s.reconU, s.reconV,
                 s.lumaStride, s.chromaStride,
                 s.mbCols, s.mbRows,
-                /*simpleFilter=*/ true, filterLevel, /*sharpness=*/ 0, s.mbIsI4x4
+                /*simpleFilter=*/ false, filterLevel, /*sharpness=*/ 0,
+                s.mbRefFrame, s.mbModeLfIdx,
+                s.useLfDelta, s.refLfDelta, s.modeLfDelta
             );
         }
 
@@ -311,12 +369,38 @@ public final class VP8Encoder {
         // Segment header (shared).
         e.encodeBool(0);           // use_segment
 
-        // Filter header: simple filter at qi-derived strength.
+        // Filter header: normal filter at qi-derived strength. RFC 6386 section 9.1
+        // pairs version=0 (which our frame tag emits) with the normal loop filter +
+        // 6-tap bicubic sub-pel reconstruction; simple-filter requires version=1 which
+        // also mandates bilinear sub-pel. Our sub-pel path is 6-tap everywhere so we
+        // must use the normal filter for internal consistency + libvpx interop.
         int filterLevel = pickFilterLevel(qi);
-        e.encodeBool(1);                // simple filter (matches LoopFilter.filterSimple)
+        e.encodeBool(0);                // simple filter bit: 0 = normal (RFC section 15.3)
         e.encodeUint(filterLevel, 6);   // loop_filter_level
         e.encodeUint(0, 3);             // sharpness
-        e.encodeBool(0);                // use_lf_delta
+        if (!s.useLfDelta) {
+            e.encodeBool(0);            // use_lf_delta
+        } else {
+            e.encodeBool(1);            // use_lf_delta
+            e.encodeBool(1);            // update_lf_delta (always update - simpler than diffing)
+            // RFC 6386 section 15: 4 ref_lf_delta signed 6-bit entries with per-entry update flags.
+            for (int i = 0; i < 4; i++) {
+                if (s.refLfDelta[i] != 0) {
+                    e.encodeBool(1);
+                    e.encodeSint(s.refLfDelta[i], 6);
+                } else {
+                    e.encodeBool(0);
+                }
+            }
+            for (int i = 0; i < 4; i++) {
+                if (s.modeLfDelta[i] != 0) {
+                    e.encodeBool(1);
+                    e.encodeSint(s.modeLfDelta[i], 6);
+                } else {
+                    e.encodeBool(0);
+                }
+            }
+        }
 
         e.encodeUint(LOG2_NUM_TOKEN_PARTITIONS, 2);    // log2 of the number of token partitions
 
@@ -420,8 +504,11 @@ public final class VP8Encoder {
         // 5. Pick the winner by R-D score. The B_PRED path already accumulates per-sub-block
         //    {@code sse*RD_DISTO_MULT + rate*lambda_i4}; we compare that against the i16 total.
         boolean useBPred = bpred.rdScore < rdScore16;
-        s.mbIsI4x4[mbY * s.mbCols + mbX] = useBPred;
-        s.mbIsInter[mbY * s.mbCols + mbX] = false;
+        int mbIdx = mbY * s.mbCols + mbX;
+        s.mbIsI4x4[mbIdx] = useBPred;
+        s.mbIsInter[mbIdx] = false;
+        s.mbRefFrame[mbIdx] = LoopFilter.REF_INTRA;
+        s.mbModeLfIdx[mbIdx] = useBPred ? LoopFilter.MODE_BPRED : LoopFilter.MODE_NON_BPRED_INTRA;
 
         // 6. Chroma: mode selection + DCT + trellis.
         short[] predU = new short[64];
@@ -516,6 +603,8 @@ public final class VP8Encoder {
             s.mbIsInter[mbIdx] = true;
             s.mbMvRow[mbIdx] = 0;
             s.mbMvCol[mbIdx] = 0;
+            s.mbRefFrame[mbIdx] = LoopFilter.REF_LAST;
+            s.mbModeLfIdx[mbIdx] = LoopFilter.MODE_ZEROMV;
 
             copyRef16x16(s.session.refY, s.session.refLumaStride, s.reconY, s.lumaStride, mbX, mbY);
             copyRef8x8(s.session.refU, s.session.refChromaStride, s.reconU, s.chromaStride, mbX, mbY);
@@ -560,6 +649,8 @@ public final class VP8Encoder {
             s.mbIsInter[mbIdx] = true;
             s.mbMvRow[mbIdx] = internalRow;
             s.mbMvCol[mbIdx] = internalCol;
+            s.mbRefFrame[mbIdx] = LoopFilter.REF_LAST;
+            s.mbModeLfIdx[mbIdx] = LoopFilter.MODE_OTHER_INTER;
 
             commitLumaToRecon(s, mbX, mbY, predY);
             commitChromaBufferToRecon(s.reconU, s.chromaStride, mbX, mbY, predU);
@@ -619,6 +710,10 @@ public final class VP8Encoder {
             s.mbIsInter[mbIdx] = true;
             s.mbMvRow[mbIdx] = internalRow;
             s.mbMvCol[mbIdx] = internalCol;
+            s.mbRefFrame[mbIdx] = LoopFilter.REF_LAST;
+            // mvMode 0=ZEROMV (unused as candidate), 1=NEAREST, 2=NEAR, 3=NEW.
+            // All of NEAREST / NEAR / NEW map to MODE_OTHER_INTER per RFC 6386 section 15.
+            s.mbModeLfIdx[mbIdx] = (mvMode == 0) ? LoopFilter.MODE_ZEROMV : LoopFilter.MODE_OTHER_INTER;
 
             commitLumaToRecon(s, mbX, mbY, i16.recon);
 
@@ -666,6 +761,10 @@ public final class VP8Encoder {
             int mbIdx = mbY * s.mbCols + mbX;
             s.mbIsI4x4[mbIdx] = false;
             s.mbIsInter[mbIdx] = false;
+            s.mbRefFrame[mbIdx] = LoopFilter.REF_INTRA;
+            // Only i16 intra-in-P is currently emitted (no B_PRED-in-P). Extend to
+            // MODE_BPRED when B_PRED candidates get wired in.
+            s.mbModeLfIdx[mbIdx] = LoopFilter.MODE_NON_BPRED_INTRA;
 
             commitLumaToRecon(s, mbX, mbY, i16.recon);
 

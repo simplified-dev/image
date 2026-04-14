@@ -22,6 +22,37 @@ import org.jetbrains.annotations.NotNull;
  */
 final class LoopFilter {
 
+    // ── Reference-frame labels for per-MB loop-filter indexing (RFC 6386 section 15) ──
+    /** Reference-frame index for intra-coded MBs. */
+    static final int REF_INTRA = 0;
+    /** Reference-frame index for MBs referencing {@code LAST}. */
+    static final int REF_LAST = 1;
+    /** Reference-frame index for MBs referencing {@code GOLDEN}. */
+    static final int REF_GOLDEN = 2;
+    /** Reference-frame index for MBs referencing {@code ALTREF}. */
+    static final int REF_ALTREF = 3;
+
+    // ── Mode-class labels for per-MB loop-filter indexing (RFC 6386 section 15) ──
+    /** Intra MB with 16x16 (non-B_PRED) luma prediction. No {@code mode_lf_delta} applied. */
+    static final int MODE_NON_BPRED_INTRA = 0;
+    /** Intra MB with B_PRED luma. Picks up {@code mode_lf_delta[0]} + inner-edge filtering. */
+    static final int MODE_BPRED = 1;
+    /** Inter MB coded as ZEROMV. Picks up {@code mode_lf_delta[1]}. */
+    static final int MODE_ZEROMV = 2;
+    /** Inter MB coded as NEAREST / NEAR / NEW. Picks up {@code mode_lf_delta[2]}. */
+    static final int MODE_OTHER_INTER = 3;
+    /** Inter MB coded as SPLITMV. Picks up {@code mode_lf_delta[3]}. */
+    static final int MODE_SPLITMV = 4;
+
+    /** Per-MB mode-class index into the {@code mode_lf_delta[4]} array, or {@code -1} for no delta. */
+    private static final int[] MODE_LF_DELTA_INDEX = {
+        -1,   // MODE_NON_BPRED_INTRA (no mode delta)
+         0,   // MODE_BPRED
+         1,   // MODE_ZEROMV
+         2,   // MODE_OTHER_INTER
+         3,   // MODE_SPLITMV
+    };
+
     /** Precomputed per-MB filter strength (matches libwebp's {@code VP8FInfo}). */
     static final class FInfo {
         /** Edge-activity threshold {@code 2*level + ilevel}; {@code 0} means no filtering. */
@@ -45,7 +76,10 @@ final class LoopFilter {
 
     /**
      * Applies the VP8 loop filter to a decoded frame in place. Mirrors libwebp's per-MB
-     * {@code DoFilter} iterating across the full MB grid.
+     * {@code DoFilter} iterating across the full MB grid, with full RFC 6386 section 15
+     * {@code ref_lf_delta} / {@code mode_lf_delta} support: each MB's effective filter
+     * strength is {@code filter_level + ref_lf_delta[mb.ref] + mode_lf_delta[mb.mode]}
+     * when {@code useLfDelta} is set, or just {@code filter_level} otherwise.
      *
      * @param planeY luma plane (row-major, stride {@code yStride})
      * @param planeU chroma U plane; may be {@code null} for simple-only filtering
@@ -58,21 +92,28 @@ final class LoopFilter {
      *               otherwise the normal luma + chroma filter is applied
      * @param filterLevel base loop filter level {@code [0, 63]} from the frame header
      * @param sharpness sharpness parameter {@code [0, 7]} from the frame header
-     * @param mbIsI4x4 per-MB {@code is_i4x4} flags (row-major {@code mbY * mbCols + mbX});
-     *                 {@code true} triggers inner-edge filtering inside that MB
+     * @param mbRefFrame per-MB reference-frame index (row-major), one of {@link #REF_INTRA}
+     *                  / {@link #REF_LAST} / {@link #REF_GOLDEN} / {@link #REF_ALTREF}
+     * @param mbModeLfIdx per-MB mode-class (row-major), one of the {@code MODE_*} constants
+     * @param useLfDelta whether to apply {@code refLfDelta} + {@code modeLfDelta}
+     * @param refLfDelta 4-entry delta vector indexed by reference frame
+     * @param modeLfDelta 4-entry delta vector indexed by {@link #MODE_LF_DELTA_INDEX}
      */
     static void filterFrame(
         short @NotNull [] planeY, short[] planeU, short[] planeV,
         int yStride, int uvStride, int mbCols, int mbRows,
-        boolean simple, int filterLevel, int sharpness, boolean @NotNull [] mbIsI4x4
+        boolean simple, int filterLevel, int sharpness,
+        int @NotNull [] mbRefFrame, int @NotNull [] mbModeLfIdx,
+        boolean useLfDelta, int @NotNull [] refLfDelta, int @NotNull [] modeLfDelta
     ) {
         if (filterLevel == 0) return;
 
-        FInfo[] strengths = computeStrengths(filterLevel, sharpness);
+        FInfo[][] strengths = computeStrengthsTable(
+            filterLevel, sharpness, useLfDelta, refLfDelta, modeLfDelta);
         for (int mbY = 0; mbY < mbRows; mbY++) {
             for (int mbX = 0; mbX < mbCols; mbX++) {
-                boolean i4x4 = mbIsI4x4[mbY * mbCols + mbX];
-                FInfo info = strengths[i4x4 ? 1 : 0];
+                int mbIdx = mbY * mbCols + mbX;
+                FInfo info = strengths[mbRefFrame[mbIdx]][mbModeLfIdx[mbIdx]];
                 if (info.fLimit == 0) continue;
                 doFilter(planeY, planeU, planeV, yStride, uvStride, mbX, mbY, info, simple);
             }
@@ -80,29 +121,50 @@ final class LoopFilter {
     }
 
     /**
-     * Precomputes {@link FInfo} for both {@code i4x4=false} and {@code i4x4=true} MB
-     * flavours at the single segment our encoder/decoder use. Line-for-line port of
-     * libwebp's {@code PrecomputeFilterStrengths} sans segment/LF-delta support.
+     * Precomputes a {@code [ref][mode]} table of {@link FInfo} for all combinations of
+     * reference frame (4) and mode class (5). Line-for-line port of libwebp / libvpx
+     * {@code PrecomputeFilterStrengths} at the single-segment configuration, extended
+     * with the full RFC 6386 section 15 {@code ref_lf_delta} / {@code mode_lf_delta}
+     * pipeline. Entries with {@code fLimit == 0} trigger the no-filter fast path in
+     * {@link #filterFrame}.
      */
-    private static FInfo @NotNull [] computeStrengths(int filterLevel, int sharpness) {
-        FInfo[] out = new FInfo[2];
-        for (int i4x4 = 0; i4x4 <= 1; i4x4++) {
-            int level = filterLevel;
-            if (level <= 0) {
-                out[i4x4] = new FInfo(0, 0, 0, i4x4 != 0);
-                continue;
+    private static FInfo @NotNull [] @NotNull [] computeStrengthsTable(
+        int filterLevel, int sharpness,
+        boolean useLfDelta, int @NotNull [] refLfDelta, int @NotNull [] modeLfDelta
+    ) {
+        FInfo[][] out = new FInfo[4][5];
+        for (int ref = 0; ref < 4; ref++) {
+            for (int mode = 0; mode < 5; mode++) {
+                int level = filterLevel;
+                if (useLfDelta) {
+                    level += refLfDelta[ref];
+                    int modeDeltaIdx = MODE_LF_DELTA_INDEX[mode];
+                    if (modeDeltaIdx >= 0) level += modeLfDelta[modeDeltaIdx];
+                }
+                level = Math.clamp(level, 0, 63);
+                boolean inner = (mode == MODE_BPRED);
+                out[ref][mode] = buildFInfo(level, sharpness, inner);
             }
-            int ilevel = level;
-            if (sharpness > 0) {
-                ilevel >>= (sharpness > 4 ? 2 : 1);
-                if (ilevel > 9 - sharpness) ilevel = 9 - sharpness;
-            }
-            if (ilevel < 1) ilevel = 1;
-            int limit = 2 * level + ilevel;
-            int hev = (level >= 40) ? 2 : (level >= 15) ? 1 : 0;
-            out[i4x4] = new FInfo(limit, ilevel, hev, i4x4 != 0);
         }
         return out;
+    }
+
+    /**
+     * Builds a single {@link FInfo} from a resolved {@code level}, encoding the sharpness
+     * adjustment of {@code ilevel} (RFC 6386 section 15.2) and the {@code hev_threshold}
+     * staircase at {@code level >= 40 / 15 / 0}.
+     */
+    private static @NotNull FInfo buildFInfo(int level, int sharpness, boolean inner) {
+        if (level <= 0) return new FInfo(0, 0, 0, inner);
+        int ilevel = level;
+        if (sharpness > 0) {
+            ilevel >>= (sharpness > 4 ? 2 : 1);
+            if (ilevel > 9 - sharpness) ilevel = 9 - sharpness;
+        }
+        if (ilevel < 1) ilevel = 1;
+        int limit = 2 * level + ilevel;
+        int hev = (level >= 40) ? 2 : (level >= 15) ? 1 : 0;
+        return new FInfo(limit, ilevel, hev, inner);
     }
 
     /** Per-MB filter dispatch. Mirrors libwebp's {@code DoFilter} in {@code src/dec/frame_dec.c}. */

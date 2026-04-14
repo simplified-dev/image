@@ -65,6 +65,22 @@ public final class VP8Decoder {
         final int[] mbMvRow;
         final int[] mbMvCol;
 
+        // Per-MB loop-filter classification tables (row-major mbY*mbCols + mbX):
+        //   mbRefFrame[i]   = LoopFilter.REF_INTRA / REF_LAST / REF_GOLDEN / REF_ALTREF
+        //   mbModeLfIdx[i]  = LoopFilter.MODE_{NON_BPRED_INTRA, BPRED, ZEROMV, OTHER_INTER, SPLITMV}
+        // Consumed by the end-of-frame loop filter to apply RFC 6386 section 15 deltas.
+        final int[] mbRefFrame;
+        final int[] mbModeLfIdx;
+
+        // Filter-delta header state populated by the filter-header parse:
+        //   useLfDelta    - the use_lf_delta bit
+        //   refLfDelta    - 4 ref_lf_delta entries (LAST, GOLDEN, ALTREF, INTRA in RFC order,
+        //                   but we store indexed by LoopFilter.REF_* which puts INTRA at 0)
+        //   modeLfDelta   - 4 mode_lf_delta entries (B_PRED, ZEROMV, NEWMV, SPLITMV)
+        boolean useLfDelta;
+        final int[] refLfDelta = new int[4];
+        final int[] modeLfDelta = new int[4];
+
         // Dequantizer steps (filled after VP8ParseQuant).
         int y1Dc, y1Ac, y2Dc, y2Ac, uvDc, uvAc;
 
@@ -102,6 +118,8 @@ public final class VP8Decoder {
             this.mbIsInter = new boolean[mbCols * mbRows];
             this.mbMvRow = new int[mbCols * mbRows];
             this.mbMvCol = new int[mbCols * mbRows];
+            this.mbRefFrame = new int[mbCols * mbRows];       // defaults to REF_INTRA = 0
+            this.mbModeLfIdx = new int[mbCols * mbRows];       // defaults to MODE_NON_BPRED_INTRA = 0
             this.proba = cloneProba(VP8Tables.COEFFS_PROBA_0);
         }
     }
@@ -194,12 +212,17 @@ public final class VP8Decoder {
         boolean simpleFilter = br.decodeBool() != 0;
         int filterLevel = br.decodeUint(6);
         int sharpness = br.decodeUint(3);
-        if (br.decodeBool() != 0) {                           // use_lf_delta
+        s.useLfDelta = br.decodeBool() != 0;
+        if (s.useLfDelta) {
             if (br.decodeBool() != 0) {                       // update_lf_delta
+                // RFC 6386 section 15: ref_lf_delta and mode_lf_delta are each 4 signed 6-bit
+                // values with per-entry update flags. The wire order indexes by reference
+                // frame (INTRA, LAST, GOLDEN, ALTREF) and by mode class (B_PRED, ZEROMV,
+                // NEWMV/NEAREST/NEAR, SPLITMV).
                 for (int i = 0; i < 4; i++)
-                    if (br.decodeBool() != 0) br.decodeSint(6); // ref_lf_delta
+                    if (br.decodeBool() != 0) s.refLfDelta[i] = br.decodeSint(6);
                 for (int i = 0; i < 4; i++)
-                    if (br.decodeBool() != 0) br.decodeSint(6); // mode_lf_delta
+                    if (br.decodeBool() != 0) s.modeLfDelta[i] = br.decodeSint(6);
             }
         }
 
@@ -317,15 +340,17 @@ public final class VP8Decoder {
             }
         }
 
-        // Loop filter. Applied whether we emitted simple=1 (our encoder) or a libwebp-
-        // produced frame set simple=0. Chroma planes are passed for the normal filter path;
-        // the simple path ignores them.
+        // Loop filter. Normal + simple modes are both driven by the same per-MB
+        // classification tables; ref_lf_delta / mode_lf_delta are applied when the
+        // frame header set use_lf_delta = 1.
         if (filterLevel > 0) {
             LoopFilter.filterFrame(
                 s.reconY, s.reconU, s.reconV,
                 s.lumaStride, s.chromaStride,
                 s.mbCols, s.mbRows,
-                simpleFilter, filterLevel, sharpness, s.mbIsI4x4
+                simpleFilter, filterLevel, sharpness,
+                s.mbRefFrame, s.mbModeLfIdx,
+                s.useLfDelta, s.refLfDelta, s.modeLfDelta
             );
         }
 
@@ -369,7 +394,10 @@ public final class VP8Decoder {
 
         // is_i4x4 - bit=0 means i4x4, bit=1 means 16x16 prediction (libwebp convention).
         boolean isI4x4 = br.decodeBit(145) == 0;
-        s.mbIsI4x4[mbY * s.mbCols + mbX] = isI4x4;
+        int mbIdxKf = mbY * s.mbCols + mbX;
+        s.mbIsI4x4[mbIdxKf] = isI4x4;
+        s.mbRefFrame[mbIdxKf] = LoopFilter.REF_INTRA;
+        s.mbModeLfIdx[mbIdxKf] = isI4x4 ? LoopFilter.MODE_BPRED : LoopFilter.MODE_NON_BPRED_INTRA;
 
         int yMode;
         int[][] subModes = null;
@@ -574,6 +602,10 @@ public final class VP8Decoder {
             s.mbIsI4x4[mbIdx] = false;
             s.mbMvRow[mbIdx] = effInternalRow;
             s.mbMvCol[mbIdx] = effInternalCol;
+            s.mbRefFrame[mbIdx] = LoopFilter.REF_LAST;
+            // mvMode: 0=ZEROMV, 1=NEARESTMV, 2=NEARMV, 3=NEWMV. NEAREST/NEAR/NEW all map
+            // to MODE_OTHER_INTER per RFC 6386 section 15 (mode_lf_delta[2]).
+            s.mbModeLfIdx[mbIdx] = (mvMode == 0) ? LoopFilter.MODE_ZEROMV : LoopFilter.MODE_OTHER_INTER;
 
             // Reset intra-mode neighbour context for downstream intra MBs.
             java.util.Arrays.fill(s.intraT, mbX * 4, mbX * 4 + 4, IntraPrediction.B_DC_PRED);
@@ -596,7 +628,10 @@ public final class VP8Decoder {
         // Intra-in-P-frame: walk the inter Y-mode tree (5 leaves).
         int yMode = br.decodeTree(VP8Tables.YMODE_TREE, s.yModeProba);
         boolean isI4x4 = (yMode == IntraPrediction.B_PRED);
-        s.mbIsI4x4[mbY * s.mbCols + mbX] = isI4x4;
+        int mbIdxIp = mbY * s.mbCols + mbX;
+        s.mbIsI4x4[mbIdxIp] = isI4x4;
+        s.mbRefFrame[mbIdxIp] = LoopFilter.REF_INTRA;
+        s.mbModeLfIdx[mbIdxIp] = isI4x4 ? LoopFilter.MODE_BPRED : LoopFilter.MODE_NON_BPRED_INTRA;
 
         int[][] subModes = null;
         if (isI4x4) {
