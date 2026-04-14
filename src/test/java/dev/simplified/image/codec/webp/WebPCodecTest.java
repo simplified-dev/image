@@ -492,6 +492,127 @@ public class WebPCodecTest {
             return null;
         }
 
+        @Test @DisplayName("QI=0 solid gray reconstructs losslessly through libwebp")
+        void pixelFidelitySolidGray() throws Exception {
+            PixelBuffer buf = PixelBuffer.create(16, 16);
+            buf.fill(0xFF808080);  // mid-gray matches the prediction baseline (128)
+            assertLibwebpDecodesPixel(buf, 1.0f, 0x80, 0x80, 0x80, 4);
+        }
+
+        @Test @DisplayName("QI=0 solid red reconstructs through libwebp within YUV quantization tolerance")
+        void pixelFidelitySolidRed() throws Exception {
+            PixelBuffer buf = PixelBuffer.create(16, 16);
+            buf.fill(0xFFFF0000);
+            assertLibwebpDecodesPixel(buf, 1.0f, 0xFF, 0x00, 0x00, 16);
+        }
+
+        @Test @DisplayName("16x16 gradient reconstructs through libwebp with bounded error at high quality")
+        void pixelFidelityGradient() throws Exception {
+            PixelBuffer buf = PixelBuffer.create(16, 16);
+            for (int y = 0; y < 16; y++)
+                for (int x = 0; x < 16; x++)
+                    buf.setPixel(x, y, 0xFF000000 | ((x * 16) << 16) | ((y * 16) << 8));
+
+            byte[] vp8Payload = VP8Encoder.encode(buf, 1.0f);
+            ConcurrentList<WebPChunk> chunks = Concurrent.newList();
+            chunks.add(RiffContainer.createChunk(WebPChunkType.VP8, vp8Payload));
+            byte[] riff = RiffContainer.write(chunks);
+
+            int[] decoded = decodeWithLibwebp(riff, 16, 16);
+            // Compute mean squared error against the source.
+            long sumSq = 0;
+            int n = 0;
+            for (int y = 0; y < 16; y++)
+                for (int x = 0; x < 16; x++) {
+                    int src = buf.getPixel(x, y);
+                    int dst = decoded[y * 16 + x];
+                    for (int shift : new int[]{0, 8, 16}) {
+                        int diff = ((src >> shift) & 0xFF) - ((dst >> shift) & 0xFF);
+                        sumSq += (long) diff * diff;
+                        n++;
+                    }
+                }
+            double mse = sumSq / (double) n;
+            double psnr = 10.0 * Math.log10(255.0 * 255.0 / mse);
+            if (psnr < 30.0)
+                throw new AssertionError(String.format(
+                    "gradient PSNR = %.2f dB (expected >= 30 dB at quality 1.0)", psnr));
+        }
+
+        private static void assertLibwebpDecodesPixel(
+            PixelBuffer src, float quality, int expectR, int expectG, int expectB, int tolerance
+        ) throws Exception {
+            byte[] vp8Payload = VP8Encoder.encode(src, quality);
+            ConcurrentList<WebPChunk> chunks = Concurrent.newList();
+            chunks.add(RiffContainer.createChunk(WebPChunkType.VP8, vp8Payload));
+            byte[] riff = RiffContainer.write(chunks);
+
+            int[] decoded = decodeWithLibwebp(riff, src.width(), src.height());
+            // Sample the center pixel - edges may drift slightly due to chroma sub-sampling.
+            int centerX = src.width() / 2;
+            int centerY = src.height() / 2;
+            int p = decoded[centerY * src.width() + centerX];
+            int dr = ((p >> 16) & 0xFF) - expectR;
+            int dg = ((p >>  8) & 0xFF) - expectG;
+            int db = ((p >>  0) & 0xFF) - expectB;
+            if (Math.abs(dr) > tolerance || Math.abs(dg) > tolerance || Math.abs(db) > tolerance)
+                throw new AssertionError(String.format(
+                    "center pixel mismatch: expected (%d,%d,%d) got (%d,%d,%d), tolerance=%d",
+                    expectR, expectG, expectB, (p >> 16) & 0xFF, (p >> 8) & 0xFF, p & 0xFF, tolerance));
+        }
+
+        /**
+         * Writes {@code riff} to a temp file, shells out to libwebp, and returns
+         * the fully decoded ARGB pixel buffer.
+         */
+        private static int[] decodeWithLibwebp(byte[] riff, int expectedW, int expectedH)
+            throws Exception {
+            java.nio.file.Path tmp = java.nio.file.Files.createTempFile("vp8-px-", ".webp");
+            try {
+                java.nio.file.Files.write(tmp, riff);
+
+                String script =
+                    "import sys\n" +
+                    "try:\n" +
+                    "    import webp\n" +
+                    "except ImportError:\n" +
+                    "    print('NO_WEBP'); sys.exit(2)\n" +
+                    "img = webp.load_image(r'" + tmp.toAbsolutePath() + "').convert('RGBA')\n" +
+                    "w, h = img.size\n" +
+                    "print(w, h)\n" +
+                    "data = img.tobytes()\n" +
+                    "for i in range(0, len(data), 4):\n" +
+                    "    r, g, b, a = data[i], data[i+1], data[i+2], data[i+3]\n" +
+                    "    print(f'{a:02x}{r:02x}{g:02x}{b:02x}')\n";
+
+                Process p = startPython(script);
+                if (p == null)
+                    throw new org.opentest4j.TestAbortedException(
+                        "No python3/python/py executable found on PATH");
+                String out = new String(p.getInputStream().readAllBytes());
+                int exit = p.waitFor();
+                if (exit == 2 && out.contains("NO_WEBP"))
+                    throw new org.opentest4j.TestAbortedException("Python webp package not installed");
+                if (exit != 0)
+                    throw new AssertionError("libwebp rejected our VP8 bitstream:\n" + out);
+
+                String[] lines = out.trim().split("\\R");
+                String[] dims = lines[0].split("\\s+");
+                int w = Integer.parseInt(dims[0]);
+                int h = Integer.parseInt(dims[1]);
+                if (w != expectedW || h != expectedH)
+                    throw new AssertionError(
+                        "decoded dims " + w + "x" + h + " != expected " + expectedW + "x" + expectedH);
+
+                int[] pixels = new int[w * h];
+                for (int i = 0; i < w * h; i++)
+                    pixels[i] = (int) Long.parseLong(lines[i + 1], 16);
+                return pixels;
+            } finally {
+                java.nio.file.Files.deleteIfExists(tmp);
+            }
+        }
+
     }
 
     // ──── VP8 Token Encoder / Decoder (coefficient tree) ────
