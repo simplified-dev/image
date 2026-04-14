@@ -5,10 +5,7 @@ import lombok.experimental.Accessors;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
-import java.awt.AlphaComposite;
-import java.awt.Graphics2D;
-import java.awt.Rectangle;
-import java.awt.RenderingHints;
+import java.awt.*;
 import java.awt.image.BufferedImage;
 import java.awt.image.ColorModel;
 import java.awt.image.DataBuffer;
@@ -211,6 +208,16 @@ public class PixelBuffer {
     public void setPixels(int x, int y, int w, int h, int @NotNull [] src, int offset, int stride) {
         for (int row = 0; row < h; row++)
             System.arraycopy(src, offset + row * stride, this.pixels, (y + row) * this.width + x, w);
+    }
+
+    /**
+     * Creates a {@link PixelGraphics} context for this buffer. The returned context draws
+     * directly into this buffer's pixel array with no AWT rendering pipeline.
+     *
+     * @return a new graphics context backed by this buffer
+     */
+    public @NotNull PixelGraphics createGraphics() {
+        return new PixelGraphics(this);
     }
 
     /**
