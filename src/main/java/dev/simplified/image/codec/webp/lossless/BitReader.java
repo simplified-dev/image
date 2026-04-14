@@ -1,4 +1,4 @@
-package dev.simplified.image.codec.webp;
+package dev.simplified.image.codec.webp.lossless;
 
 import dev.simplified.image.exception.ImageDecodeException;
 import org.jetbrains.annotations.NotNull;

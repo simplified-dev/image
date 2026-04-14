@@ -1,4 +1,4 @@
-package dev.simplified.image.codec.webp;
+package dev.simplified.image.codec.webp.lossy;
 
 import dev.simplified.image.pixel.PixelBuffer;
 import org.jetbrains.annotations.NotNull;
@@ -29,7 +29,7 @@ import org.jetbrains.annotations.NotNull;
  *
  * @see <a href="https://datatracker.ietf.org/doc/html/rfc6386">RFC 6386</a>
  */
-final class VP8Encoder {
+public final class VP8Encoder {
 
     private VP8Encoder() { }
 
@@ -86,7 +86,7 @@ final class VP8Encoder {
      * @param quality encoding quality in {@code [0.0, 1.0]}
      * @return the encoded VP8 payload bytes
      */
-    static byte @NotNull [] encode(@NotNull PixelBuffer pixels, float quality) {
+    public static byte @NotNull [] encode(@NotNull PixelBuffer pixels, float quality) {
         int width = pixels.width();
         int height = pixels.height();
         int qi = qualityToQi(quality);
