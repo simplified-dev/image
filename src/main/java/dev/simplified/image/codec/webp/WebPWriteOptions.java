@@ -18,6 +18,7 @@ public class WebPWriteOptions implements ImageWriteOptions {
     private final int loopCount;
     private final boolean multithreaded;
     private final boolean alphaCompression;
+    private final boolean usePFrames;
 
     /**
      * Returns a new builder for WebP write options.
@@ -38,6 +39,7 @@ public class WebPWriteOptions implements ImageWriteOptions {
         private int loopCount = 0;
         private boolean multithreaded = true;
         private boolean alphaCompression = true;
+        private boolean usePFrames = false;
 
         /**
          * Enables lossless encoding.
@@ -112,8 +114,28 @@ public class WebPWriteOptions implements ImageWriteOptions {
             return this;
         }
 
+        /**
+         * Enables VP8 P-frame emission for animated lossy output. When enabled, the
+         * writer threads a shared-state session across frames so stationary macroblocks
+         * reuse the prior frame's reconstruction (inter-skip), typically cutting file
+         * size by 50-60% on text/tooltip animations.
+         * <p>
+         * Off by default: the WebP container specification historically restricts the
+         * ANMF VP8 payload to keyframes, so output with P-frames enabled is only
+         * decodable by tools that accept arbitrary VP8 bitstreams (this project's own
+         * reader, libvpx-based decoders). libwebp's reference WebP decoder will not
+         * accept the output.
+         *
+         * @param usePFrames true to enable P-frames for animated lossy encode
+         * @return this builder for chaining
+         */
+        public @NotNull Builder usePFrames(boolean usePFrames) {
+            this.usePFrames = usePFrames;
+            return this;
+        }
+
         public @NotNull WebPWriteOptions build() {
-            return new WebPWriteOptions(this.lossless, this.quality, this.loopCount, this.multithreaded, this.alphaCompression);
+            return new WebPWriteOptions(this.lossless, this.quality, this.loopCount, this.multithreaded, this.alphaCompression, this.usePFrames);
         }
 
     }

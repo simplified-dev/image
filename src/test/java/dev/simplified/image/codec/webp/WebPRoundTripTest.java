@@ -266,6 +266,64 @@ class WebPRoundTripTest {
     }
 
     @Test
+    @DisplayName("animated lossy with P-frames self round-trip: stationary content shrinks and decodes cleanly")
+    void animatedLossyPFramesSelfRoundTrip() {
+        // 4-frame animation with identical frames - every frame after the first should
+        // encode as a P-frame with all MBs inter-skip.
+        ConcurrentList<ImageFrame> frames = Concurrent.newList();
+        for (int f = 0; f < 4; f++) {
+            PixelBuffer fb = PixelBuffer.create(32, 32);
+            for (int y = 0; y < 32; y++)
+                for (int x = 0; x < 32; x++)
+                    fb.setPixel(x, y, 0xFF000000 | ((x * 8) << 16) | ((y * 8) << 8));
+            frames.add(ImageFrame.of(fb, 100, 0, 0,
+                FrameDisposal.DO_NOT_DISPOSE, FrameBlend.OVER));
+        }
+        AnimatedImageData anim = AnimatedImageData.builder()
+            .withWidth(32).withHeight(32)
+            .withFrames(frames)
+            .withLoopCount(0)
+            .withBackgroundColor(0)
+            .build();
+
+        File pFrameOut = outputDir.resolve("anim_pframes.webp").toFile();
+        File keyOnlyOut = outputDir.resolve("anim_keyonly.webp").toFile();
+        ImageFactory factory = new ImageFactory();
+        factory.toFile(anim, ImageFormat.WEBP, pFrameOut,
+            WebPWriteOptions.builder().isLossless(false).withQuality(1.0f).usePFrames(true).build());
+        factory.toFile(anim, ImageFormat.WEBP, keyOnlyOut,
+            WebPWriteOptions.builder().isLossless(false).withQuality(1.0f).build());
+
+        // P-frame version must be smaller on stationary content.
+        if (pFrameOut.length() >= keyOnlyOut.length())
+            throw new AssertionError(String.format(
+                "P-frame WebP (%d B) should be smaller than keyframe-only (%d B) on stationary frames",
+                pFrameOut.length(), keyOnlyOut.length()));
+
+        // Round-trip: reader must decode our P-frame WebP correctly.
+        ImageData decoded = factory.fromFile(pFrameOut);
+        if (!(decoded instanceof AnimatedImageData decAnim))
+            throw new AssertionError("expected AnimatedImageData, got " + decoded.getClass());
+        if (decAnim.getFrames().size() != 4)
+            throw new AssertionError("frame count mismatch: " + decAnim.getFrames().size());
+
+        // All frames should match frame 0's reconstruction (since content is identical).
+        PixelBuffer frame0 = decAnim.getFrames().get(0).pixels();
+        for (int f = 1; f < 4; f++) {
+            PixelBuffer fb = decAnim.getFrames().get(f).pixels();
+            for (int y = 0; y < 32; y++)
+                for (int x = 0; x < 32; x++) {
+                    int want = frame0.getPixel(x, y);
+                    int got = fb.getPixel(x, y);
+                    if (want != got)
+                        throw new AssertionError(String.format(
+                            "frame %d pixel (%d,%d) differs from frame 0: want %08X got %08X",
+                            f, x, y, want, got));
+                }
+        }
+    }
+
+    @Test
     @DisplayName("animated lossy + alpha decodes through libwebp with bit-exact alpha per frame")
     void animatedLossyAlphaLibwebpRoundTrip() throws Exception {
         // 3 frames with SOURCE blending so libwebp's animated decoder emits each frame's
