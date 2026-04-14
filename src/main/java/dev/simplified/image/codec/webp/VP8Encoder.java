@@ -1,366 +1,169 @@
 package dev.simplified.image.codec.webp;
 
 import dev.simplified.image.pixel.PixelBuffer;
-import dev.simplified.image.exception.ImageEncodeException;
 import org.jetbrains.annotations.NotNull;
 
 /**
  * Pure Java VP8 (WebP lossy) encoder.
  * <p>
- * <b>Status: UNSUPPORTED placeholder.</b> {@link WebPImageWriter} rejects
- * {@code isLossless(false)} and always routes through {@link VP8LEncoder} instead.
+ * <b>Status: DC-only keyframe output.</b> Currently emits a single keyframe
+ * where every macroblock is DC_PRED with all coefficients skipped, producing
+ * a uniform mid-gray image regardless of input pixels. The purpose at this
+ * stage is to exercise every required frame-header field so libwebp accepts
+ * the bitstream; pixel fidelity is a later step.
  * <p>
- * The current implementation is a rough structural sketch that does not produce
- * spec-compliant output. Known gaps before any reference decoder will accept the result:
- * <ul>
- *   <li>DCT coefficients are written as fixed-width 11-bit signed integers (see
- *     {@link #encodeLuma} and {@link #encodeChromaPlane}). VP8 requires a prefix-coded
- *     token tree with band-specific probability contexts and EOB markers.</li>
- *   <li>The Y2 block carrying DC coefficients for 16x16 luma prediction is never emitted,
- *     yet the prediction modes assume its presence during reconstruction.</li>
- *   <li>The frame header is missing almost every required field: color space, clamping
- *     type, segment coding (segmentation_map_enabled, update_map, feature flags), MB-level
- *     filter strength deltas, log2 num_partitions, per-partition size fields, the initial
- *     QP plus deltas for Y1/Y2/UV DC/AC, reference-frame refresh flags, loop filter
- *     reference/mode deltas, and the golden/alt frame refresh bits.</li>
- *   <li>Macroblock headers only encode {@code yMode}/{@code uvMode}; real VP8 headers carry
- *     {@code mb_skip_coeff}, {@code segment_id}, reference frame, motion vectors (for P-
- *     frames), luma sub-mode tree for B_PRED, and chroma-pred-mode tree.</li>
- *   <li>{@link BooleanEncoder} may not produce the exact bitstream libwebp's
- *     {@link VP8Decoder} range coder expects - not audited against the spec.</li>
- * </ul>
- * <p>
- * A proper implementation would follow the reference C encoder in libwebp/src/enc/,
- * which is roughly 5000 lines. Until that lands, callers asking for lossy output get a
- * clear {@link UnsupportedOperationException} from {@link WebPImageWriter} rather than
- * silently corrupt bytes.
+ * The bitstream layout follows RFC 6386 and libwebp's reference decoder:
+ * <ol>
+ *   <li>10-byte uncompressed chunk: 3-byte frame tag (keyframe flag,
+ *       version, show-frame flag, first_partition_size), 3-byte sync
+ *       {@code 9D 01 2A}, 2-byte width (14 bits + 2-bit scale), 2-byte
+ *       height.</li>
+ *   <li>First partition (boolean-coded): color space, clamp type, segment
+ *       header (disabled), filter header (disabled), token partition count,
+ *       quantizer, refresh_entropy_probs, 1056 coefficient-probability
+ *       update bits (all "no update"), use_skip_proba, skip_p, then the
+ *       per-macroblock intra-mode headers.</li>
+ *   <li>Token partition(s): empty - every macroblock signals skip=1 in its
+ *       header so the decoder never descends into coefficient parsing.</li>
+ * </ol>
+ *
+ * @see <a href="https://datatracker.ietf.org/doc/html/rfc6386">RFC 6386</a>
  */
 final class VP8Encoder {
+
+    /** Base quantizer index written into the frame header. Unused while all MBs are skipped. */
+    private static final int DEFAULT_Y_AC_QI = 36;
+
+    /** Skip probability written into the frame header. Low value makes skip=1 the cheap path. */
+    private static final int SKIP_PROB = 1;
 
     private VP8Encoder() { }
 
     /**
-     * Encodes pixel data into a VP8 bitstream.
+     * Encodes pixel data into a VP8 keyframe bitstream.
      *
-     * @param pixels the source pixel buffer
-     * @param quality the encoding quality (0.0 - 1.0)
+     * @param pixels source pixel buffer (contents ignored at the DC-only stage)
+     * @param quality encoding quality in {@code [0.0, 1.0]} (unused; reserved)
      * @return the encoded VP8 payload bytes
-     * @throws ImageEncodeException if encoding fails
      */
     static byte @NotNull [] encode(@NotNull PixelBuffer pixels, float quality) {
         int width = pixels.width();
         int height = pixels.height();
-        int[] pixelData = pixels.pixels();
-
         int mbCols = (width + 15) / 16;
         int mbRows = (height + 15) / 16;
 
-        Quantizer quantizer = new Quantizer(quality);
-        RateDistortion rd = new RateDistortion(quantizer.getQP());
+        byte[] firstPartition = encodeFirstPartition(mbCols, mbRows);
+        byte[] tokenPartition = encodeTokenPartition();
 
-        // Allocate reconstructed planes for neighbor prediction
-        int lumaWidth = mbCols * 16;
-        int lumaHeight = mbRows * 16;
-        int chromaWidth = mbCols * 8;
-        int chromaHeight = mbRows * 8;
+        return assembleFrame(width, height, firstPartition, tokenPartition);
+    }
 
-        short[] reconLuma = new short[lumaWidth * lumaHeight];
-        short[] reconCb = new short[chromaWidth * chromaHeight];
-        short[] reconCr = new short[chromaWidth * chromaHeight];
+    /**
+     * Emits the boolean-coded first partition: frame header followed by per-macroblock
+     * intra-mode decisions. Layout must match the order consumed by libwebp's
+     * {@code VP8GetHeaders} / {@code VP8ParseProba} / {@code ParseIntraMode}.
+     */
+    private static byte @NotNull [] encodeFirstPartition(int mbCols, int mbRows) {
+        BooleanEncoder e = new BooleanEncoder(2048);
 
-        java.util.Arrays.fill(reconLuma, (short) 128);
-        java.util.Arrays.fill(reconCb, (short) 128);
-        java.util.Arrays.fill(reconCr, (short) 128);
+        // ── Frame header (VP8GetHeaders) ─────────────────────────────────
+        e.encodeBool(0);                       // color_space (YUV)
+        e.encodeBool(0);                       // clamp_type (clamping required)
 
-        // Token buffer for coefficient encoding
-        BooleanEncoder headerEncoder = new BooleanEncoder(mbCols * mbRows * 64);
-        BooleanEncoder tokenEncoder = new BooleanEncoder(mbCols * mbRows * 256);
+        // Segment header: segmentation disabled.
+        e.encodeBool(0);                       // use_segment
 
-        // Encode macroblocks
+        // Filter header: no loop filter, no delta adjustments.
+        e.encodeBool(0);                       // simple filter flag (arbitrary; level=0 disables filtering anyway)
+        e.encodeUint(0, 6);                    // loop_filter_level
+        e.encodeUint(0, 3);                    // sharpness
+        e.encodeBool(0);                       // use_lf_delta
+
+        // Token partition count: one partition total (log2 = 0).
+        e.encodeUint(0, 2);                    // log2_num_token_partitions
+
+        // Quantizer: fixed base QI, no per-component deltas.
+        e.encodeUint(DEFAULT_Y_AC_QI, 7);      // base_qi
+        e.encodeBool(0);                       // y1_dc_delta_present
+        e.encodeBool(0);                       // y2_dc_delta_present
+        e.encodeBool(0);                       // y2_ac_delta_present
+        e.encodeBool(0);                       // uv_dc_delta_present
+        e.encodeBool(0);                       // uv_ac_delta_present
+
+        // refresh_entropy_probs: decoder ignores for keyframes but the bit is required.
+        e.encodeBool(0);
+
+        // VP8ParseProba: 4*8*3*11 update bits (all "no update"), then use_skip_proba + skip_p.
+        for (int t = 0; t < VP8Tables.NUM_TYPES; t++)
+            for (int b = 0; b < VP8Tables.NUM_BANDS; b++)
+                for (int c = 0; c < VP8Tables.NUM_CTX; c++)
+                    for (int p = 0; p < VP8Tables.NUM_PROBAS; p++)
+                        e.encodeBit(VP8Tables.COEFFS_UPDATE_PROBA[t][b][c][p], 0);
+
+        e.encodeBool(1);                       // use_skip_proba
+        e.encodeUint(SKIP_PROB, 8);            // skip_p
+
+        // ── Per-macroblock intra-mode decisions (ParseIntraMode) ─────────
+        // With segmentation disabled there is no segment bit. We emit:
+        //   skip bit (prob = skip_p)
+        //   is_i4x4 bit (prob 145) - 1 means "use 16x16 mode"
+        //   y-mode tree (probs 156, 163 for DC_PRED) - two 0 bits
+        //   uv-mode tree (prob 142 for DC_PRED) - one 0 bit
         for (int mbY = 0; mbY < mbRows; mbY++) {
             for (int mbX = 0; mbX < mbCols; mbX++) {
-                Macroblock mb = new Macroblock();
-                mb.fromARGB(pixelData, mbX, mbY, width, height);
-
-                // Get neighbor samples for prediction
-                short[] aboveRow = mbY > 0 ? extractAboveRow(reconLuma, mbX, mbY, lumaWidth) : null;
-                short[] leftCol = mbX > 0 ? extractLeftCol(reconLuma, mbX, mbY, lumaWidth) : null;
-                short aboveLeft = (mbX > 0 && mbY > 0) ? reconLuma[(mbY * 16 - 1) * lumaWidth + mbX * 16 - 1] : (short) 128;
-
-                // Select best luma mode
-                mb.yMode = rd.selectBest16x16Mode(mb, aboveRow, leftCol, aboveLeft, quantizer);
-
-                // Select best chroma mode
-                short[] aboveCb = mbY > 0 ? extractAboveRow8(reconCb, mbX, mbY, chromaWidth) : null;
-                short[] leftCb = mbX > 0 ? extractLeftCol8(reconCb, mbX, mbY, chromaWidth) : null;
-                short[] aboveCr = mbY > 0 ? extractAboveRow8(reconCr, mbX, mbY, chromaWidth) : null;
-                short[] leftCr = mbX > 0 ? extractLeftCol8(reconCr, mbX, mbY, chromaWidth) : null;
-                short aboveLeftCb = (mbX > 0 && mbY > 0) ? reconCb[(mbY * 8 - 1) * chromaWidth + mbX * 8 - 1] : (short) 128;
-                short aboveLeftCr = (mbX > 0 && mbY > 0) ? reconCr[(mbY * 8 - 1) * chromaWidth + mbX * 8 - 1] : (short) 128;
-
-                mb.uvMode = rd.selectBestChromaMode(
-                    mb.cb, mb.cr, aboveCb, leftCb, aboveCr, leftCr, aboveLeftCb, aboveLeftCr
-                );
-
-                // Encode prediction mode in header partition
-                headerEncoder.encodeUint(mb.yMode, 2);
-                headerEncoder.encodeUint(mb.uvMode, 2);
-
-                // Predict, compute residual, DCT, quantize, dequantize, reconstruct
-                short[] predicted = new short[256];
-                encodeLuma(mb, predicted, aboveRow, leftCol, aboveLeft, quantizer, tokenEncoder);
-
-                short[] predCb = new short[64];
-                short[] predCr = new short[64];
-                encodeChroma(mb, predCb, predCr, aboveCb, leftCb, aboveCr, leftCr, aboveLeftCb, aboveLeftCr, quantizer, tokenEncoder);
-
-                // Store reconstructed samples for future prediction
-                storeRecon(reconLuma, mb.reconY, mbX, mbY, lumaWidth, 16);
-                storeRecon(reconCb, mb.reconCb, mbX, mbY, chromaWidth, 8);
-                storeRecon(reconCr, mb.reconCr, mbX, mbY, chromaWidth, 8);
+                e.encodeBit(SKIP_PROB, 1);     // skip = 1 (skip all tokens)
+                e.encodeBit(145, 1);           // !is_i4x4 -> 16x16 prediction
+                e.encodeBit(156, 0);           // 16x16 y-mode: DC or V
+                e.encodeBit(163, 0);           // 16x16 y-mode: DC_PRED
+                e.encodeBit(142, 0);           // uv-mode: DC_PRED
             }
         }
 
-        // Apply loop filter
-        int filterLevel = Math.clamp(quantizer.getQP() / 2, 0, 63);
-        LoopFilter.filterSimple(reconLuma, lumaWidth, lumaHeight, filterLevel, 0);
-
-        // Assemble VP8 bitstream
-        return assembleFrame(width, height, quantizer, headerEncoder, tokenEncoder);
+        return e.toByteArray();
     }
 
-    private static void encodeLuma(
-        @NotNull Macroblock mb,
-        short @NotNull [] predicted,
-        short[] aboveRow,
-        short[] leftCol,
-        short aboveLeft,
-        @NotNull Quantizer quantizer,
-        @NotNull BooleanEncoder tokenEncoder
+    /** Token partition is empty - every MB was marked skip=1, so no coefficient tokens follow. */
+    private static byte @NotNull [] encodeTokenPartition() {
+        return new BooleanEncoder(16).toByteArray();
+    }
+
+    /**
+     * Assembles the uncompressed 10-byte frame tag, sync code, dimensions, and
+     * partition payloads into a complete VP8 keyframe.
+     */
+    private static byte @NotNull [] assembleFrame(
+        int width, int height,
+        byte @NotNull [] firstPartition,
+        byte @NotNull [] tokenPartition
     ) {
-        // Generate 16x16 prediction
-        generatePrediction16x16(predicted, aboveRow, leftCol, aboveLeft, mb.yMode);
-
-        // For each 4x4 sub-block: residual -> DCT -> quantize -> encode -> dequantize -> IDCT -> reconstruct
-        for (int by = 0; by < 4; by++) {
-            for (int bx = 0; bx < 4; bx++) {
-                short[] residual = new short[16];
-                short[] coefficients = new short[16];
-
-                for (int y = 0; y < 4; y++)
-                    for (int x = 0; x < 4; x++)
-                        residual[y * 4 + x] = (short) (mb.y[(by * 4 + y) * 16 + bx * 4 + x]
-                            - predicted[(by * 4 + y) * 16 + bx * 4 + x]);
-
-                DCT.forwardDCT(residual, coefficients);
-                quantizer.quantizeY(coefficients);
-
-                // Encode coefficients (simplified: encode as fixed-width values)
-                for (short c : coefficients)
-                    tokenEncoder.encodeSint(c, 11);
-
-                // Reconstruct
-                quantizer.dequantizeY(coefficients);
-                short[] reconstructed = new short[16];
-                DCT.inverseDCT(coefficients, reconstructed);
-
-                for (int y = 0; y < 4; y++)
-                    for (int x = 0; x < 4; x++)
-                        mb.reconY[(by * 4 + y) * 16 + bx * 4 + x] =
-                            (short) clamp(predicted[(by * 4 + y) * 16 + bx * 4 + x] + reconstructed[y * 4 + x]);
-            }
-        }
-    }
-
-    private static void encodeChroma(
-        @NotNull Macroblock mb,
-        short @NotNull [] predCb, short @NotNull [] predCr,
-        short[] aboveCb, short[] leftCb,
-        short[] aboveCr, short[] leftCr,
-        short aboveLeftCb, short aboveLeftCr,
-        @NotNull Quantizer quantizer,
-        @NotNull BooleanEncoder tokenEncoder
-    ) {
-        generatePrediction8x8(predCb, aboveCb, leftCb, aboveLeftCb, mb.uvMode);
-        generatePrediction8x8(predCr, aboveCr, leftCr, aboveLeftCr, mb.uvMode);
-
-        encodeChromaPlane(mb.cb, predCb, mb.reconCb, quantizer, tokenEncoder);
-        encodeChromaPlane(mb.cr, predCr, mb.reconCr, quantizer, tokenEncoder);
-    }
-
-    private static void encodeChromaPlane(
-        short @NotNull [] original, short @NotNull [] predicted, short @NotNull [] recon,
-        @NotNull Quantizer quantizer, @NotNull BooleanEncoder tokenEncoder
-    ) {
-        for (int by = 0; by < 2; by++) {
-            for (int bx = 0; bx < 2; bx++) {
-                short[] residual = new short[16];
-                short[] coefficients = new short[16];
-
-                for (int y = 0; y < 4; y++)
-                    for (int x = 0; x < 4; x++)
-                        residual[y * 4 + x] = (short) (original[(by * 4 + y) * 8 + bx * 4 + x]
-                            - predicted[(by * 4 + y) * 8 + bx * 4 + x]);
-
-                DCT.forwardDCT(residual, coefficients);
-                quantizer.quantizeUV(coefficients);
-
-                for (short c : coefficients)
-                    tokenEncoder.encodeSint(c, 11);
-
-                quantizer.dequantizeUV(coefficients);
-                short[] reconstructed = new short[16];
-                DCT.inverseDCT(coefficients, reconstructed);
-
-                for (int y = 0; y < 4; y++)
-                    for (int x = 0; x < 4; x++) {
-                        int i = (by * 4 + y) * 8 + bx * 4 + x;
-                        recon[i] = (short) clamp(predicted[i] + reconstructed[y * 4 + x]);
-                    }
-            }
-        }
-    }
-
-    private static void generatePrediction16x16(short[] predicted, short[] above, short[] left, short aboveLeft, int mode) {
-        switch (mode) {
-            case IntraPrediction.DC_PRED -> {
-                int sum = 0, count = 0;
-                if (above != null) { for (int i = 0; i < 16; i++) sum += above[i]; count += 16; }
-                if (left != null) { for (int i = 0; i < 16; i++) sum += left[i]; count += 16; }
-                short dc = count > 0 ? (short) ((sum + count / 2) / count) : (short) 128;
-                java.util.Arrays.fill(predicted, dc);
-            }
-            case IntraPrediction.V_PRED -> {
-                if (above == null) { java.util.Arrays.fill(predicted, (short) 127); return; }
-                for (int y = 0; y < 16; y++) System.arraycopy(above, 0, predicted, y * 16, 16);
-            }
-            case IntraPrediction.H_PRED -> {
-                if (left == null) { java.util.Arrays.fill(predicted, (short) 129); return; }
-                for (int y = 0; y < 16; y++) for (int x = 0; x < 16; x++) predicted[y * 16 + x] = left[y];
-            }
-            case IntraPrediction.TM_PRED -> {
-                for (int y = 0; y < 16; y++)
-                    for (int x = 0; x < 16; x++) {
-                        int a = above != null ? above[x] : 127;
-                        int l = left != null ? left[y] : 129;
-                        predicted[y * 16 + x] = (short) clamp(a + l - aboveLeft);
-                    }
-            }
-        }
-    }
-
-    private static void generatePrediction8x8(short[] predicted, short[] above, short[] left, short aboveLeft, int mode) {
-        switch (mode) {
-            case IntraPrediction.DC_PRED -> {
-                int sum = 0, count = 0;
-                if (above != null) { for (int i = 0; i < 8; i++) sum += above[i]; count += 8; }
-                if (left != null) { for (int i = 0; i < 8; i++) sum += left[i]; count += 8; }
-                short dc = count > 0 ? (short) ((sum + count / 2) / count) : (short) 128;
-                java.util.Arrays.fill(predicted, dc);
-            }
-            case IntraPrediction.V_PRED -> {
-                if (above == null) { java.util.Arrays.fill(predicted, (short) 127); return; }
-                for (int y = 0; y < 8; y++) System.arraycopy(above, 0, predicted, y * 8, 8);
-            }
-            case IntraPrediction.H_PRED -> {
-                if (left == null) { java.util.Arrays.fill(predicted, (short) 129); return; }
-                for (int y = 0; y < 8; y++) for (int x = 0; x < 8; x++) predicted[y * 8 + x] = left[y];
-            }
-            case IntraPrediction.TM_PRED -> {
-                for (int y = 0; y < 8; y++)
-                    for (int x = 0; x < 8; x++) {
-                        int a = above != null ? above[x] : 127;
-                        int l = left != null ? left[y] : 129;
-                        predicted[y * 8 + x] = (short) clamp(a + l - aboveLeft);
-                    }
-            }
-        }
-    }
-
-    private static short @NotNull [] extractAboveRow(short @NotNull [] plane, int mbX, int mbY, int planeWidth) {
-        short[] row = new short[16];
-        int y = mbY * 16 - 1;
-        int xStart = mbX * 16;
-        System.arraycopy(plane, y * planeWidth + xStart, row, 0, 16);
-        return row;
-    }
-
-    private static short @NotNull [] extractLeftCol(short @NotNull [] plane, int mbX, int mbY, int planeWidth) {
-        short[] col = new short[16];
-        int x = mbX * 16 - 1;
-        int yStart = mbY * 16;
-        for (int i = 0; i < 16; i++)
-            col[i] = plane[(yStart + i) * planeWidth + x];
-        return col;
-    }
-
-    private static short @NotNull [] extractAboveRow8(short @NotNull [] plane, int mbX, int mbY, int planeWidth) {
-        short[] row = new short[8];
-        int y = mbY * 8 - 1;
-        int xStart = mbX * 8;
-        System.arraycopy(plane, y * planeWidth + xStart, row, 0, 8);
-        return row;
-    }
-
-    private static short @NotNull [] extractLeftCol8(short @NotNull [] plane, int mbX, int mbY, int planeWidth) {
-        short[] col = new short[8];
-        int x = mbX * 8 - 1;
-        int yStart = mbY * 8;
-        for (int i = 0; i < 8; i++)
-            col[i] = plane[(yStart + i) * planeWidth + x];
-        return col;
-    }
-
-    private static void storeRecon(short @NotNull [] plane, short @NotNull [] block, int mbX, int mbY, int planeWidth, int blockSize) {
-        int xStart = mbX * blockSize;
-        int yStart = mbY * blockSize;
-        for (int y = 0; y < blockSize; y++)
-            System.arraycopy(block, y * blockSize, plane, (yStart + y) * planeWidth + xStart, blockSize);
-    }
-
-    private static byte @NotNull [] assembleFrame(int width, int height, @NotNull Quantizer quantizer,
-                                                    @NotNull BooleanEncoder headerEncoder, @NotNull BooleanEncoder tokenEncoder) {
-        byte[] headerData = headerEncoder.toByteArray();
-        byte[] tokenData = tokenEncoder.toByteArray();
-
-        // Build VP8 frame
-        int totalSize = 10 + headerData.length + tokenData.length;
-        byte[] frame = new byte[totalSize];
+        int firstSize = firstPartition.length;
+        byte[] frame = new byte[10 + firstSize + tokenPartition.length];
         int offset = 0;
 
-        // Frame tag (3 bytes): key frame, version 0, show frame, first partition size
-        int firstPartSize = headerData.length;
-        int frameTag = (0) // key frame = 0
-            | (0 << 1) // version = 0
-            | (1 << 4) // show frame
-            | (firstPartSize << 5);
+        // 3-byte frame tag: keyframe=0 | version=0<<1 | show_frame=1<<4 | size<<5
+        int frameTag = (1 << 4) | (firstSize << 5);
         frame[offset++] = (byte) (frameTag & 0xFF);
-        frame[offset++] = (byte) ((frameTag >> 8) & 0xFF);
-        frame[offset++] = (byte) ((frameTag >> 16) & 0xFF);
+        frame[offset++] = (byte) ((frameTag >>> 8) & 0xFF);
+        frame[offset++] = (byte) ((frameTag >>> 16) & 0xFF);
 
-        // Sync code
+        // 3-byte start code.
         frame[offset++] = (byte) 0x9D;
         frame[offset++] = (byte) 0x01;
         frame[offset++] = (byte) 0x2A;
 
-        // Width and height (little-endian 16-bit each)
+        // 2-byte width with top 2 bits = horizontal scale (0).
         frame[offset++] = (byte) (width & 0xFF);
-        frame[offset++] = (byte) ((width >> 8) & 0xFF);
+        frame[offset++] = (byte) ((width >>> 8) & 0x3F);
+
+        // 2-byte height with top 2 bits = vertical scale (0).
         frame[offset++] = (byte) (height & 0xFF);
-        frame[offset++] = (byte) ((height >> 8) & 0xFF);
+        frame[offset++] = (byte) ((height >>> 8) & 0x3F);
 
-        // Header partition
-        System.arraycopy(headerData, 0, frame, offset, headerData.length);
-        offset += headerData.length;
-
-        // Token partition
-        System.arraycopy(tokenData, 0, frame, offset, tokenData.length);
+        System.arraycopy(firstPartition, 0, frame, offset, firstSize);
+        offset += firstSize;
+        System.arraycopy(tokenPartition, 0, frame, offset, tokenPartition.length);
 
         return frame;
-    }
-
-    private static int clamp(int value) {
-        return Math.clamp(value, 0, 255);
     }
 
 }
