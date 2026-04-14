@@ -2,14 +2,14 @@ package dev.simplified.image.codec.webp;
 
 import dev.simplified.collection.Concurrent;
 import dev.simplified.collection.ConcurrentList;
-import dev.simplified.image.AnimatedImageData;
+import dev.simplified.image.data.AnimatedImageData;
 import dev.simplified.image.ImageData;
 import dev.simplified.image.ImageFormat;
-import dev.simplified.image.ImageFrame;
-import dev.simplified.image.ImageFrame.Blend;
-import dev.simplified.image.ImageFrame.Disposal;
-import dev.simplified.image.PixelBuffer;
-import dev.simplified.image.StaticImageData;
+import dev.simplified.image.data.ImageFrame;
+import dev.simplified.image.data.FrameBlend;
+import dev.simplified.image.data.FrameDisposal;
+import dev.simplified.image.pixel.PixelBuffer;
+import dev.simplified.image.data.StaticImageData;
 import dev.simplified.image.codec.ImageReadOptions;
 import dev.simplified.image.codec.ImageReader;
 import dev.simplified.image.exception.ImageDecodeException;
@@ -118,12 +118,12 @@ public class WebPImageReader implements ImageReader {
             int durationMs = (anmf[12] & 0xFF) | ((anmf[13] & 0xFF) << 8) | ((anmf[14] & 0xFF) << 16);
             int flagsByte = anmf[15] & 0xFF;
 
-            Disposal disposal = (flagsByte & 0x01) != 0
-                ? Disposal.RESTORE_TO_BACKGROUND
-                : Disposal.DO_NOT_DISPOSE;
-            Blend blend = (flagsByte & 0x02) != 0
-                ? Blend.SOURCE
-                : Blend.OVER;
+            FrameDisposal disposal = (flagsByte & 0x01) != 0
+                ? FrameDisposal.RESTORE_TO_BACKGROUND
+                : FrameDisposal.DO_NOT_DISPOSE;
+            FrameBlend blend = (flagsByte & 0x02) != 0
+                ? FrameBlend.SOURCE
+                : FrameBlend.OVER;
 
             // Frame bitstream starts at offset 16
             byte[] frameBitstream = new byte[anmf.length - 16];

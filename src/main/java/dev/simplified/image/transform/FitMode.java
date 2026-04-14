@@ -1,4 +1,4 @@
-package dev.simplified.image;
+package dev.simplified.image.transform;
 
 /**
  * Defines how animation frames are fitted onto a target canvas during normalization.

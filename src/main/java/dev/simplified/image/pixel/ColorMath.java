@@ -1,4 +1,4 @@
-package dev.simplified.image;
+package dev.simplified.image.pixel;
 
 import lombok.experimental.UtilityClass;
 import org.jetbrains.annotations.NotNull;
@@ -12,32 +12,60 @@ import org.jetbrains.annotations.NotNull;
 @UtilityClass
 public class ColorMath {
 
+    // --- constants ---
+
+    /** An opaque black ARGB pixel. */
+    public static final int BLACK = 0xFF000000;
+
     /** A fully transparent ARGB pixel. */
     public static final int TRANSPARENT = 0x00000000;
 
     /** An opaque white ARGB pixel. */
     public static final int WHITE = 0xFFFFFFFF;
 
-    /** An opaque black ARGB pixel. */
-    public static final int BLACK = 0xFF000000;
-
     // --- channel accessors ---
 
+    /**
+     * Extracts the alpha channel from a packed ARGB pixel.
+     *
+     * @param argb the packed ARGB pixel
+     * @return the alpha channel in {@code [0, 255]}
+     */
     public static int alpha(int argb) {
         return (argb >>> 24) & 0xFF;
     }
 
-    public static int red(int argb) {
-        return (argb >>> 16) & 0xFF;
+    /**
+     * Extracts the blue channel from a packed ARGB pixel.
+     *
+     * @param argb the packed ARGB pixel
+     * @return the blue channel in {@code [0, 255]}
+     */
+    public static int blue(int argb) {
+        return argb & 0xFF;
     }
 
+    /**
+     * Extracts the green channel from a packed ARGB pixel.
+     *
+     * @param argb the packed ARGB pixel
+     * @return the green channel in {@code [0, 255]}
+     */
     public static int green(int argb) {
         return (argb >>> 8) & 0xFF;
     }
 
-    public static int blue(int argb) {
-        return argb & 0xFF;
+    /**
+     * Extracts the red channel from a packed ARGB pixel.
+     *
+     * @param argb the packed ARGB pixel
+     * @return the red channel in {@code [0, 255]}
+     */
+    public static int red(int argb) {
+        return (argb >>> 16) & 0xFF;
     }
+
+    // --- packing ---
 
     /**
      * Packs individual ARGB channel values into a single 32-bit int.
@@ -128,58 +156,21 @@ public class ColorMath {
         };
     }
 
-    private static int blendNormal(int src, int dst) {
-        int sa = alpha(src);
-        if (sa == 0xFF) return src;
-        if (sa == 0) return dst;
+    // --- luma ---
 
-        int da = alpha(dst);
-        float srcA = sa / 255f;
-        float invSrcA = 1f - srcA;
-
-        int r = Math.round(red(src) * srcA + red(dst) * invSrcA);
-        int g = Math.round(green(src) * srcA + green(dst) * invSrcA);
-        int b = Math.round(blue(src) * srcA + blue(dst) * invSrcA);
-        int a = Math.round(sa + da * invSrcA);
-        return pack(a, r, g, b);
-    }
-
-    private static int blendAdd(int src, int dst) {
-        int sa = alpha(src);
-        if (sa == 0) return dst;
-
-        float srcA = sa / 255f;
-        int r = Math.min(255, red(dst) + Math.round(red(src) * srcA));
-        int g = Math.min(255, green(dst) + Math.round(green(src) * srcA));
-        int b = Math.min(255, blue(dst) + Math.round(blue(src) * srcA));
-        int a = Math.min(255, alpha(dst) + sa);
-        return pack(a, r, g, b);
-    }
-
-    private static int blendMultiply(int src, int dst) {
-        int sa = alpha(src);
-        if (sa == 0) return dst;
-
-        int r = (red(src) * red(dst)) / 255;
-        int g = (green(src) * green(dst)) / 255;
-        int b = (blue(src) * blue(dst)) / 255;
-        return pack(alpha(dst), r, g, b);
-    }
-
-    private static int blendOverlay(int src, int dst) {
-        int sa = alpha(src);
-        if (sa == 0) return dst;
-
-        int r = overlayChannel(red(src), red(dst));
-        int g = overlayChannel(green(src), green(dst));
-        int b = overlayChannel(blue(src), blue(dst));
-        return pack(alpha(dst), r, g, b);
-    }
-
-    private static int overlayChannel(int s, int d) {
-        return d < 128
-            ? (2 * s * d) / 255
-            : 255 - (2 * (255 - s) * (255 - d)) / 255;
+    /**
+     * Computes the perceptual luminance of a packed ARGB pixel using the Rec. 601 coefficients,
+     * weighted by the pixel's alpha.
+     *
+     * @param argb the packed ARGB pixel
+     * @return the luminance in {@code [0, 255]}
+     */
+    static float luma(int argb) {
+        int a = alpha(argb);
+        int r = red(argb);
+        int g = green(argb);
+        int b = blue(argb);
+        return (r * 0.299f + g * 0.587f + b * 0.114f) * (a / 255f);
     }
 
     // --- tinting ---
@@ -215,6 +206,62 @@ public class ColorMath {
         }
 
         return PixelBuffer.of(result, w, h);
+    }
+
+    // --- private helpers ---
+
+    private static int blendAdd(int src, int dst) {
+        int sa = alpha(src);
+        if (sa == 0) return dst;
+
+        float srcA = sa / 255f;
+        int r = Math.min(255, red(dst) + Math.round(red(src) * srcA));
+        int g = Math.min(255, green(dst) + Math.round(green(src) * srcA));
+        int b = Math.min(255, blue(dst) + Math.round(blue(src) * srcA));
+        int a = Math.min(255, alpha(dst) + sa);
+        return pack(a, r, g, b);
+    }
+
+    private static int blendMultiply(int src, int dst) {
+        int sa = alpha(src);
+        if (sa == 0) return dst;
+
+        int r = (red(src) * red(dst)) / 255;
+        int g = (green(src) * green(dst)) / 255;
+        int b = (blue(src) * blue(dst)) / 255;
+        return pack(alpha(dst), r, g, b);
+    }
+
+    private static int blendNormal(int src, int dst) {
+        int sa = alpha(src);
+        if (sa == 0xFF) return src;
+        if (sa == 0) return dst;
+
+        int da = alpha(dst);
+        float srcA = sa / 255f;
+        float invSrcA = 1f - srcA;
+
+        int r = Math.round(red(src) * srcA + red(dst) * invSrcA);
+        int g = Math.round(green(src) * srcA + green(dst) * invSrcA);
+        int b = Math.round(blue(src) * srcA + blue(dst) * invSrcA);
+        int a = Math.round(sa + da * invSrcA);
+        return pack(a, r, g, b);
+    }
+
+    private static int blendOverlay(int src, int dst) {
+        int sa = alpha(src);
+        if (sa == 0) return dst;
+
+        int r = overlayChannel(red(src), red(dst));
+        int g = overlayChannel(green(src), green(dst));
+        int b = overlayChannel(blue(src), blue(dst));
+        return pack(alpha(dst), r, g, b);
+    }
+
+    private static int overlayChannel(int s, int d) {
+        return d < 128
+            ? (2 * s * d) / 255
+            : 255 - (2 * (255 - s) * (255 - d)) / 255;
     }
 
 }

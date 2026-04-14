@@ -2,14 +2,14 @@ package dev.simplified.image.codec.gif;
 
 import dev.simplified.collection.Concurrent;
 import dev.simplified.collection.ConcurrentList;
-import dev.simplified.image.AnimatedImageData;
+import dev.simplified.image.data.AnimatedImageData;
 import dev.simplified.image.ImageData;
 import dev.simplified.image.ImageFormat;
-import dev.simplified.image.ImageFrame;
-import dev.simplified.image.ImageFrame.Blend;
-import dev.simplified.image.ImageFrame.Disposal;
-import dev.simplified.image.PixelBuffer;
-import dev.simplified.image.StaticImageData;
+import dev.simplified.image.data.ImageFrame;
+import dev.simplified.image.data.FrameBlend;
+import dev.simplified.image.data.FrameDisposal;
+import dev.simplified.image.pixel.PixelBuffer;
+import dev.simplified.image.data.StaticImageData;
 import dev.simplified.image.codec.ImageReadOptions;
 import dev.simplified.image.codec.ImageReader;
 import dev.simplified.image.exception.ImageDecodeException;
@@ -63,7 +63,7 @@ public class GifImageReader implements ImageReader {
             int delayMs = 100;
             int offsetX = 0;
             int offsetY = 0;
-            Disposal disposal = Disposal.NONE;
+            FrameDisposal disposal = FrameDisposal.NONE;
 
             if (metadata != null) {
                 String formatName = metadata.getNativeMetadataFormatName();
@@ -78,7 +78,7 @@ public class GifImageReader implements ImageReader {
 
                     String disposalAttr = gce.getAttribute("disposalMethod");
                     if (StringUtil.isNotEmpty(disposalAttr))
-                        disposal = Disposal.of(disposalAttr);
+                        disposal = FrameDisposal.of(disposalAttr);
                 }
 
                 // Extract ImageDescriptor for offsets
@@ -98,7 +98,7 @@ public class GifImageReader implements ImageReader {
                 }
             }
 
-            frames.add(ImageFrame.of(PixelBuffer.wrap(image), delayMs, offsetX, offsetY, disposal, Blend.SOURCE));
+            frames.add(ImageFrame.of(PixelBuffer.wrap(image), delayMs, offsetX, offsetY, disposal, FrameBlend.SOURCE));
         }
 
         reader.dispose();

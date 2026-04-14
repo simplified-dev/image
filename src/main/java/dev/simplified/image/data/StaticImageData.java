@@ -1,7 +1,9 @@
-package dev.simplified.image;
+package dev.simplified.image.data;
 
 import dev.simplified.collection.Concurrent;
 import dev.simplified.collection.ConcurrentList;
+import dev.simplified.image.ImageData;
+import dev.simplified.image.pixel.PixelBuffer;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;

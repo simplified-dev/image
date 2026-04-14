@@ -1,6 +1,6 @@
 package dev.simplified.image.codec.webp;
 
-import dev.simplified.image.PixelBuffer;
+import dev.simplified.image.pixel.PixelBuffer;
 import dev.simplified.image.exception.ImageEncodeException;
 import org.jetbrains.annotations.NotNull;
 

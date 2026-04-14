@@ -1,4 +1,4 @@
-package dev.simplified.image;
+package dev.simplified.image.pixel;
 
 /**
  * Per-pixel alpha compositing modes for ARGB pixel blending.

@@ -3,11 +3,13 @@ package dev.simplified.image.codec.webp;
 
 import dev.simplified.collection.Concurrent;
 import dev.simplified.collection.ConcurrentList;
-import dev.simplified.image.AnimatedImageData;
+import dev.simplified.image.data.AnimatedImageData;
 import dev.simplified.image.ImageData;
 import dev.simplified.image.ImageFormat;
-import dev.simplified.image.ImageFrame;
-import dev.simplified.image.PixelBuffer;
+import dev.simplified.image.data.FrameBlend;
+import dev.simplified.image.data.FrameDisposal;
+import dev.simplified.image.data.ImageFrame;
+import dev.simplified.image.pixel.PixelBuffer;
 import dev.simplified.image.codec.ImageWriteOptions;
 import dev.simplified.image.codec.ImageWriter;
 import org.jetbrains.annotations.NotNull;
@@ -194,8 +196,8 @@ public class WebPImageWriter implements ImageWriter {
         payload[14] = (byte) ((dur >> 16) & 0xFF);
 
         int flags = 0;
-        if (frame.disposal() == ImageFrame.Disposal.RESTORE_TO_BACKGROUND) flags |= 0x01;
-        if (frame.blend() == ImageFrame.Blend.SOURCE) flags |= 0x02;
+        if (frame.disposal() == FrameDisposal.RESTORE_TO_BACKGROUND) flags |= 0x01;
+        if (frame.blend() == FrameBlend.SOURCE) flags |= 0x02;
         payload[15] = (byte) flags;
 
         System.arraycopy(frameBitstream, 0, payload, 16, frameBitstream.length);
