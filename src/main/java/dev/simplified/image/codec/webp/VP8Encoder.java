@@ -7,10 +7,33 @@ import org.jetbrains.annotations.NotNull;
 /**
  * Pure Java VP8 (WebP lossy) encoder.
  * <p>
- * Encodes ARGB pixel data into a VP8 bitstream using boolean arithmetic
- * coding, rate-distortion optimized intra-frame prediction, forward DCT,
- * and quantization. Each macroblock (16x16) is encoded with the best
- * prediction mode selected via R-D optimization.
+ * <b>Status: UNSUPPORTED placeholder.</b> {@link WebPImageWriter} rejects
+ * {@code isLossless(false)} and always routes through {@link VP8LEncoder} instead.
+ * <p>
+ * The current implementation is a rough structural sketch that does not produce
+ * spec-compliant output. Known gaps before any reference decoder will accept the result:
+ * <ul>
+ *   <li>DCT coefficients are written as fixed-width 11-bit signed integers (see
+ *     {@link #encodeLuma} and {@link #encodeChromaPlane}). VP8 requires a prefix-coded
+ *     token tree with band-specific probability contexts and EOB markers.</li>
+ *   <li>The Y2 block carrying DC coefficients for 16x16 luma prediction is never emitted,
+ *     yet the prediction modes assume its presence during reconstruction.</li>
+ *   <li>The frame header is missing almost every required field: color space, clamping
+ *     type, segment coding (segmentation_map_enabled, update_map, feature flags), MB-level
+ *     filter strength deltas, log2 num_partitions, per-partition size fields, the initial
+ *     QP plus deltas for Y1/Y2/UV DC/AC, reference-frame refresh flags, loop filter
+ *     reference/mode deltas, and the golden/alt frame refresh bits.</li>
+ *   <li>Macroblock headers only encode {@code yMode}/{@code uvMode}; real VP8 headers carry
+ *     {@code mb_skip_coeff}, {@code segment_id}, reference frame, motion vectors (for P-
+ *     frames), luma sub-mode tree for B_PRED, and chroma-pred-mode tree.</li>
+ *   <li>{@link BooleanEncoder} may not produce the exact bitstream libwebp's
+ *     {@link VP8Decoder} range coder expects - not audited against the spec.</li>
+ * </ul>
+ * <p>
+ * A proper implementation would follow the reference C encoder in libwebp/src/enc/,
+ * which is roughly 5000 lines. Until that lands, callers asking for lossy output get a
+ * clear {@link UnsupportedOperationException} from {@link WebPImageWriter} rather than
+ * silently corrupt bytes.
  */
 final class VP8Encoder {
 

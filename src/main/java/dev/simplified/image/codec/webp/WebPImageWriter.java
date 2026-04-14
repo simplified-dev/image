@@ -44,6 +44,21 @@ public class WebPImageWriter implements ImageWriter {
             alphaCompression = webpOptions.isAlphaCompression();
         }
 
+        // Lossy VP8 output is gated off: the current VP8Encoder is a rough sketch. It
+        // emits DCT coefficients as fixed-width 11-bit signed values instead of VP8's
+        // prefix-coded token trees, skips the Y2 DC block for 16x16 modes, and omits
+        // most of the frame-header fields (token-partition counts, QP deltas, loop filter
+        // params, reference frame refresh flags). No reference decoder accepts the
+        // output. Until a spec-complete rewrite lands, force lossless so callers get a
+        // valid file rather than silently corrupt bytes. See VP8Encoder javadoc.
+        if (!lossless) {
+            throw new UnsupportedOperationException(
+                "Lossy VP8 encoding is currently not supported - the VP8 encoder is a placeholder "
+                + "that does not produce spec-compliant bitstreams. Use WebPWriteOptions.isLossless() "
+                + "(VP8L) for now."
+            );
+        }
+
         if (data instanceof AnimatedImageData animated) {
             if (loopCount == 0 && animated.getLoopCount() != 0)
                 loopCount = animated.getLoopCount();
@@ -121,11 +136,12 @@ public class WebPImageWriter implements ImageWriter {
         chunks.add(RiffContainer.createChunk(WebPChunkType.ANIM, buildAnimPayload(data.getBackgroundColor(), loopCount)));
 
         // ANMF frames
+        WebPChunkType innerType = lossless ? WebPChunkType.VP8L : WebPChunkType.VP8;
         for (int i = 0; i < frames.size(); i++) {
             ImageFrame frame = frames.get(i);
             byte[] framePayload = encodedPayloads.get(i);
             chunks.add(RiffContainer.createChunk(WebPChunkType.ANMF,
-                buildAnmfPayload(frame, framePayload)));
+                buildAnmfPayload(frame, framePayload, innerType)));
         }
 
         return RiffContainer.write(chunks);
@@ -170,8 +186,24 @@ public class WebPImageWriter implements ImageWriter {
         return payload;
     }
 
-    private static byte @NotNull [] buildAnmfPayload(@NotNull ImageFrame frame, byte @NotNull [] frameBitstream) {
-        byte[] payload = new byte[16 + frameBitstream.length];
+    /**
+     * Builds the payload of an ANMF (Animation Frame) chunk.
+     * <p>
+     * Per the WebP Extended File Format spec, the 16-byte animation header is followed by
+     * <i>sub-chunks</i> (a VP8L/VP8 chunk, optionally preceded by ALPH) each with its own
+     * 8-byte FourCC + size header. Writing the raw encoded bitstream directly - without
+     * wrapping it in its own FourCC-prefixed sub-chunk - produces a file that libwebp will
+     * reject with {@code VP8_STATUS_BITSTREAM_ERROR}, which was the source of the "file
+     * contains errors" diagnostic.
+     */
+    private static byte @NotNull [] buildAnmfPayload(
+        @NotNull ImageFrame frame,
+        byte @NotNull [] frameBitstream,
+        @NotNull WebPChunkType innerType
+    ) {
+        int innerPayloadLen = frameBitstream.length;
+        int innerPad = innerPayloadLen & 1;
+        byte[] payload = new byte[16 + 8 + innerPayloadLen + innerPad];
 
         int x = frame.offsetX() / 2;
         int y = frame.offsetY() / 2;
@@ -200,7 +232,18 @@ public class WebPImageWriter implements ImageWriter {
         if (frame.blend() == FrameBlend.SOURCE) flags |= 0x02;
         payload[15] = (byte) flags;
 
-        System.arraycopy(frameBitstream, 0, payload, 16, frameBitstream.length);
+        // Inner sub-chunk header: 4-byte FourCC + 4-byte LE size + payload + optional pad.
+        byte[] fourCC = innerType.getFourCC().getBytes();
+        payload[16] = fourCC[0];
+        payload[17] = fourCC[1];
+        payload[18] = fourCC[2];
+        payload[19] = fourCC[3];
+        payload[20] = (byte) (innerPayloadLen & 0xFF);
+        payload[21] = (byte) ((innerPayloadLen >> 8) & 0xFF);
+        payload[22] = (byte) ((innerPayloadLen >> 16) & 0xFF);
+        payload[23] = (byte) ((innerPayloadLen >> 24) & 0xFF);
+        System.arraycopy(frameBitstream, 0, payload, 24, innerPayloadLen);
+        // innerPad byte at the end is already zero-initialized.
         return payload;
     }
 
