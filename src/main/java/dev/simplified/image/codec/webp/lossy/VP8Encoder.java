@@ -60,6 +60,14 @@ public final class VP8Encoder {
         // Quantizer steps.
         final int y1Dc, y1Ac, y2Dc, y2Ac, uvDc, uvAc;
 
+        // Trellis / R-D matrices (per-coefficient q, iq, bias, sharpen).
+        final QuantMatrix y1Mtx, y2Mtx, uvMtx;
+
+        // R-D lambdas, derived from QI via libwebp's {@code SetupMatrices} formulas.
+        // {@code score = RD_DISTO_MULT * distortion + rate * lambda}.
+        final int lambdaI4, lambdaUv;
+        final int lambdaTrellisI4, lambdaTrellisI16, lambdaTrellisUv;
+
         final BooleanEncoder header;   // first partition: frame header + per-MB modes
         final BooleanEncoder tokens;   // token partition: coefficient streams
 
@@ -81,6 +89,21 @@ public final class VP8Encoder {
             int uvQi = Math.min(qi, 117);          // spec: uvDc saturates at QI 117
             this.uvDc = VP8Tables.DC_Q_LOOKUP[uvQi];
             this.uvAc = VP8Tables.AC_Q_LOOKUP[qi];
+
+            this.y1Mtx = QuantMatrix.luma(y1Dc, y1Ac);
+            this.y2Mtx = QuantMatrix.lumaY2(y2Dc, y2Ac);
+            this.uvMtx = QuantMatrix.chroma(uvDc, uvAc);
+
+            // libwebp's average-quantizer-driven lambdas. We don't have per-segment quant so
+            // q_i4 == y1Ac (average of the flat matrix), q_i16 == y2Ac, q_uv == uvAc.
+            int qI4 = y1Ac;
+            int qUv = uvAc;
+            int qI16 = y2Ac;
+            this.lambdaI4 = Math.max(1, (3 * qI4 * qI4) >> 7);
+            this.lambdaUv = Math.max(1, (3 * qUv * qUv) >> 6);
+            this.lambdaTrellisI4 = Math.max(1, (7 * qI4 * qI4) >> 3);
+            this.lambdaTrellisI16 = Math.max(1, (qI16 * qI16) >> 2);
+            this.lambdaTrellisUv = Math.max(1, (qUv * qUv) << 1);
 
             this.header = new BooleanEncoder(2048);
             this.tokens = new BooleanEncoder(mbCols * mbRows * 1024);
@@ -206,28 +229,21 @@ public final class VP8Encoder {
         short vuAboveLeft = (mbX > 0 && mbY > 0)
             ? s.reconV[(mbY * 8 - 1) * s.chromaStride + mbX * 8 - 1] : (short) 128;
 
-        // 3. 16x16 luma path - DCT, quantize, and reconstruct into a local 256-sample buffer.
+        // 3. 16x16 luma path - DCT + trellis + reconstruct into a local 256-sample buffer.
         short[] predY16 = new short[256];
         int yMode16 = selectBest16x16Mode(mb.y, yAbove, yLeft, yAboveLeft, predY16);
-        short[] y2 = new short[16];
-        short[][] yAc16 = new short[16][16];
-        forwardY(mb.y, predY16, y2, yAc16, s.y1Ac);
-        short[] y2Coef = new short[16];
-        DCT.forwardWHT(y2, y2Coef);
-        y2Coef[0] = (short) (y2Coef[0] / s.y2Dc);
-        for (int i = 1; i < 16; i++) y2Coef[i] = (short) (y2Coef[i] / s.y2Ac);
-        short[] recon16 = reconstructLuma16x16(s, predY16, y2Coef, yAc16);
-        long sse16 = sumSquaredError(mb.y, recon16);
+        I16Result i16 = trellisI16(s, mb.y, predY16, mbX);
+        long sse16 = sumSquaredError(mb.y, i16.recon);
+        long rdScore16 = sse16 * VP8Costs.RD_DISTO_MULT + (long) i16.rate * s.lambdaTrellisI16;
 
         // 4. B_PRED luma path - per-sub-block mode + reconstruct into a local 256-sample buffer.
         BPredResult bpred = encodeBPredLuma(s, mb.y, mbX, mbY);
 
-        // 5. Pick the winner. Plain SSE comparison; libwebp's PickBestIntra4 adds a bit-cost
-        //    lambda we don't have yet, but at sharp boundaries (text, glyph edges) B_PRED's
-        //    SSE drops far enough to dominate the implicit overhead anyway.
-        boolean useBPred = bpred.sse < sse16;
+        // 5. Pick the winner by R-D score. The B_PRED path already accumulates per-sub-block
+        //    {@code sse*RD_DISTO_MULT + rate*lambda_i4}; we compare that against the i16 total.
+        boolean useBPred = bpred.rdScore < rdScore16;
 
-        // 6. Chroma: select shared mode + DCT + quant.
+        // 6. Chroma: mode selection + DCT + trellis.
         short[] predU = new short[64];
         short[] predV = new short[64];
         int uvMode = selectBestChromaMode(
@@ -235,15 +251,11 @@ public final class VP8Encoder {
             mb.cr, vAbove, vLeft, vuAboveLeft,
             predU, predV
         );
-        short[][] uCoef = new short[4][16];
-        short[][] vCoef = new short[4][16];
-        forwardChroma(mb.cb, predU, uCoef, s.uvDc, s.uvAc);
-        forwardChroma(mb.cr, predV, vCoef, s.uvDc, s.uvAc);
 
         // 7. Commit luma reconstruction to the frame's reconY plane.
-        commitLumaToRecon(s, mbX, mbY, useBPred ? bpred.recon : recon16);
+        commitLumaToRecon(s, mbX, mbY, useBPred ? bpred.recon : i16.recon);
 
-        // 8. Emit per-MB header + tokens.
+        // 8. Emit per-MB header.
         BooleanEncoder h = s.header;
         if (useBPred) {
             h.encodeBit(145, 0);                            // is_i4x4 = true
@@ -258,25 +270,172 @@ public final class VP8Encoder {
         }
         emitUvMode(h, uvMode);
 
-        emitMbTokens(s, mbX, useBPred, y2Coef, useBPred ? bpred.yAc : yAc16, uCoef, vCoef);
+        // 9. Emit tokens + quantize+emit chroma (using trellis in emit-time order so each
+        //    block sees the correct {@code top_nz + left_nz} context).
+        emitLumaTokens(s, mbX, useBPred, i16.y2ZigZag, useBPred ? bpred.yAc : i16.yAcZigZag);
+        ChromaResult uResult = trellisAndEmitChroma(s, mbX, mb.cb, predU, /*isU=*/ true);
+        ChromaResult vResult = trellisAndEmitChroma(s, mbX, mb.cr, predV, /*isU=*/ false);
 
-        // 9. Commit chroma reconstruction.
-        reconstructChroma(s.reconU, s.chromaStride, mbX, mbY, predU, uCoef, s.uvDc, s.uvAc);
-        reconstructChroma(s.reconV, s.chromaStride, mbX, mbY, predV, vCoef, s.uvDc, s.uvAc);
+        // 10. Commit chroma reconstruction using the dequantized coefficients from trellis.
+        commitChromaFromDequant(s.reconU, s.chromaStride, mbX, mbY, predU, uResult.dequant);
+        commitChromaFromDequant(s.reconV, s.chromaStride, mbX, mbY, predV, vResult.dequant);
+    }
+
+    /** Output of the per-MB 16x16 luma encode: zig-zag coefficients for emit + reconstruction. */
+    private static final class I16Result {
+        final short[] y2ZigZag;              // Y2 block, zig-zag order (16 entries)
+        final short[][] yAcZigZag;           // 16 Y AC blocks, zig-zag order
+        final short[] recon;                 // 256-sample reconstructed MB
+        final int rate;                      // sum of residual bit costs across Y2 + 16 Y AC blocks
+
+        I16Result(short[] y2ZigZag, short[][] yAcZigZag, short[] recon, int rate) {
+            this.y2ZigZag = y2ZigZag;
+            this.yAcZigZag = yAcZigZag;
+            this.recon = recon;
+            this.rate = rate;
+        }
+    }
+
+    /**
+     * DCTs, trellis-quantizes, and reconstructs a 16x16 luma macroblock. Produces
+     * zig-zag-order Y2 + 16 Y AC coefficient blocks for token emission, and a 256-sample
+     * MB-local reconstruction buffer. Does NOT mutate the frame-level {@link State#topNz}
+     * or {@link State#leftNz} - those are updated by the emit pass.
+     */
+    private static @NotNull I16Result trellisI16(
+        @NotNull State s, short @NotNull [] src, short @NotNull [] pred, int mbX
+    ) {
+        // DCT each 4x4 sub-block; collect DC coefficients for the Y2 WHT.
+        short[][] yDctRaster = new short[16][16];
+        short[] y2Raw = new short[16];
+        for (int by = 0; by < 4; by++) {
+            for (int bx = 0; bx < 4; bx++) {
+                short[] residual = new short[16];
+                for (int y = 0; y < 4; y++)
+                    for (int x = 0; x < 4; x++) {
+                        int idx = (by * 4 + y) * 16 + bx * 4 + x;
+                        residual[y * 4 + x] = (short) (src[idx] - pred[idx]);
+                    }
+                short[] coef = new short[16];
+                DCT.forwardDCT(residual, coef);
+                y2Raw[by * 4 + bx] = coef[0];
+                coef[0] = 0;
+                yDctRaster[by * 4 + bx] = coef;
+            }
+        }
+
+        // Local nz context mirrors what emitLumaTokens will see (pre-MB state).
+        int[] topNz = { s.topNz[mbX][0], s.topNz[mbX][1], s.topNz[mbX][2], s.topNz[mbX][3] };
+        int[] leftNz = { s.leftNz[0], s.leftNz[1], s.leftNz[2], s.leftNz[3] };
+        int topNzY2 = s.topNz[mbX][8], leftNzY2 = s.leftNz[8];
+
+        // Y2: WHT + plain quantize (libwebp's {@code ReconstructIntra16} always uses
+        // {@code VP8EncQuantizeBlockWHT} for Y2 regardless of the trellis flag).
+        short[] y2Dct = new short[16];
+        DCT.forwardWHT(y2Raw, y2Dct);
+        short[] y2ZigZag = plainQuantZigZag(y2Dct, s.y2Dc, s.y2Ac);
+        int rate = VP8Costs.residualCost(topNzY2 + leftNzY2, VP8Tables.TYPE_I16_DC, 0, y2ZigZag);
+
+        // y2Dct has been overwritten with raster-order dequantized values by plainQuantZigZag.
+        // Inverse WHT to recover per-sub-block DC values for reconstruction.
+        short[] dcValues = new short[16];
+        DCT.inverseWHT(y2Dct, dcValues);
+
+        // Y AC: trellis-quantize each sub-block in raster order, accumulate rate.
+        short[][] yAcZigZag = new short[16][16];
+        for (int by = 0; by < 4; by++) {
+            for (int bx = 0; bx < 4; bx++) {
+                int ctx = topNz[bx] + leftNz[by];
+                short[] dct = yDctRaster[by * 4 + bx]; // DC was already zeroed
+                short[] zz = new short[16];
+                int nz = TrellisQuantizer.quantize(
+                    dct, zz, ctx, VP8Tables.TYPE_I16_AC, s.y1Mtx, s.lambdaTrellisI16);
+                yAcZigZag[by * 4 + bx] = zz;
+                rate += VP8Costs.residualCost(ctx, VP8Tables.TYPE_I16_AC, 1, zz);
+                topNz[bx] = nz;
+                leftNz[by] = nz;
+            }
+        }
+
+        // Reconstruct the MB using predicted samples + dequantized coefficients (Y2 DC re-
+        // instated + per-block AC from trellis).
+        short[] recon = new short[256];
+        for (int by = 0; by < 4; by++) {
+            for (int bx = 0; bx < 4; bx++) {
+                short[] dequant = yDctRaster[by * 4 + bx]; // trellis filled these in-place
+                dequant[0] = dcValues[by * 4 + bx];
+                short[] residual = new short[16];
+                DCT.inverseDCT(dequant, residual);
+                for (int yy = 0; yy < 4; yy++)
+                    for (int xx = 0; xx < 4; xx++) {
+                        int idx = (by * 4 + yy) * 16 + bx * 4 + xx;
+                        recon[idx] = (short) clamp(pred[idx] + residual[yy * 4 + xx]);
+                    }
+            }
+        }
+        return new I16Result(y2ZigZag, yAcZigZag, recon, rate);
+    }
+
+    /** Output of the per-channel chroma trellis+emit pass. */
+    private static final class ChromaResult {
+        final short[][] dequant;            // 4 sub-blocks of raster-order dequantized coefficients
+        ChromaResult(short[][] dequant) { this.dequant = dequant; }
+    }
+
+    /**
+     * DCTs, trellis-quantizes, and emits one chroma channel (U or V). The trellis and emit
+     * share the same per-sub-block {@code top + left} nz context, which the emit call updates
+     * in {@link State#topNz}/{@link State#leftNz}.
+     *
+     * @param isU {@code true} for U (context slots 4..5), {@code false} for V (slots 6..7)
+     */
+    private static @NotNull ChromaResult trellisAndEmitChroma(
+        @NotNull State s, int mbX, short @NotNull [] src, short @NotNull [] pred, boolean isU
+    ) {
+        int[] top = s.topNz[mbX];
+        int[] left = s.leftNz;
+        int baseIdx = isU ? 4 : 6;
+        short[][] dequant = new short[4][];
+
+        for (int by = 0; by < 2; by++) {
+            for (int bx = 0; bx < 2; bx++) {
+                short[] residual = new short[16];
+                for (int y = 0; y < 4; y++)
+                    for (int x = 0; x < 4; x++) {
+                        int idx = (by * 4 + y) * 8 + bx * 4 + x;
+                        residual[y * 4 + x] = (short) (src[idx] - pred[idx]);
+                    }
+                short[] dct = new short[16];
+                DCT.forwardDCT(residual, dct);
+                int ctx = top[baseIdx + bx] + left[baseIdx + by];
+                short[] zz = new short[16];
+                TrellisQuantizer.quantize(
+                    dct, zz, ctx, VP8Tables.TYPE_CHROMA_A, s.uvMtx, s.lambdaTrellisUv);
+                dequant[by * 2 + bx] = dct;
+
+                int nz = VP8TokenEncoder.emit(
+                    s.tokens, zz, 0, ctx, VP8Tables.TYPE_CHROMA_A, VP8Tables.COEFFS_PROBA_0);
+                top[baseIdx + bx] = nz;
+                left[baseIdx + by] = nz;
+            }
+        }
+        return new ChromaResult(dequant);
     }
 
     /** Output of the per-MB B_PRED evaluation path. */
     private static final class BPredResult {
         final int[] modes;          // 16 sub-block modes, raster order (by * 4 + bx)
-        final short[][] yAc;        // 16 quantized coefficient blocks, raster order
+        final short[][] yAc;        // 16 quantized coefficient blocks, <b>zig-zag order</b>
         final short[] recon;        // 256 reconstructed luma samples, MB-local raster
         final long sse;             // sum-of-squared-error vs source
+        final long rdScore;         // {@code RD_DISTO_MULT * sse + rate * lambda} summed over sub-blocks
 
-        BPredResult(int[] modes, short[][] yAc, short[] recon, long sse) {
+        BPredResult(int[] modes, short[][] yAc, short[] recon, long sse, long rdScore) {
             this.modes = modes;
             this.yAc = yAc;
             this.recon = recon;
             this.sse = sse;
+            this.rdScore = rdScore;
         }
     }
 
@@ -291,12 +450,20 @@ public final class VP8Encoder {
         short[][] yAc = new short[16][];
         short[] recon = new short[256];
         long totalSse = 0;
+        long totalRDScore = 0;
 
         // Sub-block mode neighbour context tracked locally (so we don't update s.intraT/L
         // until after we know B_PRED has won).
         int[] localTop = new int[4];
         for (int bx = 0; bx < 4; bx++) localTop[bx] = s.intraT[mbX * 4 + bx];
         int[] localLeft = s.intraL.clone();
+
+        // Non-zero sub-block contexts tracked locally so token-cost scoring sees the same
+        // {@code top_nz + left_nz} values that libwebp's {@code PickBestIntra4} passes into
+        // its {@code VP8Residual}. Mirror layout of {@link State#topNz} (rows 0..3 = luma).
+        int[] localTopNz = new int[4];
+        for (int bx = 0; bx < 4; bx++) localTopNz[bx] = s.topNz[mbX][bx];
+        int[] localLeftNz = { s.leftNz[0], s.leftNz[1], s.leftNz[2], s.leftNz[3] };
 
         for (int by = 0; by < 4; by++) {
             for (int bx = 0; bx < 4; bx++) {
@@ -309,43 +476,59 @@ public final class VP8Encoder {
                     for (int xx = 0; xx < 4; xx++)
                         srcBlock[yy * 4 + xx] = src[(by * 4 + yy) * 16 + bx * 4 + xx];
 
+                // Mode-context for the i4 mode-cost table.
+                int aboveMode = by > 0 ? modes[(by - 1) * 4 + bx] : localTop[bx];
+                int leftMode = bx > 0 ? modes[by * 4 + bx - 1] : localLeft[by];
+                int[] modeCosts = VP8Costs.FIXED_COSTS_I4[aboveMode][leftMode];
+                int ctxNz = localTopNz[bx] + localLeftNz[by];
+
                 short[] bestRecon = new short[16];
-                short[] bestCoef = new short[16];
+                short[] bestCoef = new short[16];    // zig-zag order (ready for emit)
                 int bestMode = -1;
-                long bestSse = Long.MAX_VALUE;
+                int bestNz = 0;
+                long bestScore = Long.MAX_VALUE;
+                long bestSseValue = Long.MAX_VALUE;
                 short[] cand = new short[16];
                 short[] candResidual = new short[16];
-                short[] candCoef = new short[16];
                 short[] candDeq = new short[16];
+                short[] candZigZag = new short[16];
                 short[] candReconBlk = new short[16];
 
                 for (int mode = 0; mode < IntraPrediction.NUM_4x4_MODES; mode++) {
                     IntraPrediction.predict4x4(cand, above, left, aboveLeft, mode);
                     for (int i = 0; i < 16; i++)
                         candResidual[i] = (short) (srcBlock[i] - cand[i]);
-                    DCT.forwardDCT(candResidual, candCoef);
-                    candDeq[0] = (short) ((candCoef[0] / s.y1Dc) * s.y1Dc);
-                    candCoef[0] = (short) (candCoef[0] / s.y1Dc);
-                    for (int i = 1; i < 16; i++) {
-                        candCoef[i] = (short) (candCoef[i] / s.y1Ac);
-                        candDeq[i] = (short) (candCoef[i] * s.y1Ac);
-                    }
-                    short[] candResidualReconstructed = new short[16];
-                    DCT.inverseDCT(candDeq, candResidualReconstructed);
+                    DCT.forwardDCT(candResidual, candDeq);
+                    // Trellis-quantize (candDeq becomes raster-dequantized, candZigZag is
+                    // zig-zag-order quantized levels).
+                    java.util.Arrays.fill(candZigZag, (short) 0);
+                    int nz = TrellisQuantizer.quantize(
+                        candDeq, candZigZag, ctxNz, VP8Tables.TYPE_I4_AC, s.y1Mtx, s.lambdaTrellisI4);
+
+                    DCT.inverseDCT(candDeq, candResidual);
                     for (int i = 0; i < 16; i++)
-                        candReconBlk[i] = (short) Math.clamp(cand[i] + candResidualReconstructed[i], 0, 255);
+                        candReconBlk[i] = (short) Math.clamp(cand[i] + candResidual[i], 0, 255);
+
                     long sse = sumSquaredError(srcBlock, candReconBlk);
-                    if (sse < bestSse) {
-                        bestSse = sse;
+                    // R-D: lambda_i4 * mode-tree fixed cost, added to distortion. Residual
+                    // cost is intentionally omitted: including it at small quantizers causes
+                    // the encoder to prefer simpler modes with larger quantization error.
+                    long score = sse * VP8Costs.RD_DISTO_MULT
+                        + (long) modeCosts[mode] * s.lambdaI4;
+                    if (score < bestScore) {
+                        bestScore = score;
+                        bestSseValue = sse;
                         bestMode = mode;
+                        bestNz = nz;
                         System.arraycopy(candReconBlk, 0, bestRecon, 0, 16);
-                        System.arraycopy(candCoef, 0, bestCoef, 0, 16);
+                        System.arraycopy(candZigZag, 0, bestCoef, 0, 16);
                     }
                 }
 
                 modes[by * 4 + bx] = bestMode;
                 yAc[by * 4 + bx] = bestCoef;
-                totalSse += bestSse;
+                totalSse += bestSseValue;
+                totalRDScore += bestScore;
 
                 // Write reconstructed sub-block into the local 16x16 buffer.
                 for (int yy = 0; yy < 4; yy++)
@@ -354,10 +537,12 @@ public final class VP8Encoder {
 
                 localTop[bx] = bestMode;     // for next row's above-neighbour context
                 localLeft[by] = bestMode;    // for next column's left-neighbour context
+                localTopNz[bx] = bestNz;
+                localLeftNz[by] = bestNz;
             }
         }
 
-        return new BPredResult(modes, yAc, recon, totalSse);
+        return new BPredResult(modes, yAc, recon, totalSse, totalRDScore);
     }
 
     /** Maps a 16x16 luma macroblock mode to the analogous B_PRED sub-block constant. */
@@ -424,35 +609,20 @@ public final class VP8Encoder {
     }
 
     /**
-     * Reconstructs a 16x16 luma macroblock from a 16x16 prediction plus quantized Y2/Y AC
-     * coefficients, returning a 256-sample MB-local buffer (does not mutate {@code s.reconY}).
+     * Plain (non-trellis) quantization of a single 4x4 DCT block. Overwrites {@code in[]} with
+     * raster-order dequantized values and returns the zig-zag-ordered quantized levels.
+     * Used for the Y2 (WHT) block, which libwebp never trellises.
      */
-    private static short[] reconstructLuma16x16(
-        @NotNull State s, short @NotNull [] predY,
-        short @NotNull [] y2Coef, short @NotNull [] @NotNull [] yAc
-    ) {
-        short[] dq = new short[16];
-        dq[0] = (short) (y2Coef[0] * s.y2Dc);
-        for (int i = 1; i < 16; i++) dq[i] = (short) (y2Coef[i] * s.y2Ac);
-        short[] dcValues = new short[16];
-        DCT.inverseWHT(dq, dcValues);
-
-        short[] recon = new short[256];
-        for (int by = 0; by < 4; by++) {
-            for (int bx = 0; bx < 4; bx++) {
-                short[] coef = yAc[by * 4 + bx].clone();
-                coef[0] = dcValues[by * 4 + bx];
-                for (int i = 1; i < 16; i++) coef[i] = (short) (coef[i] * s.y1Ac);
-                short[] residual = new short[16];
-                DCT.inverseDCT(coef, residual);
-                for (int yy = 0; yy < 4; yy++)
-                    for (int xx = 0; xx < 4; xx++) {
-                        int idx = (by * 4 + yy) * 16 + bx * 4 + xx;
-                        recon[idx] = (short) clamp(predY[idx] + residual[yy * 4 + xx]);
-                    }
-            }
+    private static short @NotNull [] plainQuantZigZag(short @NotNull [] in, int dcQ, int acQ) {
+        short[] zz = new short[16];
+        for (int n = 0; n < 16; n++) {
+            int j = VP8Tables.ZIGZAG[n];
+            int q = (j == 0) ? dcQ : acQ;
+            int level = in[j] / q;
+            zz[n] = (short) level;
+            in[j] = (short) (level * q);
         }
-        return recon;
+        return zz;
     }
 
     /** Copies a 16x16 MB-local reconstruction buffer to the appropriate region of {@code s.reconY}. */
@@ -464,70 +634,37 @@ public final class VP8Encoder {
     }
 
     /**
-     * For each of the 16 4x4 sub-blocks in the 16x16 luma MB: compute residual,
-     * forward-DCT, extract DC into {@code y2}, quantize the AC coefficients.
+     * Reconstructs a chroma channel from its prediction plus per-sub-block raster-order
+     * dequantized coefficients (as produced by {@link #trellisAndEmitChroma}), and commits
+     * the result to the appropriate region of {@code plane}.
      */
-    private static void forwardY(
-        short @NotNull [] src, short @NotNull [] pred,
-        short @NotNull [] y2, short @NotNull [] @NotNull [] yAc, int y1Ac
-    ) {
-        for (int by = 0; by < 4; by++) {
-            for (int bx = 0; bx < 4; bx++) {
-                short[] residual = new short[16];
-                for (int y = 0; y < 4; y++)
-                    for (int x = 0; x < 4; x++) {
-                        int idx = (by * 4 + y) * 16 + bx * 4 + x;
-                        residual[y * 4 + x] = (short) (src[idx] - pred[idx]);
-                    }
-                short[] coef = new short[16];
-                DCT.forwardDCT(residual, coef);
-                y2[by * 4 + bx] = coef[0];
-                coef[0] = 0; // DC is coded in the Y2 block; AC block has zero DC.
-                for (int i = 1; i < 16; i++)
-                    coef[i] = (short) (coef[i] / y1Ac);
-                yAc[by * 4 + bx] = coef;
-            }
-        }
-    }
-
-    /**
-     * Forward-DCT + quantize each of the 4 chroma 4x4 sub-blocks (DC included, no WHT).
-     */
-    private static void forwardChroma(
-        short @NotNull [] src, short @NotNull [] pred,
-        short @NotNull [] @NotNull [] out, int uvDc, int uvAc
+    private static void commitChromaFromDequant(
+        short @NotNull [] plane, int stride, int mbX, int mbY,
+        short @NotNull [] pred, short @NotNull [] @NotNull [] dequant
     ) {
         for (int by = 0; by < 2; by++) {
             for (int bx = 0; bx < 2; bx++) {
                 short[] residual = new short[16];
+                DCT.inverseDCT(dequant[by * 2 + bx], residual);
                 for (int y = 0; y < 4; y++)
                     for (int x = 0; x < 4; x++) {
-                        int idx = (by * 4 + y) * 8 + bx * 4 + x;
-                        residual[y * 4 + x] = (short) (src[idx] - pred[idx]);
+                        int predIdx = (by * 4 + y) * 8 + bx * 4 + x;
+                        int planeIdx = (mbY * 8 + by * 4 + y) * stride + mbX * 8 + bx * 4 + x;
+                        plane[planeIdx] = (short) clamp(pred[predIdx] + residual[y * 4 + x]);
                     }
-                short[] coef = new short[16];
-                DCT.forwardDCT(residual, coef);
-                coef[0] = (short) (coef[0] / uvDc);
-                for (int i = 1; i < 16; i++)
-                    coef[i] = (short) (coef[i] / uvAc);
-                out[by * 2 + bx] = coef;
             }
         }
     }
 
     /**
-     * Emits all coefficient tokens for one MB in libwebp's raster order.
-     * <p>
-     * For 16x16 macroblocks the order is Y2 (type=1, first=0), then 16 Y AC blocks
-     * (type=0, first=1), then 4 U + 4 V (type=2, first=0). For B_PRED the Y2 block is
-     * absent: 16 Y blocks emit at first=0 with type=I4_AC, then chroma as before.
-     *
-     * @param y2 quantized Y2 coefficients - ignored when {@code isBPred} is true
+     * Emits the luma coefficient tokens for one MB in libwebp's order: Y2 first
+     * (if {@code !isBPred}), then 16 Y sub-blocks in raster order. Coefficient blocks are
+     * already in zig-zag order - trellis writes directly to zig-zag. Updates the
+     * {@link State#topNz}/{@link State#leftNz} luma slots.
      */
-    private static void emitMbTokens(
+    private static void emitLumaTokens(
         @NotNull State s, int mbX, boolean isBPred,
-        short @NotNull [] y2, short @NotNull [] @NotNull [] yAc,
-        short @NotNull [] @NotNull [] uCoef, short @NotNull [] @NotNull [] vCoef
+        short @NotNull [] y2ZigZag, short @NotNull [] @NotNull [] yAcZigZag
     ) {
         BooleanEncoder t = s.tokens;
         int[] top = s.topNz[mbX];
@@ -539,54 +676,24 @@ public final class VP8Encoder {
             yFirst = 0;
             yType = VP8Tables.TYPE_I4_AC;
             // B_PRED MBs have no Y2 block - per libwebp ParseResiduals, neither encoder
-            // nor decoder touches the Y2 nz context bits (top[8]/left[8]) here. They
-            // retain whatever the prior i16x16 MB last wrote (or zero from row reset).
+            // nor decoder touches the Y2 nz context bits (top[8]/left[8]) here.
         } else {
-            // Y2 block (DC coefficients of all 16 Y sub-blocks).
-            short[] zz = toZigzag(y2);
             int ctx = top[8] + left[8];
-            int nz = VP8TokenEncoder.emit(t, zz, 0, ctx, VP8Tables.TYPE_I16_DC, VP8Tables.COEFFS_PROBA_0);
+            int nz = VP8TokenEncoder.emit(
+                t, y2ZigZag, 0, ctx, VP8Tables.TYPE_I16_DC, VP8Tables.COEFFS_PROBA_0);
             top[8] = left[8] = nz;
             yFirst = 1;
             yType = VP8Tables.TYPE_I16_AC;
         }
 
-        // Y blocks - 16 blocks in raster order.
         for (int y = 0; y < 4; y++) {
             for (int x = 0; x < 4; x++) {
-                short[] zz = toZigzag(yAc[y * 4 + x]);
                 int ctx = top[x] + left[y];
-                int nz = VP8TokenEncoder.emit(t, zz, yFirst, ctx, yType, VP8Tables.COEFFS_PROBA_0);
+                int nz = VP8TokenEncoder.emit(
+                    t, yAcZigZag[y * 4 + x], yFirst, ctx, yType, VP8Tables.COEFFS_PROBA_0);
                 top[x] = left[y] = nz;
             }
         }
-
-        // U blocks (indices 4..5 column-wise / 4..5 row-wise in nz tables).
-        for (int y = 0; y < 2; y++) {
-            for (int x = 0; x < 2; x++) {
-                short[] zz = toZigzag(uCoef[y * 2 + x]);
-                int ctx = top[4 + x] + left[4 + y];
-                int nz = VP8TokenEncoder.emit(t, zz, 0, ctx, VP8Tables.TYPE_CHROMA_A, VP8Tables.COEFFS_PROBA_0);
-                top[4 + x] = left[4 + y] = nz;
-            }
-        }
-
-        // V blocks (indices 6..7).
-        for (int y = 0; y < 2; y++) {
-            for (int x = 0; x < 2; x++) {
-                short[] zz = toZigzag(vCoef[y * 2 + x]);
-                int ctx = top[6 + x] + left[6 + y];
-                int nz = VP8TokenEncoder.emit(t, zz, 0, ctx, VP8Tables.TYPE_CHROMA_A, VP8Tables.COEFFS_PROBA_0);
-                top[6 + x] = left[6 + y] = nz;
-            }
-        }
-    }
-
-    /** Reorders a 4x4 block from raster order into VP8 zig-zag order. */
-    private static short[] toZigzag(short @NotNull [] raster) {
-        short[] zz = new short[16];
-        for (int i = 0; i < 16; i++) zz[i] = raster[VP8Tables.ZIGZAG[i]];
-        return zz;
     }
 
     /**
@@ -649,8 +756,11 @@ public final class VP8Encoder {
     }
 
     /**
-     * Picks the 16x16 luma mode whose prediction minimises SSE against the
-     * source samples. Fills {@code predOut} with that prediction.
+     * Picks the 16x16 luma mode that minimises {@code RD_DISTO_MULT * sse + modeCost * lambda_d}
+     * against the source samples, where {@code modeCost = VP8Costs.FIXED_COSTS_I16[mode]}
+     * and {@code lambda_d = 106} (libwebp's {@code lambda_d_i16} constant from
+     * {@code RefineUsingDistortion} in {@code src/enc/quant_enc.c}). Fills {@code predOut}
+     * with the winning prediction.
      *
      * @return the selected {@link IntraPrediction} mode constant
      */
@@ -666,8 +776,9 @@ public final class VP8Encoder {
         for (int mode : modes) {
             IntraPrediction.predict16x16(candidate, above, left, aboveLeft, mode);
             long sse = sumSquaredError(src, candidate);
-            if (sse < bestScore) {
-                bestScore = sse;
+            long score = sse * VP8Costs.RD_DISTO_MULT + (long) VP8Costs.FIXED_COSTS_I16[mode] * 106;
+            if (score < bestScore) {
+                bestScore = score;
                 bestMode = mode;
                 System.arraycopy(candidate, 0, predOut, 0, 256);
             }
@@ -676,8 +787,10 @@ public final class VP8Encoder {
     }
 
     /**
-     * Picks the shared chroma 8x8 mode that minimises combined SSE across
-     * both U and V. Fills {@code predU}/{@code predV} with that prediction.
+     * Picks the shared chroma 8x8 mode that minimises
+     * {@code RD_DISTO_MULT * (sseU + sseV) + VP8Costs.FIXED_COSTS_UV[mode] * 120}, where
+     * {@code 120} is libwebp's {@code lambda_d_uv} ({@code src/enc/quant_enc.c}). Fills
+     * {@code predU}/{@code predV} with the winning predictions.
      */
     private static int selectBestChromaMode(
         short @NotNull [] srcU, short[] aboveU, short[] leftU, short aboveLeftU,
@@ -694,8 +807,9 @@ public final class VP8Encoder {
             IntraPrediction.predict8x8(candU, aboveU, leftU, aboveLeftU, mode);
             IntraPrediction.predict8x8(candV, aboveV, leftV, aboveLeftV, mode);
             long sse = sumSquaredError(srcU, candU) + sumSquaredError(srcV, candV);
-            if (sse < bestScore) {
-                bestScore = sse;
+            long score = sse * VP8Costs.RD_DISTO_MULT + (long) VP8Costs.FIXED_COSTS_UV[mode] * 120;
+            if (score < bestScore) {
+                bestScore = score;
                 bestMode = mode;
                 System.arraycopy(candU, 0, predU, 0, 64);
                 System.arraycopy(candV, 0, predV, 0, 64);
@@ -776,27 +890,6 @@ public final class VP8Encoder {
         short[] col = new short[n];
         for (int i = 0; i < n; i++) col[i] = plane[(y0 + i) * stride + x0 - 1];
         return col;
-    }
-
-    private static void reconstructChroma(
-        short @NotNull [] plane, int stride, int mbX, int mbY,
-        short @NotNull [] pred, short @NotNull [] @NotNull [] coef, int dcQ, int acQ
-    ) {
-        for (int by = 0; by < 2; by++) {
-            for (int bx = 0; bx < 2; bx++) {
-                short[] c = coef[by * 2 + bx].clone();
-                c[0] = (short) (c[0] * dcQ);
-                for (int i = 1; i < 16; i++) c[i] = (short) (c[i] * acQ);
-                short[] residual = new short[16];
-                DCT.inverseDCT(c, residual);
-                for (int y = 0; y < 4; y++)
-                    for (int x = 0; x < 4; x++) {
-                        int predIdx = (by * 4 + y) * 8 + bx * 4 + x;
-                        int planeIdx = (mbY * 8 + by * 4 + y) * stride + mbX * 8 + bx * 4 + x;
-                        plane[planeIdx] = (short) clamp(pred[predIdx] + residual[y * 4 + x]);
-                    }
-            }
-        }
     }
 
     private static int clamp(int v) {
