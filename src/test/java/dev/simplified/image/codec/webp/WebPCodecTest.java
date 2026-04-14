@@ -367,6 +367,133 @@ public class WebPCodecTest {
 
     }
 
+    // ──── VP8 Lossy Encoder (libwebp wire-format validation) ────
+
+    @Nested
+    class VP8EncoderTests {
+
+        @Test @DisplayName("2x2 DC-only frame emits 10-byte uncompressed header with correct sync")
+        void frameHeader2x2() {
+            PixelBuffer buf = PixelBuffer.create(2, 2);
+            buf.fill(0xFFFF0000);
+            byte[] payload = VP8Encoder.encode(buf, 0.75f);
+
+            assertThat("payload length >= 10", payload.length >= 10, is(true));
+
+            // First three bytes: frame tag (key=0, version=0, show=1, first_partition_size).
+            int tag = (payload[0] & 0xFF) | ((payload[1] & 0xFF) << 8) | ((payload[2] & 0xFF) << 16);
+            assertThat("keyframe flag (bit 0) is 0", tag & 0x01, is(0));
+            assertThat("version (bits 1..3) is 0", (tag >>> 1) & 0x7, is(0));
+            assertThat("show_frame (bit 4) is 1", (tag >>> 4) & 0x1, is(1));
+            int firstPartSize = (tag >>> 5) & 0x7FFFF;
+            assertThat("first_partition_size > 0", firstPartSize > 0, is(true));
+
+            // Sync code.
+            assertThat(payload[3], is((byte) 0x9D));
+            assertThat(payload[4], is((byte) 0x01));
+            assertThat(payload[5], is((byte) 0x2A));
+
+            // Dimensions (14-bit each, low byte then high byte with scale in top 2 bits).
+            int w = (payload[6] & 0xFF) | ((payload[7] & 0x3F) << 8);
+            int h = (payload[8] & 0xFF) | ((payload[9] & 0x3F) << 8);
+            assertThat("width", w, is(2));
+            assertThat("height", h, is(2));
+
+            // Frame layout: 10-byte header + first_partition_size + (possibly) token partition.
+            assertThat("total >= header + first partition", payload.length >= 10 + firstPartSize, is(true));
+        }
+
+        @Test @DisplayName("2x2 DC-only VP8 decodes in libwebp via Python")
+        void lossyVp82x2LibwebpRoundTrip() throws Exception {
+            PixelBuffer buf = PixelBuffer.create(2, 2);
+            buf.fill(0xFFFF0000);
+            byte[] vp8Payload = VP8Encoder.encode(buf, 0.75f);
+
+            ConcurrentList<WebPChunk> chunks = Concurrent.newList();
+            chunks.add(RiffContainer.createChunk(WebPChunkType.VP8, vp8Payload));
+            byte[] riff = RiffContainer.write(chunks);
+
+            verifyDecodesInLibwebp(riff, 2, 2, "dc_only_2x2");
+        }
+
+        @Test @DisplayName("16x16 DC-only VP8 decodes in libwebp")
+        void lossyVp816x16LibwebpRoundTrip() throws Exception {
+            PixelBuffer buf = PixelBuffer.create(16, 16);
+            for (int y = 0; y < 16; y++)
+                for (int x = 0; x < 16; x++)
+                    buf.setPixel(x, y, 0xFF000000 | ((x * 16) << 16) | ((y * 16) << 8));
+            byte[] vp8Payload = VP8Encoder.encode(buf, 0.75f);
+
+            ConcurrentList<WebPChunk> chunks = Concurrent.newList();
+            chunks.add(RiffContainer.createChunk(WebPChunkType.VP8, vp8Payload));
+            byte[] riff = RiffContainer.write(chunks);
+
+            verifyDecodesInLibwebp(riff, 16, 16, "dc_only_16x16");
+        }
+
+        /**
+         * Writes {@code riff} to a temp file, shells out to libwebp via Python, and
+         * asserts the returned dimensions match. Skips the test (via an assumption)
+         * if Python or the webp package isn't available on this host.
+         */
+        private static void verifyDecodesInLibwebp(byte[] riff, int expectedW, int expectedH, String tag)
+            throws Exception {
+            java.nio.file.Path tmp = java.nio.file.Files.createTempFile("vp8-" + tag + "-", ".webp");
+            try {
+                java.nio.file.Files.write(tmp, riff);
+
+                String script =
+                    "import sys\n" +
+                    "try:\n" +
+                    "    import webp\n" +
+                    "except ImportError:\n" +
+                    "    print('NO_WEBP'); sys.exit(2)\n" +
+                    "img = webp.load_image(r'" + tmp.toAbsolutePath() + "')\n" +
+                    "print(img.size[0], img.size[1])\n";
+
+                Process p = startPython(script);
+                if (p == null)
+                    throw new org.opentest4j.TestAbortedException(
+                        "No python3/python/py executable found on PATH - cannot validate via libwebp");
+                String out = new String(p.getInputStream().readAllBytes()).trim();
+                int exit = p.waitFor();
+
+                if (exit == 2 && out.contains("NO_WEBP"))
+                    throw new org.opentest4j.TestAbortedException("Python webp package not installed");
+                if (exit != 0)
+                    throw new AssertionError("libwebp rejected our VP8 bitstream:\n" + out);
+
+                String[] parts = out.split("\\s+");
+                assertThat("dimensions reported by libwebp", parts.length >= 2, is(true));
+                assertThat("width  (libwebp)", Integer.parseInt(parts[0]), is(expectedW));
+                assertThat("height (libwebp)", Integer.parseInt(parts[1]), is(expectedH));
+            } finally {
+                java.nio.file.Files.deleteIfExists(tmp);
+            }
+        }
+
+        /**
+         * Attempts to launch a Python interpreter running the given script via {@code -c}.
+         * Tries {@code python3}, {@code python}, and {@code py} (the Windows launcher) in
+         * turn so the test works across Linux, macOS, and Windows shells.
+         *
+         * @return the started process, or {@code null} if no candidate launched
+         */
+        private static Process startPython(String script) {
+            for (String cmd : new String[]{"python3", "python", "py"}) {
+                try {
+                    ProcessBuilder pb = new ProcessBuilder(cmd, "-c", script);
+                    pb.redirectErrorStream(true);
+                    return pb.start();
+                } catch (java.io.IOException ignored) {
+                    // Try next candidate.
+                }
+            }
+            return null;
+        }
+
+    }
+
     // ──── ColorCache ────
 
     @Nested
