@@ -885,6 +885,67 @@ public class VP8CodecTest {
                     throw new AssertionError("ALTREF mutated by default P-frame at index " + i);
         }
 
+        @Test @DisplayName("conformance: MV component proba updates round-trip across a 3-frame session (RFC 6386 section 19.2)")
+        void mvProbaUpdatesRoundTripAcrossChain() {
+            // A 3-frame translating sequence (keyframe + 2 P-frames) builds enough NEWMV
+            // branch observations that P-frame 2's header is likely to emit at least one
+            // MV proba update. Regardless of whether updates are actually emitted, the
+            // encoder's mvProba and the decoder's mvProba must stay in lock-step - any
+            // divergence breaks NEW_MV wire decoding on subsequent MBs.
+            int w = 32, h = 32;
+            PixelBuffer[] frames = new PixelBuffer[3];
+            for (int i = 0; i < 3; i++) {
+                PixelBuffer f = PixelBuffer.create(w, h);
+                for (int y = 0; y < h; y++) {
+                    for (int x = 0; x < w; x++) {
+                        // Each frame shifts +4 px right (with wrap). Luma gradient content
+                        // ensures motion search actually picks non-zero MVs.
+                        int srcX = (x - 4 * i + w * 4) % w;
+                        int c = 0xFF000000 | ((srcX * 8) << 16) | ((y * 8) << 8);
+                        f.setPixel(x, y, c);
+                    }
+                }
+                frames[i] = f;
+            }
+
+            VP8EncoderSession enc = new VP8EncoderSession();
+            VP8DecoderSession dec = new VP8DecoderSession();
+            PixelBuffer[] decoded = new PixelBuffer[3];
+            for (int i = 0; i < 3; i++) {
+                byte[] bytes = enc.encode(frames[i], 1.0f, i == 0);
+                decoded[i] = dec.decode(bytes);
+            }
+
+            // Encoder and decoder mvProba must match after each frame. If they diverged,
+            // NEW_MV bits would misalign and the last frame wouldn't decode correctly.
+            for (int c = 0; c < 2; c++)
+                for (int p = 0; p < VP8Tables.NUM_MV_PROBAS; p++)
+                    assertThat(String.format("mvProba[%d][%d] enc vs dec", c, p),
+                        enc.mvProba[c][p], is(dec.mvProba[c][p]));
+
+            // Final decoded frame must match the source within reasonable PSNR (the
+            // reconstruction path is what an update-divergence bug would actually break).
+            long sumSq = 0;
+            int n = 0;
+            for (int y = 0; y < h; y++) {
+                for (int x = 16; x < w; x++) {          // skip wrap seam
+                    int src = frames[2].getPixel(x, y);
+                    int d = decoded[2].getPixel(x, y);
+                    for (int shift : new int[] { 0, 8, 16 }) {
+                        int diff = ((src >> shift) & 0xFF) - ((d >> shift) & 0xFF);
+                        sumSq += (long) diff * diff;
+                        n++;
+                    }
+                }
+            }
+            double mse = sumSq / (double) n;
+            double psnr = mse == 0 ? Double.POSITIVE_INFINITY : 10.0 * Math.log10(255.0 * 255.0 / mse);
+            if (psnr < 30.0)
+                throw new AssertionError(String.format(
+                    "3-frame translation PSNR %.2f dB below 30 dB - likely mvProba enc/dec divergence",
+                    psnr));
+        }
+
         @Test @DisplayName("conformance: quarter-pel MV refinement beats half-pel on a 1.25-pel translation")
         void quarterPelRefinementOutperformsHalfPelOnSubPelShift() {
             // Pure-translation test: frame 1 is frame 0's linear gradient content shifted by

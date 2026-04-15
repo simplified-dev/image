@@ -54,6 +54,24 @@ public final class VP8EncoderSession {
     /** Reference frame height in pixels. */
     int refHeight;
 
+    /**
+     * MV component probabilities carried across frames (RFC 6386 section 19.2). Layout
+     * {@code [component][slot]} - 2 components x {@link VP8Tables#NUM_MV_PROBAS} slots.
+     * Tracks the probabilities the decoder believes are currently active: keyframes
+     * reset to {@link VP8Tables#MV_DEFAULT_PROBA}; P-frames may emit per-slot updates,
+     * and this array is updated to match whatever was emitted so subsequent MVs use
+     * the same probs as the decoder will.
+     */
+    int[] @NotNull [] mvProba = VP8DecoderSession.cloneMvProba();
+
+    /**
+     * Previous frame's observed MV branch counts, used by the header emit to compute
+     * optimal MV probabilities via one-frame-lag: stats from frame N inform probs for
+     * frame N+1. Layout {@code [component][slot][outcome]} where outcome is 0 or 1.
+     * {@code null} until the first inter-frame is encoded.
+     */
+    int[][] @org.jetbrains.annotations.Nullable [] prevMvBranches;
+
     /** Constructs a new {@code VP8EncoderSession} with no cached references. */
     public VP8EncoderSession() { }
 
@@ -111,6 +129,8 @@ public final class VP8EncoderSession {
         refLumaStride = refChromaStride = 0;
         refMbCols = refMbRows = 0;
         refWidth = refHeight = 0;
+        mvProba = VP8DecoderSession.cloneMvProba();
+        prevMvBranches = null;
     }
 
     /**
