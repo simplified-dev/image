@@ -541,12 +541,19 @@ final class VP8Costs {
 
     /**
      * Cost in {@code 1/256} bits of emitting the (row, col) pair of a NEWMV wire
-     * motion vector. Sum of the two component costs using the default per-component
-     * probability vectors in {@link VP8Tables#MV_DEFAULT_PROBA}.
+     * motion vector. Sum of the two component costs using the supplied per-component
+     * probability vectors - typically {@code state.mvProba} so cost estimation matches
+     * the probabilities the decoder will read (RFC 6386 section 19.2 per-frame MV
+     * component proba updates).
+     *
+     * @param wireRow MV row component in quarter-pel wire units
+     * @param wireCol MV col component in quarter-pel wire units
+     * @param mvProba per-component proba vectors; {@code [2][NUM_MV_PROBAS]}
+     * @return bit cost in {@code 1/256} bits
      */
-    static int mvWireBitCost(int wireRow, int wireCol) {
-        return mvComponentBitCost(wireRow, VP8Tables.MV_DEFAULT_PROBA[0])
-             + mvComponentBitCost(wireCol, VP8Tables.MV_DEFAULT_PROBA[1]);
+    static int mvWireBitCost(int wireRow, int wireCol, int @NotNull [] @NotNull [] mvProba) {
+        return mvComponentBitCost(wireRow, mvProba[0])
+             + mvComponentBitCost(wireCol, mvProba[1]);
     }
 
     /**

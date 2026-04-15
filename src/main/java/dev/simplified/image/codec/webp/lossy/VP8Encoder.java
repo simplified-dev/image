@@ -2158,7 +2158,7 @@ public final class VP8Encoder {
                         blockX0, blockY0, blockW, blockH, newInternalRow, newInternalCol);
                     int rate = VP8Costs.treeLeafBitCost(
                         VP8Tables.SUB_MV_REF_TREE, VP8Tables.SUB_MV_REF_NEW, subMvRefProbs)
-                        + VP8Costs.mvWireBitCost(newWireRow, newWireCol);
+                        + VP8Costs.mvWireBitCost(newWireRow, newWireCol, s.mvProba);
                     long score = sse * VP8Costs.RD_DISTO_MULT + (long) rate * lambda;
                     if (score < bestScore) {
                         bestScore = score; bestRef = VP8Tables.SUB_MV_REF_NEW;
@@ -2260,7 +2260,7 @@ public final class VP8Encoder {
                  + sumSquaredError(mb.cr, reconV);
 
         int modeRate = VP8Costs.treeLeafBitCost(VP8Tables.MV_REF_TREE, mvMode, mvRefProbs);
-        int mvRate = (mvMode == 3) ? VP8Costs.mvWireBitCost(wireRow, wireCol) : 0;
+        int mvRate = (mvMode == 3) ? VP8Costs.mvWireBitCost(wireRow, wireCol, s.mvProba) : 0;
         int rate = skipBit0 + baseInterHeader + modeRate + mvRate
                  + i16.rate + u.rate + v.rate;
         return new InterResidualCandidate(sse, rate, lambda, mvMode,
