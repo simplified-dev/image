@@ -1451,6 +1451,53 @@ public class VP8CodecTest {
                     + "max per-sample diff = %d (expected >= 10 with quantDelta=+50)", maxDiff));
         }
 
+        @Test @DisplayName("conformance: parallel motion-search prepass produces byte-identical P-frame bitstream")
+        void motionSearchThreadingIsBitExact() {
+            // 48x48 translating P-frame sequence. Motion search fires for every inter
+            // MB, so the prepass does real work. Encode the same input twice with the
+            // same base session settings but different motionSearchThreads; assert the
+            // two P-frame byte streams are identical. Motion-searched MVs are a hint,
+            // not a correctness requirement - R-D still picks the final MV - so thread
+            // count must not leak into bit output.
+            int w = 48, h = 48;
+            PixelBuffer frame0 = PixelBuffer.create(w, h);
+            PixelBuffer frame1 = PixelBuffer.create(w, h);
+            for (int y = 0; y < h; y++)
+                for (int x = 0; x < w; x++) {
+                    frame0.setPixel(x, y, 0xFF000000 | ((x * 5) << 16) | ((y * 5) << 8));
+                    // frame1 is frame0 shifted right by 4 pixels.
+                    int srcX = Math.max(0, x - 4);
+                    frame1.setPixel(x, y, 0xFF000000 | ((srcX * 5) << 16) | ((y * 5) << 8));
+                }
+
+            // Serial baseline.
+            VP8EncoderSession serialSess = new VP8EncoderSession().withMotionSearchThreads(1);
+            byte[] serialKf = serialSess.encode(frame0, 0.6f, true);
+            byte[] serialPf = serialSess.encode(frame1, 0.6f, false);
+
+            // Parallel (4 threads).
+            VP8EncoderSession parallelSess = new VP8EncoderSession().withMotionSearchThreads(4);
+            byte[] parallelKf = parallelSess.encode(frame0, 0.6f, true);
+            byte[] parallelPf = parallelSess.encode(frame1, 0.6f, false);
+
+            // Keyframes don't run motion search - they must be identical trivially.
+            assertThat("keyframe length", parallelKf.length, is(serialKf.length));
+            for (int i = 0; i < serialKf.length; i++)
+                if (serialKf[i] != parallelKf[i])
+                    throw new AssertionError(String.format(
+                        "keyframe byte %d differs: serial=0x%02X parallel=0x%02X",
+                        i, serialKf[i] & 0xFF, parallelKf[i] & 0xFF));
+
+            // P-frame is where motion search actually runs - the real test.
+            assertThat("P-frame length", parallelPf.length, is(serialPf.length));
+            for (int i = 0; i < serialPf.length; i++)
+                if (serialPf[i] != parallelPf[i])
+                    throw new AssertionError(String.format(
+                        "P-frame byte %d differs between serial and 4-thread encode: "
+                        + "serial=0x%02X parallel=0x%02X", i, serialPf[i] & 0xFF,
+                        parallelPf[i] & 0xFF));
+        }
+
     }
 
     /**

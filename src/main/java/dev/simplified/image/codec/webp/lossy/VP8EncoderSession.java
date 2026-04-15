@@ -94,8 +94,40 @@ public final class VP8EncoderSession {
      */
     int[][] @org.jetbrains.annotations.Nullable [][][] prevTokenBranches;
 
+    /**
+     * Parallelism for the per-MB motion-search prepass on P-frame encodes. {@code 1}
+     * means serial (deterministic ordering, no pool overhead); {@code N > 1} runs the
+     * prepass on a throwaway {@link java.util.concurrent.ForkJoinPool} sized to
+     * {@code N}. Motion-searched MVs are a hint - R-D still picks the final MV per
+     * MB - so parallelism does not affect bit output.
+     */
+    private int motionSearchThreads = 1;
+
     /** Constructs a new {@code VP8EncoderSession} with no cached references. */
     public VP8EncoderSession() { }
+
+    /**
+     * Returns the current motion-search parallelism. Defaults to {@code 1}.
+     */
+    public int getMotionSearchThreads() {
+        return motionSearchThreads;
+    }
+
+    /**
+     * Sets the parallelism used by the P-frame motion-search prepass. Use {@code 1}
+     * for serial / deterministic behaviour; higher values speed up encodes of
+     * motion-heavy content at the cost of a throwaway {@link java.util.concurrent.ForkJoinPool}
+     * per P-frame. Output is bit-identical across thread counts for the same input.
+     *
+     * @param threads number of worker threads, must be {@code >= 1}
+     * @return this session for chaining
+     */
+    public @NotNull VP8EncoderSession withMotionSearchThreads(int threads) {
+        if (threads < 1)
+            throw new IllegalArgumentException("motionSearchThreads must be >= 1");
+        this.motionSearchThreads = threads;
+        return this;
+    }
 
     /**
      * Encodes {@code pixels} as a VP8 frame. Emits a keyframe when no LAST reference is

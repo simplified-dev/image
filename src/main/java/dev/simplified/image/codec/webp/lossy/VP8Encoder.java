@@ -196,6 +196,17 @@ public final class VP8Encoder {
         // defaults.
         VP8Costs.TokenCosts tokenCosts;
 
+        // Parallelism for the motion-search prepass (copied from session). {@code 1}
+        // = serial; {@code > 1} uses a throwaway ForkJoinPool. Motion search results
+        // are cached in {@code cachedMvWire*} and looked up by {@link #findBestMv}
+        // during the serial R-D loop, so thread count does not affect bit output.
+        final int motionSearchThreads;
+        // Per-MB motion-search results, populated by the prepass. {@code cachedMvFound[i]}
+        // = false mirrors the computeBestMv null-return case (all candidates clipped).
+        final int[] cachedMvWireRow;
+        final int[] cachedMvWireCol;
+        final boolean[] cachedMvFound;
+
         // Segment map state (RFC 6386 section 10). Disabled by default - only the
         // {@link #encodeWithSegmentMap} test hook flips {@code useSegment} on. When
         // enabled, {@code writeFrameHeader} emits the segment sub-header and the per-MB
@@ -232,6 +243,11 @@ public final class VP8Encoder {
             this.mbRefFrame = new int[mbCols * mbRows];       // defaults to REF_INTRA = 0
             this.mbModeLfIdx = new int[mbCols * mbRows];       // defaults to MODE_NON_BPRED_INTRA = 0
             this.mbSegmentId = new int[mbCols * mbRows];       // defaults to 0 (single-segment)
+
+            this.motionSearchThreads = session != null ? session.getMotionSearchThreads() : 1;
+            this.cachedMvWireRow = new int[mbCols * mbRows];
+            this.cachedMvWireCol = new int[mbCols * mbRows];
+            this.cachedMvFound = new boolean[mbCols * mbRows];
 
             this.y1Dc = VP8Tables.DC_Q_LOOKUP[qi];
             this.y1Ac = VP8Tables.AC_Q_LOOKUP[qi];
@@ -607,6 +623,15 @@ public final class VP8Encoder {
 
         // Per-MB encoding loop.
         int[] argb = pixels.pixels();
+
+        // P-frame motion-search prepass: compute the best NEW-MV per MB up front so
+        // the serial R-D loop can look up the cached result instead of re-running
+        // the integer+half+quarter pel search. Parallelizable when
+        // {@code motionSearchThreads > 1} - the prepass reads only session-snapshot
+        // state, never mutates it. Skipped for keyframes (no motion search) and for
+        // the forced-SPLITMV test hook (doesn't call findBestMv).
+        if (!isKeyframe && !forceSplitMv)
+            runMotionSearchPrepass(s, argb, width, height);
         for (int mbY = 0; mbY < s.mbRows; mbY++) {
             java.util.Arrays.fill(s.leftNz, 0);
             java.util.Arrays.fill(s.intraL, IntraPrediction.B_DC_PRED);
@@ -1871,18 +1896,80 @@ public final class VP8Encoder {
     }
 
     /**
-     * Full-search integer motion estimation at 1-pel luma granularity followed by an
-     * 8-neighbour half-pel refinement and an 8-neighbour quarter-pel refinement.
-     * Returns the best wire-format MV (quarter-pel units, component order
-     * {@code [row, col]}) or {@code null} if no valid candidate fits (should not happen
-     * in practice - at minimum the {@code (0, 0)} MV is valid).
-     * <p>
-     * The quarter-pel pass runs only when half-pel improved on the integer result;
-     * otherwise motion is integer-aligned and refining further wastes 8 MC evaluations
-     * per MB. The 6-tap sub-pel filter in {@link SubpelPrediction} supports all wire
-     * positions, so no new MC path is needed for the +/-1 wire-step neighbours.
+     * Cache lookup for the MV previously computed by {@link #runMotionSearchPrepass}.
+     * Returns {@code null} when the prepass determined no valid NEW-MV exists for
+     * this MB (all candidates fell outside the reference frame bounds).
      */
     private static int @org.jetbrains.annotations.Nullable [] findBestMv(
+        @NotNull State s, @NotNull Macroblock mb, int mbX, int mbY
+    ) {
+        int mbIdx = mbY * s.mbCols + mbX;
+        if (!s.cachedMvFound[mbIdx]) return null;
+        return new int[] { s.cachedMvWireRow[mbIdx], s.cachedMvWireCol[mbIdx] };
+    }
+
+    /**
+     * Runs the per-MB motion search for an inter frame in advance of the serial
+     * R-D loop, caching the best wire MV into {@link State#cachedMvWireRow} /
+     * {@link State#cachedMvWireCol} / {@link State#cachedMvFound}.
+     * <p>
+     * Thread-safe: each MB's search reads {@code session.refY/refU/refV} (frozen
+     * post-capture from the prior frame) and a per-MB {@link Macroblock} extracted
+     * from the source pixels. No shared mutable State is touched, so the MB work
+     * can run on any worker pool.
+     */
+    private static void runMotionSearchPrepass(
+        @NotNull State s, int @NotNull [] argb, int width, int height
+    ) {
+        int total = s.mbCols * s.mbRows;
+        java.util.function.IntConsumer mvPass = mbIdx -> {
+            int mbY = mbIdx / s.mbCols;
+            int mbX = mbIdx % s.mbCols;
+            Macroblock mb = new Macroblock();
+            mb.fromARGB(argb, mbX, mbY, width, height);
+            int[] best = computeBestMv(s, mb, mbX, mbY);
+            if (best == null) {
+                s.cachedMvFound[mbIdx] = false;
+            } else {
+                s.cachedMvWireRow[mbIdx] = best[0];
+                s.cachedMvWireCol[mbIdx] = best[1];
+                s.cachedMvFound[mbIdx] = true;
+            }
+        };
+
+        if (s.motionSearchThreads <= 1) {
+            for (int mbIdx = 0; mbIdx < total; mbIdx++)
+                mvPass.accept(mbIdx);
+            return;
+        }
+
+        java.util.concurrent.ForkJoinPool pool =
+            new java.util.concurrent.ForkJoinPool(s.motionSearchThreads);
+        try {
+            pool.submit(() ->
+                java.util.stream.IntStream.range(0, total).parallel().forEach(mvPass)
+            ).get();
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("motion-search prepass interrupted", ie);
+        } catch (java.util.concurrent.ExecutionException ee) {
+            throw new RuntimeException("motion-search prepass failed", ee.getCause());
+        } finally {
+            pool.shutdown();
+        }
+    }
+
+    /**
+     * Computes the best NEW-MV for a single inter MB. Integer SAD search within
+     * {@link #MOTION_SEARCH_RADIUS}, then half-pel, then quarter-pel refinement (the
+     * quarter-pel pass runs only when half-pel improved on integer; see RFC 6386
+     * paragraph 17.1). Returns {@code null} when every candidate lies outside the
+     * reference frame bounds.
+     * <p>
+     * Called exactly once per MB from {@link #runMotionSearchPrepass}; the per-MB
+     * serial R-D loop reads the cached result via {@link #findBestMv}.
+     */
+    private static int @org.jetbrains.annotations.Nullable [] computeBestMv(
         @NotNull State s, @NotNull Macroblock mb, int mbX, int mbY
     ) {
         int baseX = mbX * 16;
