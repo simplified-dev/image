@@ -48,6 +48,20 @@ public class WebPWriteOptions implements ImageWriteOptions {
      * the static-lossy path. Ignored for lossless encodes. Off by default.
      */
     private final boolean autoSegment;
+    /**
+     * Near-lossless preprocessing level for lossless (VP8L) encodes, on an
+     * inverted {@code [0..100]} scale where {@code 100} is off (default) and
+     * lower values enable more aggressive per-pixel snapping in non-smooth
+     * regions. Output stays a valid VP8L bitstream decodable by any conformant
+     * WebP decoder (including libwebp / browsers). Preserves alpha and edges
+     * exactly; shrinks files with minimal perceptual loss on content with
+     * subtle texture or noise. Ignored for lossy encodes.
+     * <p>
+     * Conventional level mapping: {@code 60} is a solid sweet-spot, {@code 80}+
+     * is near-imperceptible on photographic content, below {@code 40} begins
+     * to produce visible banding on smooth gradients.
+     */
+    private final int nearLossless;
 
     /**
      * Returns a new builder for WebP write options.
@@ -72,6 +86,7 @@ public class WebPWriteOptions implements ImageWriteOptions {
         private int forceKeyframeEvery = -1;
         private int motionSearchThreads = -1;
         private boolean autoSegment = false;
+        private int nearLossless = 100;
 
         /**
          * Enables lossless encoding.
@@ -270,8 +285,44 @@ public class WebPWriteOptions implements ImageWriteOptions {
             return this;
         }
 
+        /**
+         * Enables near-lossless preprocessing for the lossless (VP8L) encoder.
+         * Pixel values in non-smooth regions are snapped to a coarser grid so
+         * VP8L's entropy coder compresses them more tightly; smooth regions
+         * pass through unchanged. Output is a standard VP8L bitstream that any
+         * conformant WebP decoder (libwebp, browsers, OS image stacks) can
+         * open; the feature affects only input pixels, not the bitstream
+         * format.
+         * <p>
+         * Level semantics (inverted scale, matches libwebp's {@code -near_lossless}):
+         * <ul>
+         *   <li>{@code 100} (default) - off, input pixels passed through unchanged.</li>
+         *   <li>{@code 80-99} - 1 bit shaved; near-imperceptible on photographic content.</li>
+         *   <li>{@code 60-79} - 2 bits shaved; common sweet spot.</li>
+         *   <li>{@code 40-59} - 3 bits shaved.</li>
+         *   <li>{@code 20-39} - 4 bits shaved.</li>
+         *   <li>{@code 0-19} - 5 bits shaved; maximum loss, visible banding on smooth gradients.</li>
+         * </ul>
+         * Small images ({@code width < 64 && height < 64}) and very thin
+         * images ({@code height < 3}) skip the preprocessing entirely - icon-
+         * sized content compresses better without the added snapping.
+         * <p>
+         * Ignored for lossy ({@link #isLossless(boolean) isLossless(false)}) encodes.
+         *
+         * @param level {@code [0, 100]} where {@code 100} is off
+         * @return this builder for chaining
+         * @throws IllegalArgumentException when {@code level} is outside {@code [0, 100]}
+         */
+        public @NotNull Builder withNearLossless(int level) {
+            if (level < 0 || level > 100)
+                throw new IllegalArgumentException(
+                    "nearLossless level must be in [0, 100], got " + level);
+            this.nearLossless = level;
+            return this;
+        }
+
         public @NotNull WebPWriteOptions build() {
-            return new WebPWriteOptions(this.lossless, this.quality, this.loopCount, this.multithreaded, this.alphaCompression, this.usePFrames, this.forceKeyframeEvery, this.motionSearchThreads, this.autoSegment);
+            return new WebPWriteOptions(this.lossless, this.quality, this.loopCount, this.multithreaded, this.alphaCompression, this.usePFrames, this.forceKeyframeEvery, this.motionSearchThreads, this.autoSegment, this.nearLossless);
         }
 
     }

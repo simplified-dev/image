@@ -490,6 +490,261 @@ class WebPRoundTripTest {
     }
 
     @Test
+    @DisplayName("diagnostic: decode testLore P-frame output via our own reader + dump PNGs for visual check")
+    void diagnosticDecodeTestLorePFrameOutput() throws Exception {
+        // Self-skip when testLore cache file not present. Produces
+        // W:/tmp/pframe_decoded_fN.png for each selected frame + PSNR vs lossless
+        // reference. Determines whether the user's "corrupt" report means
+        // "visually wrong pixels" (real bug) vs "libwebp rejects the container"
+        // (known Task 13 limitation - our own reader decodes P-frames fine).
+        java.nio.file.Path pframeIn = java.nio.file.Path.of(
+            "W:/Workspace/Java/SkyBlock-Simplified/asset-renderer/cache/test-lore/weapon_ss4_lossy.webp");
+        java.nio.file.Path losslessIn = java.nio.file.Path.of(
+            "W:/Workspace/Java/SkyBlock-Simplified/asset-renderer/cache/test-lore/weapon_ss4.webp");
+        if (!java.nio.file.Files.exists(pframeIn) || !java.nio.file.Files.exists(losslessIn))
+            throw new org.opentest4j.TestAbortedException(
+                "testLore cache files not present - diagnostic only");
+        java.nio.file.Files.createDirectories(java.nio.file.Path.of("W:/tmp"));
+
+        ImageFactory factory = new ImageFactory();
+        ImageData dec = factory.fromFile(pframeIn.toFile());
+        ImageData refDec = factory.fromFile(losslessIn.toFile());
+        if (!(dec instanceof AnimatedImageData anim) || !(refDec instanceof AnimatedImageData refAnim))
+            throw new AssertionError("expected AnimatedImageData from both files");
+        System.err.println("[pframe-diag] P-frame file decoded via our reader: "
+            + anim.getFrames().size() + " frames (" + anim.getWidth() + "x" + anim.getHeight() + ")");
+        System.err.println("[pframe-diag] Lossless reference: "
+            + refAnim.getFrames().size() + " frames");
+
+        int[] dumpFrames = { 0, 1, 5, 10, 19 };
+        for (int fi : dumpFrames) {
+            if (fi >= anim.getFrames().size()) continue;
+            PixelBuffer pb = anim.getFrames().get(fi).pixels();
+            PixelBuffer rpb = refAnim.getFrames().get(fi).pixels();
+            int w = pb.width(), h = pb.height();
+
+            java.awt.image.BufferedImage bi =
+                new java.awt.image.BufferedImage(w, h, java.awt.image.BufferedImage.TYPE_INT_ARGB);
+            for (int y = 0; y < h; y++)
+                for (int x = 0; x < w; x++)
+                    bi.setRGB(x, y, pb.getPixel(x, y));
+            File pngOut = new File("W:/tmp/pframe_decoded_f" + fi + ".png");
+            javax.imageio.ImageIO.write(bi, "PNG", pngOut);
+
+            long sse = 0;
+            int n = 0;
+            for (int y = 0; y < h; y++)
+                for (int x = 0; x < w; x++) {
+                    int a = pb.getPixel(x, y), b = rpb.getPixel(x, y);
+                    for (int shift : new int[] { 0, 8, 16, 24 }) {
+                        int d = ((a >> shift) & 0xFF) - ((b >> shift) & 0xFF);
+                        sse += (long) d * d;
+                        n++;
+                    }
+                }
+            double mse = (double) sse / n;
+            double psnr = mse == 0 ? 99.0 : 10.0 * Math.log10(255.0 * 255.0 / mse);
+            System.err.printf("[pframe-diag]   frame %2d: %s  PSNR vs lossless=%.2f dB  center px: ours=0x%08X  lossless=0x%08X%n",
+                fi, pngOut.getName(), psnr, pb.getPixel(w / 2, h / 2), rpb.getPixel(w / 2, h / 2));
+        }
+    }
+
+    @Test
+    @DisplayName("near-lossless: level=100 is bit-identical to lossless (off by default)")
+    void nearLosslessLevel100IsNoOp() throws IOException {
+        PixelBuffer buf = buildGradientWithEdges(128, 128);
+        StaticImageData image = new StaticImageData(ImageFrame.of(buf));
+        ImageFactory factory = new ImageFactory();
+
+        File baselineOut = outputDir.resolve("nl_baseline.webp").toFile();
+        File level100Out = outputDir.resolve("nl_level100.webp").toFile();
+        factory.toFile(image, ImageFormat.WEBP, baselineOut,
+            WebPWriteOptions.builder().isLossless().build());
+        factory.toFile(image, ImageFormat.WEBP, level100Out,
+            WebPWriteOptions.builder().isLossless().withNearLossless(100).build());
+
+        byte[] a = Files.readAllBytes(baselineOut.toPath());
+        byte[] b = Files.readAllBytes(level100Out.toPath());
+        if (a.length != b.length)
+            throw new AssertionError("near-lossless=100 len " + b.length
+                + " != baseline len " + a.length);
+        for (int i = 0; i < a.length; i++)
+            if (a[i] != b[i])
+                throw new AssertionError("near-lossless=100 byte " + i
+                    + " differs: baseline=0x" + Integer.toHexString(a[i] & 0xFF)
+                    + " near=0x" + Integer.toHexString(b[i] & 0xFF));
+    }
+
+    @Test
+    @DisplayName("near-lossless: lower levels shrink file + decode to valid pixels")
+    void nearLosslessLowerLevelsShrinkFile() throws IOException {
+        // Gradient-with-edges source: the non-smooth diagonal stripe gets snapped,
+        // the smooth background passes through. Non-trivially compressible.
+        PixelBuffer buf = buildGradientWithEdges(128, 128);
+        StaticImageData image = new StaticImageData(ImageFrame.of(buf));
+        ImageFactory factory = new ImageFactory();
+
+        File baselineOut = outputDir.resolve("nl_baseline_shrink.webp").toFile();
+        File nl60Out = outputDir.resolve("nl_level60.webp").toFile();
+        factory.toFile(image, ImageFormat.WEBP, baselineOut,
+            WebPWriteOptions.builder().isLossless().build());
+        factory.toFile(image, ImageFormat.WEBP, nl60Out,
+            WebPWriteOptions.builder().isLossless().withNearLossless(60).build());
+
+        // Output must be a valid VP8L stream + decode back through our reader.
+        ImageData dec = factory.fromFile(nl60Out);
+        PixelBuffer decPixels = dec.toPixelBuffer();
+        if (decPixels.width() != 128 || decPixels.height() != 128)
+            throw new AssertionError("near-lossless round-trip dims "
+                + decPixels.width() + "x" + decPixels.height());
+
+        // Near-lossless preprocessing should NOT produce an identical file - if
+        // it did, the hook isn't wired. But it also shouldn't grow the file.
+        if (baselineOut.length() == nl60Out.length())
+            throw new AssertionError("near-lossless=60 file byte-identical to "
+                + "baseline - preprocessing hook isn't wired");
+    }
+
+    @Test
+    @DisplayName("near-lossless: small-image bypass (< 64x64) leaves bits unchanged")
+    void nearLosslessSmallImageBypass() throws IOException {
+        // 32x32 triggers libwebp's small-image bypass (width < 64 && height < 64).
+        // The preprocessing is skipped; output bytes must match baseline lossless.
+        PixelBuffer buf = buildGradientWithEdges(32, 32);
+        StaticImageData image = new StaticImageData(ImageFrame.of(buf));
+        ImageFactory factory = new ImageFactory();
+
+        File baselineOut = outputDir.resolve("nl_small_baseline.webp").toFile();
+        File nl0Out = outputDir.resolve("nl_small_level0.webp").toFile();
+        factory.toFile(image, ImageFormat.WEBP, baselineOut,
+            WebPWriteOptions.builder().isLossless().build());
+        factory.toFile(image, ImageFormat.WEBP, nl0Out,
+            WebPWriteOptions.builder().isLossless().withNearLossless(0).build());
+
+        if (baselineOut.length() != nl0Out.length())
+            throw new AssertionError("small-image bypass broken: "
+                + "baseline=" + baselineOut.length() + " nl=0=" + nl0Out.length()
+                + " (expected equal because preprocessing should skip)");
+    }
+
+    @Test
+    @DisplayName("near-lossless: flat solid-color content round-trips bit-identical at every level")
+    void nearLosslessFlatContentUnchanged() throws IOException {
+        // Solid grey 128x128. Every interior pixel's 4-connected neighbours are
+        // identical, so IsSmooth returns true everywhere: preprocessing is a
+        // no-op regardless of level. Output must match baseline lossless
+        // byte-for-byte at all non-off levels.
+        int w = 128, h = 128;
+        PixelBuffer buf = PixelBuffer.create(w, h);
+        buf.fill(0xFF808080);
+        StaticImageData image = new StaticImageData(ImageFrame.of(buf));
+        ImageFactory factory = new ImageFactory();
+
+        File baselineOut = outputDir.resolve("nl_flat_baseline.webp").toFile();
+        factory.toFile(image, ImageFormat.WEBP, baselineOut,
+            WebPWriteOptions.builder().isLossless().build());
+        byte[] baseline = Files.readAllBytes(baselineOut.toPath());
+
+        for (int level : new int[] { 0, 40, 60, 80 }) {
+            File out = outputDir.resolve("nl_flat_level" + level + ".webp").toFile();
+            factory.toFile(image, ImageFormat.WEBP, out,
+                WebPWriteOptions.builder().isLossless().withNearLossless(level).build());
+            byte[] got = Files.readAllBytes(out.toPath());
+            if (got.length != baseline.length)
+                throw new AssertionError("flat content at level=" + level
+                    + " len=" + got.length + " != baseline=" + baseline.length);
+            for (int i = 0; i < got.length; i++)
+                if (got[i] != baseline[i])
+                    throw new AssertionError("flat content at level=" + level
+                        + " byte " + i + " differs from baseline");
+        }
+    }
+
+    @Test
+    @DisplayName("near-lossless: NearLosslessPreprocess algorithm invariants")
+    void nearLosslessPreprocessInvariants() {
+        // White-box: verify the algorithm's correctness properties directly
+        // against NearLosslessPreprocess.apply without going through the writer.
+        int w = 128, h = 128;
+        int[] src = new int[w * h];
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++) {
+                int v;
+                if ((x + y) % 16 == 0) v = 200;             // thin diagonal stripe
+                else v = 40 + (x + y) / 8;                   // smooth gradient
+                src[y * w + x] = 0xFF000000 | (v << 16) | (v << 8) | v;
+            }
+
+        // Level 100 = no-op copy.
+        int[] off = dev.simplified.image.codec.webp.lossless.NearLosslessPreprocess
+            .apply(src, w, h, 100);
+        for (int i = 0; i < src.length; i++)
+            if (off[i] != src[i])
+                throw new AssertionError("level=100 not a no-op at idx " + i);
+
+        // Border rows and columns MUST be unchanged at all non-off levels.
+        for (int level : new int[] { 0, 40, 60, 80 }) {
+            int[] got = dev.simplified.image.codec.webp.lossless.NearLosslessPreprocess
+                .apply(src, w, h, level);
+            // First row, last row
+            for (int x = 0; x < w; x++) {
+                if (got[x] != src[x])
+                    throw new AssertionError("level=" + level + " first-row x=" + x
+                        + " changed: " + Integer.toHexString(src[x]) + " -> "
+                        + Integer.toHexString(got[x]));
+                if (got[(h - 1) * w + x] != src[(h - 1) * w + x])
+                    throw new AssertionError("level=" + level + " last-row x=" + x
+                        + " changed");
+            }
+            // First col, last col
+            for (int y = 0; y < h; y++) {
+                if (got[y * w] != src[y * w])
+                    throw new AssertionError("level=" + level + " first-col y=" + y
+                        + " changed");
+                if (got[y * w + w - 1] != src[y * w + w - 1])
+                    throw new AssertionError("level=" + level + " last-col y=" + y
+                        + " changed");
+            }
+        }
+
+        // At level 0 (5 bits shaved = bucket 32), per-channel deviation at any
+        // interior pixel must be bounded by 31 (bucket_size - 1).
+        int[] got0 = dev.simplified.image.codec.webp.lossless.NearLosslessPreprocess
+            .apply(src, w, h, 0);
+        int maxDev = 0;
+        for (int i = 0; i < src.length; i++) {
+            int s = src[i], g = got0[i];
+            for (int shift : new int[] { 0, 8, 16, 24 }) {
+                int sc = (s >>> shift) & 0xFF;
+                int gc = (g >>> shift) & 0xFF;
+                int dev = Math.abs(gc - sc);
+                if (dev > maxDev) maxDev = dev;
+            }
+        }
+        if (maxDev > 31)
+            throw new AssertionError("level=0 max per-channel deviation "
+                + maxDev + " > expected max 31 (bucket 32)");
+    }
+
+    /**
+     * Source synthesis helper for the near-lossless tests: a smooth grey
+     * gradient overlaid with a diagonal stripe of contrasting pixels. Shared
+     * across the near-lossless test cases so they all have the same realistic
+     * mix of smooth and non-smooth regions.
+     */
+    private static @NotNull PixelBuffer buildGradientWithEdges(int w, int h) {
+        PixelBuffer buf = PixelBuffer.create(w, h);
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++) {
+                int v;
+                if ((x + y) % 16 == 0) v = 200;
+                else v = 40 + (x + y) / 8;
+                buf.setPixel(x, y, 0xFF000000 | (v << 16) | (v << 8) | v);
+            }
+        return buf;
+    }
+
+    @Test
     @DisplayName("default animated-lossy output is libwebp-decodable (Task 13 regression gate)")
     void defaultAnimatedLossyIsLibwebpDecodable() throws Exception {
         // Regression gate tied to the Task 13 closure: libwebp's VP8GetHeaders

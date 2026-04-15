@@ -12,6 +12,7 @@ import dev.simplified.image.data.ImageFrame;
 import dev.simplified.image.pixel.PixelBuffer;
 import dev.simplified.image.codec.ImageWriteOptions;
 import dev.simplified.image.codec.ImageWriter;
+import dev.simplified.image.codec.webp.lossless.NearLosslessPreprocess;
 import dev.simplified.image.codec.webp.lossless.VP8LEncoder;
 import dev.simplified.image.codec.webp.lossy.VP8Encoder;
 import dev.simplified.image.codec.webp.lossy.VP8EncoderSession;
@@ -42,6 +43,7 @@ public class WebPImageWriter implements ImageWriter {
         int forceKeyframeEvery = -1;
         int motionSearchThreads = -1;
         boolean autoSegment = false;
+        int nearLossless = 100;
 
         if (options instanceof WebPWriteOptions webpOptions) {
             lossless = webpOptions.isLossless();
@@ -53,16 +55,17 @@ public class WebPImageWriter implements ImageWriter {
             forceKeyframeEvery = webpOptions.getForceKeyframeEvery();
             motionSearchThreads = webpOptions.getMotionSearchThreads();
             autoSegment = webpOptions.isAutoSegment();
+            nearLossless = webpOptions.getNearLossless();
         }
 
         if (data instanceof AnimatedImageData animated) {
             if (loopCount == 0 && animated.getLoopCount() != 0)
                 loopCount = animated.getLoopCount();
 
-            return writeAnimated(animated, lossless, quality, loopCount, multithreaded, usePFrames, forceKeyframeEvery, motionSearchThreads, autoSegment);
+            return writeAnimated(animated, lossless, quality, loopCount, multithreaded, usePFrames, forceKeyframeEvery, motionSearchThreads, autoSegment, nearLossless);
         }
 
-        return writeStatic(data, lossless, quality, alphaCompression, autoSegment);
+        return writeStatic(data, lossless, quality, alphaCompression, autoSegment, nearLossless);
     }
 
     /**
@@ -77,12 +80,12 @@ public class WebPImageWriter implements ImageWriter {
         return frameCount > 60 ? 30 : 0;
     }
 
-    private byte @NotNull [] writeStatic(@NotNull ImageData data, boolean lossless, float quality, boolean alphaCompression, boolean autoSegment) {
+    private byte @NotNull [] writeStatic(@NotNull ImageData data, boolean lossless, float quality, boolean alphaCompression, boolean autoSegment, int nearLossless) {
         PixelBuffer pixels = data.toPixelBuffer();
         byte[] payload;
 
         if (lossless) {
-            payload = VP8LEncoder.encode(pixels);
+            payload = VP8LEncoder.encode(applyNearLosslessIfEnabled(pixels, nearLossless));
             // Simple lossless: just RIFF [ VP8L ]
             ConcurrentList<WebPChunk> chunks = Concurrent.newList();
             chunks.add(RiffContainer.createChunk(WebPChunk.Type.VP8L, payload));
@@ -117,7 +120,8 @@ public class WebPImageWriter implements ImageWriter {
         boolean usePFrames,
         int forceKeyframeEvery,
         int motionSearchThreads,
-        boolean autoSegment
+        boolean autoSegment,
+        int nearLossless
     ) {
         ConcurrentList<ImageFrame> frames = data.getFrames();
         boolean hasAlpha = data.hasAlpha();
@@ -155,7 +159,7 @@ public class WebPImageWriter implements ImageWriter {
         } else if (multithreaded) {
             var futures = frames.stream()
                 .map(frame -> CompletableFuture.supplyAsync(
-                    () -> encodeFrame(frame, lossless, quality, autoSegment),
+                    () -> encodeFrame(frame, lossless, quality, autoSegment, nearLossless),
                     java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()
                 ))
                 .collect(Concurrent.toList());
@@ -177,7 +181,7 @@ public class WebPImageWriter implements ImageWriter {
             }
         } else {
             encodedPayloads = frames.stream()
-                .map(frame -> encodeFrame(frame, lossless, quality, autoSegment))
+                .map(frame -> encodeFrame(frame, lossless, quality, autoSegment, nearLossless))
                 .collect(Concurrent.toList());
             if (perFrameAlpha) {
                 alphaPayloads = frames.stream()
@@ -211,15 +215,28 @@ public class WebPImageWriter implements ImageWriter {
         return RiffContainer.write(chunks);
     }
 
-    private byte @NotNull [] encodeFrame(@NotNull ImageFrame frame, boolean lossless, float quality, boolean autoSegment) {
+    private byte @NotNull [] encodeFrame(@NotNull ImageFrame frame, boolean lossless, float quality, boolean autoSegment, int nearLossless) {
         PixelBuffer pixels = frame.pixels();
 
         if (lossless)
-            return VP8LEncoder.encode(pixels);
+            return VP8LEncoder.encode(applyNearLosslessIfEnabled(pixels, nearLossless));
 
         return autoSegment
             ? VP8Encoder.encodeWithAutoSegment(pixels, quality)
             : VP8Encoder.encode(pixels, quality);
+    }
+
+    /**
+     * Applies libwebp-style near-lossless preprocessing when {@code level < 100},
+     * returning a new {@link PixelBuffer} with snapped pixel values. When the
+     * level is at its off-default {@code 100}, returns {@code pixels} unchanged -
+     * no buffer copy, no behaviour change vs the original lossless path.
+     */
+    private static @NotNull PixelBuffer applyNearLosslessIfEnabled(@NotNull PixelBuffer pixels, int level) {
+        if (level >= 100) return pixels;
+        int[] out = NearLosslessPreprocess.apply(
+            pixels.pixels(), pixels.width(), pixels.height(), level);
+        return PixelBuffer.of(out, pixels.width(), pixels.height());
     }
 
     private static byte @NotNull [] buildVP8XPayload(int width, int height, boolean animation, boolean alpha) {
