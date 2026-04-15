@@ -550,6 +550,184 @@ class WebPRoundTripTest {
     }
 
     @Test
+    @DisplayName("diagnostic: re-encode real tooltip frames via partial-frame ANMF + report size delta")
+    void diagnosticReencodeTooltipPartialFrames() throws Exception {
+        java.nio.file.Path rawPath = java.nio.file.Path.of("W:/tmp/tooltip_frames_20.rgba");
+        if (!java.nio.file.Files.exists(rawPath))
+            throw new org.opentest4j.TestAbortedException(
+                "tooltip_frames_20.rgba not present - diagnostic only");
+        byte[] raw = Files.readAllBytes(rawPath);
+        int W = 454, H = 260;
+        int frameBytes = W * H * 4;
+        int frameCount = raw.length / frameBytes;
+        if (frameCount != 20)
+            throw new AssertionError("expected 20 frames, got " + frameCount);
+
+        ConcurrentList<ImageFrame> frames = Concurrent.newList();
+        for (int f = 0; f < frameCount; f++) {
+            int[] argb = new int[W * H];
+            for (int i = 0; i < W * H; i++) {
+                int off = f * frameBytes + i * 4;
+                int r = raw[off] & 0xFF;
+                int g = raw[off + 1] & 0xFF;
+                int b = raw[off + 2] & 0xFF;
+                int a = raw[off + 3] & 0xFF;
+                argb[i] = (a << 24) | (r << 16) | (g << 8) | b;
+            }
+            frames.add(ImageFrame.of(PixelBuffer.of(argb, W, H), 50, 0, 0,
+                FrameDisposal.DO_NOT_DISPOSE, FrameBlend.OVER));
+        }
+        AnimatedImageData anim = AnimatedImageData.builder()
+            .withWidth(W).withHeight(H)
+            .withFrames(frames)
+            .withLoopCount(0)
+            .withBackgroundColor(0)
+            .build();
+
+        File out = outputDir.resolve("tooltip_reencode_partial.webp").toFile();
+        new ImageFactory().toFile(anim, ImageFormat.WEBP, out,
+            WebPWriteOptions.builder().isLossless().build());
+        System.err.println("[partial-reencode] ours animated lossless: "
+            + out.length() + " bytes (prior full-frame encode was 1,699,930 B; "
+            + "libwebp WebPAnimEncoder is 11,688 B)");
+    }
+
+    @Test
+    @DisplayName("partial-frame ANMF: tooltip-like animation encodes to bounding-box deltas, not full frames")
+    void partialFrameAnmfTooltipLikeAnimation() throws Exception {
+        // 96x96 animation, 5 frames. Frame 0 is a full uniform teal canvas with
+        // a constant border; frames 1-4 differ ONLY in an 8x8 square at fixed
+        // offset (40, 40). This simulates the tooltip obfuscated-text pattern:
+        // static body, one small region cycles. With partial-frame ANMF the
+        // file should be dramatically smaller than a full-frame-per-ANMF
+        // encode would produce, AND libwebp's animation decoder should return
+        // all 5 frames with the correct pixel-per-frame deltas reconstructed.
+        int W = 96, H = 96;
+        ConcurrentList<ImageFrame> frames = Concurrent.newList();
+        for (int f = 0; f < 5; f++) {
+            PixelBuffer fb = PixelBuffer.create(W, H);
+            for (int y = 0; y < H; y++) {
+                for (int x = 0; x < W; x++) {
+                    int argb = 0xFF008080;   // static teal canvas
+                    if (x >= 40 && x < 48 && y >= 40 && y < 48) {
+                        int v = (f * 64) & 0xFF;   // cycling square
+                        argb = 0xFF000000 | (v << 16) | (v << 8) | v;
+                    }
+                    fb.setPixel(x, y, argb);
+                }
+            }
+            frames.add(ImageFrame.of(fb, 50, 0, 0,
+                FrameDisposal.DO_NOT_DISPOSE, FrameBlend.OVER));
+        }
+        AnimatedImageData anim = AnimatedImageData.builder()
+            .withWidth(W).withHeight(H)
+            .withFrames(frames)
+            .withLoopCount(0)
+            .withBackgroundColor(0)
+            .build();
+
+        File out = outputDir.resolve("partial_frame_tooltip_like.webp").toFile();
+        new ImageFactory().toFile(anim, ImageFormat.WEBP, out,
+            WebPWriteOptions.builder().isLossless().build());
+
+        // Inspect the RIFF: frame 0 must be full canvas (W x H), frames 1-4
+        // must be small partial frames at offset near (40, 40). Parse the
+        // ANMF offset + dimension fields directly so the test doesn't depend
+        // on any Python tooling.
+        byte[] data = Files.readAllBytes(out.toPath());
+        int offset = 12;
+        int anmfIdx = 0;
+        int[][] bboxes = new int[frames.size()][4];
+        while (offset + 8 <= data.length && anmfIdx < frames.size()) {
+            String tag = new String(data, offset, 4);
+            int size = (data[offset + 4] & 0xFF)
+                | ((data[offset + 5] & 0xFF) << 8)
+                | ((data[offset + 6] & 0xFF) << 16)
+                | ((data[offset + 7] & 0xFF) << 24);
+            if (tag.equals("ANMF")) {
+                int x = 2 * ((data[offset + 8] & 0xFF)
+                    | ((data[offset + 9] & 0xFF) << 8)
+                    | ((data[offset + 10] & 0xFF) << 16));
+                int y = 2 * ((data[offset + 11] & 0xFF)
+                    | ((data[offset + 12] & 0xFF) << 8)
+                    | ((data[offset + 13] & 0xFF) << 16));
+                int aw = 1 + ((data[offset + 14] & 0xFF)
+                    | ((data[offset + 15] & 0xFF) << 8)
+                    | ((data[offset + 16] & 0xFF) << 16));
+                int ah = 1 + ((data[offset + 17] & 0xFF)
+                    | ((data[offset + 18] & 0xFF) << 8)
+                    | ((data[offset + 19] & 0xFF) << 16));
+                bboxes[anmfIdx++] = new int[] { x, y, aw, ah };
+            }
+            offset += 8 + size + (size & 1);
+        }
+
+        // Frame 0: full canvas.
+        if (bboxes[0][0] != 0 || bboxes[0][1] != 0 || bboxes[0][2] != W || bboxes[0][3] != H)
+            throw new AssertionError(String.format(
+                "frame 0 expected full canvas (0,0)%dx%d, got (%d,%d)%dx%d",
+                W, H, bboxes[0][0], bboxes[0][1], bboxes[0][2], bboxes[0][3]));
+        // Frames 1-4: bounding box should be small and cover the (40,40)-(48,48)
+        // changed square. Exact offset must be even (spec); width/height <= 10.
+        for (int i = 1; i < frames.size(); i++) {
+            int[] b = bboxes[i];
+            if (b[0] > 40 || b[1] > 40)
+                throw new AssertionError("frame " + i + " bbox offset (" + b[0] + "," + b[1]
+                    + ") doesn't reach the (40,40) changed region");
+            if (b[0] + b[2] < 48 || b[1] + b[3] < 48)
+                throw new AssertionError("frame " + i + " bbox doesn't cover (47,47)");
+            if (b[2] > 16 || b[3] > 16)
+                throw new AssertionError("frame " + i + " bbox " + b[2] + "x" + b[3]
+                    + " too large (expected <=16, most of canvas should be excluded)");
+            if ((b[0] & 1) != 0 || (b[1] & 1) != 0)
+                throw new AssertionError("frame " + i + " bbox offset (" + b[0] + "," + b[1]
+                    + ") must be even");
+        }
+
+        // Size gate: a full-frame-per-ANMF encode would produce 5 * ~some-kB.
+        // Partial frames should be much smaller - set a loose bound so we
+        // catch regressions without being brittle about exact VP8L sizes.
+        if (data.length > 20_000)
+            throw new AssertionError("partial-frame output " + data.length
+                + " bytes - expected <= 20KB on this mostly-static content "
+                + "(full-frame encode would be ~50KB+)");
+
+        // Round-trip via our own reader to verify the partial frames compose
+        // back to the right pixels.
+        ImageData dec = new ImageFactory().fromFile(out);
+        if (!(dec instanceof AnimatedImageData decAnim))
+            throw new AssertionError("expected AnimatedImageData");
+        if (decAnim.getFrames().size() != 5)
+            throw new AssertionError("decoded " + decAnim.getFrames().size() + " frames, expected 5");
+        for (int i = 0; i < 5; i++) {
+            PixelBuffer src = frames.get(i).pixels();
+            PixelBuffer got = decAnim.getFrames().get(i).pixels();
+            for (int y = 0; y < H; y++)
+                for (int x = 0; x < W; x++) {
+                    int s = src.getPixel(x, y);
+                    int g = got.getPixel(x, y);
+                    if (s != g)
+                        throw new AssertionError(String.format(
+                            "frame %d round-trip px (%d,%d): src=0x%08X got=0x%08X",
+                            i, x, y, s, g));
+                }
+        }
+
+        // Cross-decoder check: libwebp's WebPAnimDecoder must accept this
+        // partial-frame file and return all 5 frames. Self-skips when Python /
+        // webp unavailable - the round-trip above still gates correctness.
+        int[][] libwebpFrames;
+        try {
+            libwebpFrames = decodeAnimatedAlphaWithLibwebp(out, W, H, 5);
+        } catch (org.opentest4j.TestAbortedException skip) {
+            return;   // libwebp unavailable
+        }
+        if (libwebpFrames.length != 5)
+            throw new AssertionError("libwebp decoded " + libwebpFrames.length
+                + " frames, expected 5 from our partial-frame animated WebP");
+    }
+
+    @Test
     @DisplayName("near-lossless: level=100 is bit-identical to lossless (off by default)")
     void nearLosslessLevel100IsNoOp() throws IOException {
         PixelBuffer buf = buildGradientWithEdges(128, 128);
