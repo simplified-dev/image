@@ -352,6 +352,38 @@ public final class VP8Encoder {
     }
 
     /**
+     * Test / library hook: encodes a P-frame where every macroblock uses the SPLITMV
+     * path with scheme {@link VP8Tables#MBSPLIT_TOP_BOTTOM} and two
+     * {@link VP8Tables#SUB_MV_REF_ZERO} sub-MVs. All sub-MVs resolve to {@code (0, 0)}
+     * and {@code mb_skip} is set, so the decoded reconstruction is a straight copy of
+     * the session's {@code LAST} reference - bit-identical to what ZEROMV+skip would
+     * produce, but routed through the RFC 6386 section 17.3 SPLITMV parse path.
+     * <p>
+     * Exists to exercise the decoder's SPLITMV wire-format coverage without wiring
+     * SPLITMV into the R-D candidate set. Source pixels are not used for
+     * reconstruction - they only drive the quantizer / filter-level derivations in
+     * {@link #writeFrameHeader}.
+     *
+     * @param pixels source pixel buffer - must match the session's reference dimensions
+     * @param quality encoding quality in {@code [0.0, 1.0]}
+     * @param session session holding the {@code LAST} reference (seeded by a prior
+     *                keyframe encode)
+     * @return the encoded VP8 P-frame payload bytes
+     */
+    static byte @NotNull [] encodeWithSplitMv(
+        @NotNull PixelBuffer pixels, float quality, @NotNull VP8EncoderSession session
+    ) {
+        if (!session.hasReference())
+            throw new IllegalStateException("encodeWithSplitMv requires a LAST reference");
+        int qi = qualityToQi(quality);
+        boolean filtered = pickFilterLevel(qi) > 0;
+        return encodeFrame(pixels, quality, session, /*isKeyframe=*/ false,
+            filtered, EMPTY_LF_DELTA,
+            filtered ? LIBVPX_DEFAULT_P_MODE_LF_DELTA : EMPTY_LF_DELTA,
+            /*forceSplitMv=*/ true);
+    }
+
+    /**
      * Mode-LF-delta vector applied to P-frames at non-zero filter level, mirroring
      * libvpx's {@code set_default_lf_deltas} ({@code vp8/encoder/onyx_if.c:1272-1291}).
      * Index layout is {@code [BPRED, ZEROMV, OTHER_INTER, SPLITMV]}. Only the ZEROMV
@@ -379,6 +411,15 @@ public final class VP8Encoder {
     private static byte @NotNull [] encodeFrame(
         @NotNull PixelBuffer pixels, float quality, @Nullable VP8EncoderSession session, boolean isKeyframe,
         boolean useLfDelta, int @NotNull [] refLfDelta, int @NotNull [] modeLfDelta
+    ) {
+        return encodeFrame(pixels, quality, session, isKeyframe,
+            useLfDelta, refLfDelta, modeLfDelta, /*forceSplitMv=*/ false);
+    }
+
+    private static byte @NotNull [] encodeFrame(
+        @NotNull PixelBuffer pixels, float quality, @Nullable VP8EncoderSession session, boolean isKeyframe,
+        boolean useLfDelta, int @NotNull [] refLfDelta, int @NotNull [] modeLfDelta,
+        boolean forceSplitMv
     ) {
         int width = pixels.width();
         int height = pixels.height();
@@ -416,6 +457,8 @@ public final class VP8Encoder {
             for (int mbX = 0; mbX < s.mbCols; mbX++) {
                 if (isKeyframe)
                     encodeMacroblock(s, argb, width, height, mbX, mbY);
+                else if (forceSplitMv)
+                    emitForcedSplitMvMacroblock(s, mbX, mbY);
                 else
                     encodeInterMacroblock(s, argb, width, height, mbX, mbY);
             }
@@ -1334,6 +1377,63 @@ public final class VP8Encoder {
         ));
 
         best.commit(s, mbX, mbY);
+    }
+
+    /**
+     * Forced-SPLITMV per-MB emit used by the {@link #encodeWithSplitMv} test hook.
+     * Every MB emits scheme {@link VP8Tables#MBSPLIT_TOP_BOTTOM} with two
+     * {@link VP8Tables#SUB_MV_REF_ZERO} sub-MVs and {@code mb_skip = 1}. All
+     * neighbour sub-MVs are {@code (0, 0)} by construction, so the 5-way sub-MV
+     * context is {@code LEFT_ABOVE_BOTH_ZERO} (ctx 4) for every slot and emission
+     * does not need to track {@code bmiRow} / {@code bmiCol} on the encoder side.
+     * <p>
+     * Reconstruction is a direct {@code LAST}-reference copy, matching the decoder's
+     * SPLITMV path at all-zero sub-MVs with {@code skip = 1}.
+     */
+    private static void emitForcedSplitMvMacroblock(@NotNull State s, int mbX, int mbY) {
+        assert s.session != null && s.session.refY != null
+            : "emitForcedSplitMvMacroblock requires a session reference";
+
+        // Match the decoder's MV_REF_TREE proba derivation. Canonical prior-MB state
+        // is {ref=LAST, mv=(0,0), inter=true}, so neighbour votes in NearMvs are
+        // stable across the forced-SPLITMV grid.
+        NearMvs.Result near = new NearMvs.Result();
+        NearMvs.find(s.mbIsInter, s.mbMvRow, s.mbMvCol, s.mbRefFrame, s.mbCols, mbX, mbY,
+            LoopFilter.REF_LAST, s.signBiasGolden, s.signBiasAltref, near);
+        int[] mvRefProbs = new int[4];
+        NearMvs.refProbs(near.cnt, mvRefProbs);
+
+        BooleanEncoder h = s.header;
+        h.encodeBit(INTER_SKIP_PROBA, 1);               // skip = 1
+        h.encodeBit(INTER_PROB_INTRA, 1);               // inter
+        h.encodeBit(INTER_PROB_LAST, 0);                // ref = LAST
+        emitTreeLeaf(h, VP8Tables.MV_REF_TREE, 4, mvRefProbs);   // SPLITMV
+
+        emitTreeLeaf(h, VP8Tables.MBSPLIT_TREE,
+            VP8Tables.MBSPLIT_TOP_BOTTOM, VP8Tables.MBSPLIT_PROBS);
+
+        // SUB_MV_REF_PROB[4] is the LEFT_ABOVE_BOTH_ZERO row. TOP_BOTTOM has
+        // MBSPLIT_COUNT[0] = 2 sub-MVs.
+        int[] zeroCtxProbs = VP8Tables.SUB_MV_REF_PROB[4];
+        for (int slot = 0; slot < VP8Tables.MBSPLIT_COUNT[VP8Tables.MBSPLIT_TOP_BOTTOM]; slot++)
+            emitTreeLeaf(h, VP8Tables.SUB_MV_REF_TREE, VP8Tables.SUB_MV_REF_ZERO, zeroCtxProbs);
+
+        // Mirror decodeSplitMv's State updates: canonical MB-level MV is bmi[15] which
+        // is (0, 0) for this forced pattern.
+        int mbIdx = mbY * s.mbCols + mbX;
+        s.mbIsI4x4[mbIdx] = false;
+        s.mbIsInter[mbIdx] = true;
+        s.mbMvRow[mbIdx] = 0;
+        s.mbMvCol[mbIdx] = 0;
+        s.mbRefFrame[mbIdx] = LoopFilter.REF_LAST;
+        s.mbModeLfIdx[mbIdx] = LoopFilter.MODE_SPLITMV;
+
+        // Straight LAST-ref copy - all sub-MVs are (0, 0) and skip = 1 kills residual.
+        copyRef16x16(s.session.refY, s.session.refLumaStride, s.reconY, s.lumaStride, mbX, mbY);
+        copyRef8x8 (s.session.refU, s.session.refChromaStride, s.reconU, s.chromaStride, mbX, mbY);
+        copyRef8x8 (s.session.refV, s.session.refChromaStride, s.reconV, s.chromaStride, mbX, mbY);
+
+        clearNzAndIntraContextForInterSkip(s, mbX);
     }
 
     /**

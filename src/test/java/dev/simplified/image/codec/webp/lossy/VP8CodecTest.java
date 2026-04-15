@@ -1212,6 +1212,96 @@ public class VP8CodecTest {
                 + r3.cnt[NearMvs.CNT_NEAR] + r3.cnt[NearMvs.CNT_SPLITMV], is(0));
         }
 
+        @Test @DisplayName("conformance: SPLITMV self round-trip via forced-encode hook (RFC 6386 section 17.3)")
+        void splitMvSelfRoundTrip() {
+            // 32x32 keyframe (2x2 MBs) followed by a forced-SPLITMV P-frame: every MB
+            // emits scheme TOP_BOTTOM with two SUB_MV_REF_ZERO sub-MVs + mb_skip = 1,
+            // so reconstruction is a straight LAST-reference copy. At q=1.0 filter_level
+            // is 0 on both frames, so the decoded P-frame must be bit-exact with the
+            // decoded keyframe. Exercises the decoder's RFC 6386 section 17.3 parse:
+            // MV_REF_TREE=SPLITMV leaf, MBSPLIT_TREE=TOP_BOTTOM, per-slot
+            // SUB_MV_REF_TREE=ZERO4X4 at the LEFT_ABOVE_BOTH_ZERO context, plus the
+            // cross-MB bmi neighbour lookups (MB 0,0 is the seed; MBs 1,0 / 0,1 / 1,1
+            // each read bmi slots from their SPLITMV neighbours).
+            PixelBuffer src = PixelBuffer.create(32, 32);
+            for (int y = 0; y < 32; y++)
+                for (int x = 0; x < 32; x++)
+                    src.setPixel(x, y, 0xFF000000 | ((x * 8) << 16) | ((y * 8) << 8));
+
+            VP8EncoderSession encSess = new VP8EncoderSession();
+            byte[] keyframe = encSess.encode(src, 1.0f, true);
+            byte[] pFrame = VP8Encoder.encodeWithSplitMv(src, 1.0f, encSess);
+
+            assertThat("keyframe tag", keyframe[0] & 1, is(0));
+            assertThat("pFrame tag (inter)", pFrame[0] & 1, is(1));
+
+            VP8DecoderSession decSess = new VP8DecoderSession();
+            PixelBuffer kfDecoded = decSess.decode(keyframe);
+            PixelBuffer pfDecoded = decSess.decode(pFrame);       // exercises decodeSplitMv
+
+            assertThat("pf width", pfDecoded.width(), is(32));
+            assertThat("pf height", pfDecoded.height(), is(32));
+
+            // filter_level = 0 at q=1.0, so the P-frame's LAST-ref copy passes through
+            // unchanged and should be pixel-identical to the keyframe decode.
+            for (int y = 0; y < 32; y++)
+                for (int x = 0; x < 32; x++) {
+                    int expected = kfDecoded.getPixel(x, y);
+                    int actual = pfDecoded.getPixel(x, y);
+                    if (expected != actual)
+                        throw new AssertionError(String.format(
+                            "SPLITMV-roundtrip pixel divergence at (%d, %d): "
+                            + "keyframe=0x%08X pFrame=0x%08X", x, y, expected, actual));
+                }
+        }
+
+        @Test @DisplayName("conformance: SPLITMV round-trip survives a non-zero filter level (mode_lf mapping + cross-MB bmi)")
+        void splitMvRoundTripWithFilterActive() {
+            // Gradient keyframe at q=0.5 (filter_level > 0), then a forced-SPLITMV
+            // P-frame. Both encoder and decoder run the loop filter with the same
+            // mode/ref deltas for MODE_SPLITMV, so the P-frame's decoded pixels are
+            // fully determined. A bug in the SPLITMV parse, the LF mode mapping, or
+            // the cross-MB bmi lookup would either crash, mis-consume the token
+            // partition, or produce garbage with PSNR below ~25 dB.
+            PixelBuffer src = PixelBuffer.create(32, 32);
+            for (int y = 0; y < 32; y++)
+                for (int x = 0; x < 32; x++) {
+                    int r = (x * 255) / 31;
+                    int g = (y * 255) / 31;
+                    int b = ((x + y) * 255) / 62;
+                    src.setPixel(x, y, 0xFF000000 | (r << 16) | (g << 8) | b);
+                }
+
+            VP8EncoderSession encSess = new VP8EncoderSession();
+            byte[] keyframe = encSess.encode(src, 0.5f, true);
+            byte[] pFrame = VP8Encoder.encodeWithSplitMv(src, 0.5f, encSess);
+
+            VP8DecoderSession decSess = new VP8DecoderSession();
+            PixelBuffer kfDecoded = decSess.decode(keyframe);
+            PixelBuffer pfDecoded = decSess.decode(pFrame);
+
+            // The P-frame decode is one extra filter pass on top of the keyframe
+            // decode. Well-behaved filtering leaves PSNR very high; anything below
+            // 35 dB means a SPLITMV parse-path defect.
+            long sumSq = 0;
+            int n = 0;
+            for (int y = 0; y < 32; y++)
+                for (int x = 0; x < 32; x++) {
+                    int a = kfDecoded.getPixel(x, y);
+                    int b = pfDecoded.getPixel(x, y);
+                    for (int shift : new int[] { 0, 8, 16 }) {
+                        int diff = ((a >> shift) & 0xFF) - ((b >> shift) & 0xFF);
+                        sumSq += (long) diff * diff;
+                        n++;
+                    }
+                }
+            double mse = sumSq / (double) n;
+            double psnr = mse == 0 ? Double.POSITIVE_INFINITY : 10.0 * Math.log10(255.0 * 255.0 / mse);
+            if (psnr < 35.0)
+                throw new AssertionError(String.format(
+                    "SPLITMV-roundtrip-with-filter PSNR = %.2f dB (expected >= 35 dB)", psnr));
+        }
+
     }
 
     /**
