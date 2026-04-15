@@ -19,6 +19,15 @@ public class WebPWriteOptions implements ImageWriteOptions {
     private final boolean multithreaded;
     private final boolean alphaCompression;
     private final boolean usePFrames;
+    /**
+     * Interval at which the animated-lossy writer forces a keyframe. {@code 0}
+     * disables intermediate keyframes (only the first frame is a keyframe); a
+     * positive value forces frame {@code i} to be a keyframe when {@code i == 0}
+     * or {@code i % forceKeyframeEvery == 0}; {@code -1} defers to the writer's
+     * content-length-dependent default (30 for animations longer than 60 frames,
+     * 0 otherwise). Ignored when {@code usePFrames == false}.
+     */
+    private final int forceKeyframeEvery;
 
     /**
      * Returns a new builder for WebP write options.
@@ -40,6 +49,7 @@ public class WebPWriteOptions implements ImageWriteOptions {
         private boolean multithreaded = true;
         private boolean alphaCompression = true;
         private boolean usePFrames = false;
+        private int forceKeyframeEvery = -1;
 
         /**
          * Enables lossless encoding.
@@ -134,8 +144,35 @@ public class WebPWriteOptions implements ImageWriteOptions {
             return this;
         }
 
+        /**
+         * Sets how often the animated-lossy writer forces a keyframe. Intermediate
+         * keyframes let viewers seek to an arbitrary frame at the cost of one large
+         * keyframe-sized payload per interval. Only meaningful when
+         * {@link #usePFrames(boolean)} is on.
+         * <p>
+         * Values:
+         * <ul>
+         *   <li>{@code -1} (default) - defer to the writer: {@code 30} for
+         *       animations longer than 60 frames, {@code 0} otherwise. Short
+         *       tooltip animations stay at single-keyframe maximum compression;
+         *       long animations get seekable.</li>
+         *   <li>{@code 0} - never force intermediate keyframes (only frame 0).
+         *       Smallest output, no seekability.</li>
+         *   <li>{@code N > 0} - force a keyframe every N frames (plus frame 0).</li>
+         * </ul>
+         *
+         * @param every interval in frames, or {@code -1} for the content-length default
+         * @return this builder for chaining
+         */
+        public @NotNull Builder withForceKeyframeEvery(int every) {
+            if (every < -1)
+                throw new IllegalArgumentException("forceKeyframeEvery must be >= -1");
+            this.forceKeyframeEvery = every;
+            return this;
+        }
+
         public @NotNull WebPWriteOptions build() {
-            return new WebPWriteOptions(this.lossless, this.quality, this.loopCount, this.multithreaded, this.alphaCompression, this.usePFrames);
+            return new WebPWriteOptions(this.lossless, this.quality, this.loopCount, this.multithreaded, this.alphaCompression, this.usePFrames, this.forceKeyframeEvery);
         }
 
     }
