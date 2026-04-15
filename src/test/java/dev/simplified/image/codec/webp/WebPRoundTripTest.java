@@ -490,6 +490,58 @@ class WebPRoundTripTest {
     }
 
     @Test
+    @DisplayName("default animated-lossy output is libwebp-decodable (Task 13 regression gate)")
+    void defaultAnimatedLossyIsLibwebpDecodable() throws Exception {
+        // Regression gate tied to the Task 13 closure: libwebp's VP8GetHeaders
+        // unconditionally rejects non-keyframe VP8 bitstreams, so anything wrapped
+        // in ANMF that carries a P-frame VP8 payload will fail to decode in
+        // libwebp-based tools (Chrome, Firefox, Windows Photos, Pillow-via-libwebp,
+        // ffmpeg-built-against-libwebp).
+        //
+        // Default WebPWriteOptions (no usePFrames(true), no explicit multithreaded)
+        // MUST produce a file with all-keyframe VP8 payloads so the output opens
+        // everywhere. This test encodes a 3-frame animation at default settings
+        // and feeds the resulting file to libwebp's animation decoder via the
+        // Python binding. A regression that accidentally flips usePFrames to
+        // true by default, or leaks P-frames into the all-keyframes path, would
+        // surface here as a libwebp decode failure.
+        //
+        // Self-skips when python / webp module unavailable - fine on CI without
+        // libwebp installed. On a dev box with libwebp, set -Dvp8.pythonBin=...
+        // to point at a Python with the webp package when the default python3 on
+        // PATH doesn't have it (common on Windows with Microsoft Store stubs).
+        int W = 48, H = 48;
+        ConcurrentList<ImageFrame> frames = Concurrent.newList();
+        for (int f = 0; f < 3; f++) {
+            PixelBuffer fb = PixelBuffer.create(W, H);
+            for (int y = 0; y < H; y++)
+                for (int x = 0; x < W; x++) {
+                    int v = ((x + y + f) * 4) & 0xFF;
+                    fb.setPixel(x, y, 0xFF000000 | (v << 16) | (v << 8) | v);
+                }
+            frames.add(ImageFrame.of(fb, 100, 0, 0,
+                FrameDisposal.DO_NOT_DISPOSE, FrameBlend.OVER));
+        }
+        AnimatedImageData anim = AnimatedImageData.builder()
+            .withWidth(W).withHeight(H)
+            .withFrames(frames)
+            .withLoopCount(0)
+            .withBackgroundColor(0)
+            .build();
+
+        File out = outputDir.resolve("default_animated_lossy.webp").toFile();
+        new ImageFactory().toFile(anim, ImageFormat.WEBP, out,
+            WebPWriteOptions.builder().isLossless(false).withQuality(0.75f).build());
+
+        // decodeAnimatedAlphaWithLibwebp throws AssertionError when libwebp rejects
+        // the file, and TestAbortedException when python/webp unavailable.
+        int[][] frameAlpha = decodeAnimatedAlphaWithLibwebp(out, W, H, 3);
+        if (frameAlpha.length != 3)
+            throw new AssertionError("libwebp decoded " + frameAlpha.length
+                + " frames, expected 3");
+    }
+
+    @Test
     @DisplayName("forceKeyframeEvery=N triggers intermediate keyframes (seekability knob)")
     void forceKeyframeEveryTriggersIntermediateKeyframes() {
         // A 6-frame stationary animation. At usePFrames=true + forceKeyframeEvery=3,
@@ -685,17 +737,10 @@ class WebPRoundTripTest {
             "for px in img.getdata():\n" +
             "    print(f'A {px[3]}')\n";
 
-        Process p = null;
-        for (String cmd : new String[]{"python3", "python", "py"}) {
-            try {
-                ProcessBuilder pb = new ProcessBuilder(cmd, "-c", script);
-                pb.redirectErrorStream(true);
-                p = pb.start();
-                break;
-            } catch (java.io.IOException ignored) { }
-        }
+        Process p = startPythonSubprocess(script);
         if (p == null)
-            throw new org.opentest4j.TestAbortedException("No python3/python/py on PATH");
+            throw new org.opentest4j.TestAbortedException(
+                "No python3/python/py on PATH (set -Dvp8.pythonBin=<path> to override)");
 
         String stdout = new String(p.getInputStream().readAllBytes());
         int exit = p.waitFor();
@@ -769,17 +814,10 @@ class WebPRoundTripTest {
             "        print(f'A {pixels[i]}')\n" +
             "_webp.lib.WebPAnimDecoderDelete(dec)\n";
 
-        Process p = null;
-        for (String cmd : new String[]{"python3", "python", "py"}) {
-            try {
-                ProcessBuilder pb = new ProcessBuilder(cmd, "-c", script);
-                pb.redirectErrorStream(true);
-                p = pb.start();
-                break;
-            } catch (java.io.IOException ignored) { }
-        }
+        Process p = startPythonSubprocess(script);
         if (p == null)
-            throw new org.opentest4j.TestAbortedException("No python3/python/py on PATH");
+            throw new org.opentest4j.TestAbortedException(
+                "No python3/python/py on PATH (set -Dvp8.pythonBin=<path> to override)");
 
         String stdout = new String(p.getInputStream().readAllBytes());
         int exit = p.waitFor();
@@ -869,6 +907,35 @@ class WebPRoundTripTest {
             return false;
         }
 
+    }
+
+    /**
+     * Shared Python launcher for the libwebp-interop helpers below. Respects the
+     * {@code vp8.pythonBin} JVM system property and {@code VP8_PYTHON_BIN} env var
+     * when set (useful on Windows where the default {@code python3} on PATH is a
+     * Microsoft Store stub without the {@code webp} package). Falls back to the
+     * standard launchers otherwise. Returns {@code null} when nothing launches -
+     * callers typically throw {@link org.opentest4j.TestAbortedException}.
+     */
+    private static Process startPythonSubprocess(String script) {
+        String override = System.getProperty("vp8.pythonBin");
+        if (override == null || override.isEmpty())
+            override = System.getenv("VP8_PYTHON_BIN");
+        if (override != null && !override.isEmpty()) {
+            try {
+                ProcessBuilder pb = new ProcessBuilder(override, "-c", script);
+                pb.redirectErrorStream(true);
+                return pb.start();
+            } catch (java.io.IOException ignored) { }
+        }
+        for (String cmd : new String[]{"python3", "python", "py"}) {
+            try {
+                ProcessBuilder pb = new ProcessBuilder(cmd, "-c", script);
+                pb.redirectErrorStream(true);
+                return pb.start();
+            } catch (java.io.IOException ignored) { }
+        }
+        return null;
     }
 
 }
