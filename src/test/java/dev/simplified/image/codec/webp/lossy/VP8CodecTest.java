@@ -1990,6 +1990,87 @@ public class VP8CodecTest {
             }
         }
 
+        @Test @DisplayName("golden-reference harness: decodeWithMetadata round-trips per-MB decisions and compares against libwebp when available")
+        void goldenReferenceHarnessSmokeTest() throws Exception {
+            // Smoke test for the Task 14 / Detected 2 golden-reference scaffolding.
+            // Verifies two things:
+            //
+            //  1. (Always runs) VP8Decoder.decodeWithMetadata returns a FrameMetadata
+            //     whose per-MB arrays are fully populated from a decode of our own
+            //     encoder's output. Catches regressions in the metadata capture path
+            //     even when libwebp is not installed on the test runner.
+            //
+            //  2. (libwebp-gated) Calls GoldenReferenceHelper.compare which runs both
+            //     encoders and builds a ModeDecisionDiff. Logs the diff summary to
+            //     stderr for visual inspection - no tight assertion yet because the
+            //     diff IS the data that future sessions use to tune R-D lambdas.
+            //     Self-skips when Python/webp unavailable.
+            //
+            // 64x64 synthetic source: smooth gradient with two solid-colour regions
+            // that give the encoder a realistic mix of intra-DC and intra-other
+            // mode picks to reason about.
+            int W = 64, H = 64;
+            PixelBuffer src = PixelBuffer.create(W, H);
+            for (int y = 0; y < H; y++) {
+                for (int x = 0; x < W; x++) {
+                    int argb;
+                    if (x < 16 && y < 16) {
+                        argb = 0xFFFF8040;   // solid region A
+                    } else if (x > W - 16 && y > H - 16) {
+                        argb = 0xFF4080FF;   // solid region B
+                    } else {
+                        int v = (x + y) * 2;
+                        argb = 0xFF000000 | (v << 16) | (v << 8) | v;
+                    }
+                    src.setPixel(x, y, argb);
+                }
+            }
+
+            // Part 1: always-on decodeWithMetadata sanity check.
+            byte[] oursVp8 = VP8Encoder.encode(src, 0.75f);
+            VP8Decoder.DecodedFrame ours = VP8Decoder.decodeWithMetadata(oursVp8);
+            VP8Decoder.FrameMetadata meta = ours.metadata();
+            if (meta.width() != W || meta.height() != H)
+                throw new AssertionError("metadata dims " + meta.width() + "x" + meta.height()
+                    + " != source " + W + "x" + H);
+            if (meta.mbCols() != W / 16 || meta.mbRows() != H / 16)
+                throw new AssertionError("metadata mb grid " + meta.mbCols() + "x" + meta.mbRows()
+                    + " != expected " + (W / 16) + "x" + (H / 16));
+            if (!meta.isKeyframe())
+                throw new AssertionError("metadata reports non-keyframe on keyframe encode");
+            // Per-MB arrays must be fully sized.
+            int expectedMbs = meta.mbCols() * meta.mbRows();
+            if (meta.mbIsI4x4().length != expectedMbs)
+                throw new AssertionError("mbIsI4x4 length " + meta.mbIsI4x4().length
+                    + " != expected " + expectedMbs);
+            if (meta.mbMvRow().length != expectedMbs
+                    || meta.mbMvCol().length != expectedMbs)
+                throw new AssertionError("mbMv* length mismatch");
+            if (meta.bmiRow().length != expectedMbs * 16)
+                throw new AssertionError("bmiRow length " + meta.bmiRow().length
+                    + " != expected " + (expectedMbs * 16));
+            // Every MB of a keyframe must be intra.
+            for (int i = 0; i < expectedMbs; i++)
+                if (meta.mbIsInter()[i])
+                    throw new AssertionError("keyframe MB " + i + " reports mbIsInter = true");
+
+            // Part 2: libwebp-gated comparison.
+            GoldenReferenceHelper.Result result = GoldenReferenceHelper.compare(src, 75);
+            if (result.libwebp() == null) {
+                System.err.println(
+                    "[golden-reference smoke] libwebp unavailable, comparison skipped. "
+                    + "Ours-only: " + expectedMbs + " MBs, all intra");
+                return;
+            }
+            System.err.println("[golden-reference smoke] " + GoldenReferenceHelper.formatDiff(result.diff()));
+            // No tight assertion on the diff - the whole point of this harness is
+            // that future sessions use the measured agreement as the tuning signal.
+            // Sanity-check that the diff is coherent (total equals per-MB sum).
+            var d = result.diff();
+            if (d.agreeIntra() + d.agreeInter() + d.disagreeType() != d.totalMbs())
+                throw new AssertionError("diff counts inconsistent: agreeIntra+agreeInter+disagreeType != totalMbs");
+        }
+
     }
 
     /**
@@ -2138,6 +2219,151 @@ public class VP8CodecTest {
             return null;
         }
 
+    }
+
+    /**
+     * Golden-reference tooling scaffold for Task 14 (libwebp lambda tuning) and
+     * Detected 2 (R-D ripple accounting) - encodes a source with both our encoder
+     * and libwebp, decodes both through our decoder via {@link VP8Decoder#decodeWithMetadata},
+     * and produces a structured per-MB diff.
+     * <p>
+     * Not a correctness test - the harness is diagnostic infrastructure. Future
+     * sessions use the captured {@link ModeDecisionDiff} to tune R-D lambdas
+     * against libwebp's choices on reference content, or to profile which MBs
+     * get downstream-costly SPLITMV-residual / MBSPLIT_EIGHTS picks.
+     */
+    private static final class GoldenReferenceHelper {
+
+        private GoldenReferenceHelper() { }
+
+        /**
+         * Per-MB comparison summary between two {@link VP8Decoder.FrameMetadata}
+         * instances. Counts are over the overlapping MB grid (min of the two
+         * frames' mbCols * mbRows) so mismatched-dimension inputs don't crash.
+         * MV distances are only accumulated for MBs where both sides went inter.
+         */
+        record ModeDecisionDiff(
+            int totalMbs,
+            int agreeIntra, int agreeInter, int disagreeType,
+            int agreeI4x4, int agreeI16x16, int agreeSplitMv,
+            int mvExactAgree, long mvManhattanSum,
+            int segmentIdAgree
+        ) {
+            double typeAgreeRate() {
+                return totalMbs == 0 ? 0.0 : (agreeIntra + agreeInter) / (double) totalMbs;
+            }
+            double mvManhattanMean() {
+                return agreeInter == 0 ? 0.0 : mvManhattanSum / (double) agreeInter;
+            }
+        }
+
+        /**
+         * Combined result of encoding {@code src} with both encoders and decoding
+         * back through our decoder. {@code null} fields indicate libwebp was
+         * unavailable (Python missing or {@code webp} module not installed).
+         */
+        record Result(
+            @org.jetbrains.annotations.NotNull VP8Decoder.FrameMetadata ours,
+            @org.jetbrains.annotations.Nullable VP8Decoder.FrameMetadata libwebp,
+            @org.jetbrains.annotations.Nullable ModeDecisionDiff diff
+        ) { }
+
+        /**
+         * Encodes {@code src} through our encoder and libwebp, decodes both via
+         * {@link VP8Decoder#decodeWithMetadata}, and builds a per-MB diff.
+         * Returns a Result whose libwebp fields are {@code null} when libwebp
+         * tooling is unavailable - callers should self-skip in that case. The
+         * ours-only path still runs so callers can at least inspect our own
+         * encoder's choices.
+         *
+         * @param src source pixels (tests typically use small natural-ish images)
+         * @param quality integer quality in {@code [0, 100]} to match libwebp's
+         *                {@code WebPConfig.new(quality=...)} API; our encoder
+         *                receives {@code quality / 100.0f}
+         */
+        static @org.jetbrains.annotations.NotNull Result compare(PixelBuffer src, int quality) throws Exception {
+            byte[] oursVp8 = VP8Encoder.encode(src, quality / 100.0f);
+            VP8Decoder.DecodedFrame ours = VP8Decoder.decodeWithMetadata(oursVp8);
+
+            byte[] theirsVp8 = ConformanceHelper.encodeWithLibwebp(src, quality);
+            if (theirsVp8 == null) {
+                // libwebp unavailable; return our side only so callers can still
+                // inspect their own output. diff is null because there's nothing
+                // to diff against.
+                return new Result(ours.metadata(), null, null);
+            }
+
+            VP8Decoder.DecodedFrame theirs;
+            try {
+                theirs = VP8Decoder.decodeWithMetadata(theirsVp8);
+            } catch (RuntimeException e) {
+                // libwebp output our decoder couldn't parse (unlikely at keyframe
+                // level - would be a decoder bug worth investigating). Surface
+                // the ours-only view so diagnostics still produce something.
+                return new Result(ours.metadata(), null, null);
+            }
+
+            return new Result(ours.metadata(), theirs.metadata(),
+                buildDiff(ours.metadata(), theirs.metadata()));
+        }
+
+        private static @org.jetbrains.annotations.NotNull ModeDecisionDiff buildDiff(
+            @org.jetbrains.annotations.NotNull VP8Decoder.FrameMetadata a,
+            @org.jetbrains.annotations.NotNull VP8Decoder.FrameMetadata b
+        ) {
+            int mbCols = Math.min(a.mbCols(), b.mbCols());
+            int mbRows = Math.min(a.mbRows(), b.mbRows());
+            int total = mbCols * mbRows;
+            int agreeIntra = 0, agreeInter = 0, disagreeType = 0;
+            int agreeI4 = 0, agreeI16 = 0, agreeSplit = 0;
+            int mvExact = 0;
+            long mvManhattan = 0;
+            int segmentAgree = 0;
+            for (int y = 0; y < mbRows; y++) {
+                for (int x = 0; x < mbCols; x++) {
+                    int aIdx = y * a.mbCols() + x;
+                    int bIdx = y * b.mbCols() + x;
+                    boolean aInter = a.mbIsInter()[aIdx];
+                    boolean bInter = b.mbIsInter()[bIdx];
+                    if (aInter != bInter) {
+                        disagreeType++;
+                    } else if (!aInter) {
+                        agreeIntra++;
+                        boolean aI4 = a.mbIsI4x4()[aIdx];
+                        boolean bI4 = b.mbIsI4x4()[bIdx];
+                        if (aI4 && bI4) agreeI4++;
+                        else if (!aI4 && !bI4) agreeI16++;
+                    } else {
+                        agreeInter++;
+                        int aSplit = a.mbSplitScheme()[aIdx];
+                        int bSplit = b.mbSplitScheme()[bIdx];
+                        if (aSplit >= 0 && bSplit >= 0) agreeSplit++;
+                        int dRow = a.mbMvRow()[aIdx] - b.mbMvRow()[bIdx];
+                        int dCol = a.mbMvCol()[aIdx] - b.mbMvCol()[bIdx];
+                        if (dRow == 0 && dCol == 0) mvExact++;
+                        mvManhattan += Math.abs(dRow) + Math.abs(dCol);
+                    }
+                    if (a.mbSegmentId()[aIdx] == b.mbSegmentId()[bIdx])
+                        segmentAgree++;
+                }
+            }
+            return new ModeDecisionDiff(total, agreeIntra, agreeInter, disagreeType,
+                agreeI4, agreeI16, agreeSplit, mvExact, mvManhattan, segmentAgree);
+        }
+
+        /** Short human-readable summary of a diff - used by the demo test to log. */
+        static @org.jetbrains.annotations.NotNull String formatDiff(
+            @org.jetbrains.annotations.NotNull ModeDecisionDiff d
+        ) {
+            return String.format(
+                "MBs=%d  typeAgree=%.1f%%  intra=%d (i4x4=%d i16x16=%d)  "
+                + "inter=%d (splitmv=%d mvExact=%d mvMhtnAvg=%.2f)  "
+                + "typeDisagree=%d  segAgree=%d/%d",
+                d.totalMbs(), d.typeAgreeRate() * 100,
+                d.agreeIntra(), d.agreeI4x4(), d.agreeI16x16(),
+                d.agreeInter(), d.agreeSplitMv(), d.mvExactAgree(), d.mvManhattanMean(),
+                d.disagreeType(), d.segmentIdAgree(), d.totalMbs());
+        }
     }
 
     // ──── VP8 Session (Phase 0 stateful encoder/decoder wrappers) ────

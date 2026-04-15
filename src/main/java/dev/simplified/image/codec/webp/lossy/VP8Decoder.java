@@ -26,6 +26,89 @@ public final class VP8Decoder {
 
     private VP8Decoder() { }
 
+    /**
+     * Per-MB metadata captured from a completed decode pass. Exposes the per-MB
+     * decisions the decoder read out of the bitstream so downstream tooling can
+     * reason about mode distributions, MV fields, segment assignments, and
+     * SPLITMV partitioning without re-parsing the stream.
+     * <p>
+     * All arrays are row-major of length {@code mbCols * mbRows} (or 16 entries
+     * per MB for the sub-block MV grids {@code bmiRow} / {@code bmiCol}) and
+     * mirror the corresponding fields on {@link VP8Decoder}'s internal state.
+     * Per-MB MVs are in libvpx 1/8-pel internal units; sub-pel MVs are NOT
+     * clipped to the integer grid here - tooling that wants wire-format MVs
+     * should divide by 2 to get quarter-pel units.
+     * <p>
+     * Populated by {@link #decodeWithMetadata(byte[])}. Primary use case:
+     * golden-reference comparisons between this encoder and libwebp, where
+     * per-MB mode and MV agreement is the tuning target.
+     *
+     * @param width pixel width
+     * @param height pixel height
+     * @param mbCols macroblock columns
+     * @param mbRows macroblock rows
+     * @param isKeyframe true iff the decoded frame was a VP8 keyframe
+     * @param mbIsI4x4 per-MB B_PRED flag (true = i4x4, false = i16x16 when intra)
+     * @param mbIsInter per-MB inter flag (true = P-frame MB with LAST/GOLDEN/ALTREF ref)
+     * @param mbMvRow per-MB MV row in libvpx 1/8-pel internal units
+     * @param mbMvCol per-MB MV column in libvpx 1/8-pel internal units
+     * @param mbSplitScheme per-MB SPLITMV scheme ID (0..3) or -1 for non-SPLITMV
+     * @param mbRefFrame per-MB reference frame class (LoopFilter.REF_INTRA / REF_LAST / REF_GOLDEN / REF_ALTREF)
+     * @param mbModeLfIdx per-MB mode classification used by the loop filter
+     *                    (LoopFilter.MODE_NON_BPRED_INTRA / BPRED / ZEROMV / OTHER_INTER / SPLITMV)
+     * @param mbSegmentId per-MB segment ID (0..3)
+     * @param bmiRow per-4x4-sub-block MV row (length {@code mbCols * mbRows * 16})
+     * @param bmiCol per-4x4-sub-block MV column
+     */
+    public record FrameMetadata(
+        int width, int height, int mbCols, int mbRows, boolean isKeyframe,
+        boolean @NotNull [] mbIsI4x4, boolean @NotNull [] mbIsInter,
+        int @NotNull [] mbMvRow, int @NotNull [] mbMvCol,
+        int @NotNull [] mbSplitScheme, int @NotNull [] mbRefFrame,
+        int @NotNull [] mbModeLfIdx, int @NotNull [] mbSegmentId,
+        int @NotNull [] bmiRow, int @NotNull [] bmiCol
+    ) { }
+
+    /**
+     * Pair of reconstructed pixels + parsed per-MB metadata, returned by
+     * {@link #decodeWithMetadata(byte[])}.
+     *
+     * @param pixels reconstructed ARGB pixel plane
+     * @param metadata per-MB decisions captured during decode
+     */
+    public record DecodedFrame(@NotNull PixelBuffer pixels, @NotNull FrameMetadata metadata) { }
+
+    /**
+     * Decodes a VP8 keyframe and returns both the reconstructed pixels and a
+     * snapshot of the per-MB decisions parsed from the bitstream. Primary use
+     * case: golden-reference tooling that compares per-MB mode / MV choices
+     * between this encoder and libwebp.
+     * <p>
+     * Keyframe-only - the metadata surface doesn't make sense without a known
+     * frame classification, and P-frame decode requires a session with a
+     * reference. Session-aware metadata capture can be added later if needed.
+     *
+     * @param data raw VP8 keyframe payload
+     * @return reconstructed pixels + per-MB metadata
+     * @throws ImageDecodeException if the bitstream is malformed or uses unsupported features
+     */
+    public static @NotNull DecodedFrame decodeWithMetadata(byte @NotNull [] data) {
+        State[] captured = new State[1];
+        PixelBuffer pixels = decodeFrameWithStateCapture(data, null, captured);
+        State s = captured[0];
+        // Pixel width/height aren't kept on State (only mbCols/mbRows), but the
+        // returned PixelBuffer carries the accurate trimmed dimensions.
+        FrameMetadata meta = new FrameMetadata(
+            pixels.width(), pixels.height(), s.mbCols, s.mbRows, s.isKeyframe,
+            s.mbIsI4x4.clone(), s.mbIsInter.clone(),
+            s.mbMvRow.clone(), s.mbMvCol.clone(),
+            s.mbSplitScheme.clone(), s.mbRefFrame.clone(),
+            s.mbModeLfIdx.clone(), s.mbSegmentId.clone(),
+            s.bmiRow.clone(), s.bmiCol.clone()
+        );
+        return new DecodedFrame(pixels, meta);
+    }
+
     /** Per-frame decoder state threaded through the MB loop. */
     private static final class State {
         /** {@code true} for a keyframe, {@code false} for a P-frame (inter frame). */
@@ -216,6 +299,18 @@ public final class VP8Decoder {
      * @throws ImageDecodeException if the bitstream is malformed or uses unsupported features
      */
     static @NotNull PixelBuffer decodeFrame(byte @NotNull [] data, @Nullable VP8DecoderSession session) {
+        return decodeFrameWithStateCapture(data, session, null);
+    }
+
+    /**
+     * Internal decode variant that additionally snapshots the final decoder State
+     * into {@code captureSlot[0]} for metadata-extraction callers
+     * ({@link #decodeWithMetadata}). Passing {@code null} for {@code captureSlot}
+     * matches the plain {@link #decodeFrame} behaviour exactly.
+     */
+    private static @NotNull PixelBuffer decodeFrameWithStateCapture(
+        byte @NotNull [] data, @Nullable VP8DecoderSession session, State @Nullable [] captureSlot
+    ) {
         if (data.length < 3)
             throw new ImageDecodeException("VP8 data too short");
 
@@ -479,6 +574,7 @@ public final class VP8Decoder {
             width, height, s.lumaStride, s.chromaStride, pixels
         );
 
+        if (captureSlot != null) captureSlot[0] = s;
         return PixelBuffer.of(pixels, width, height);
     }
 
