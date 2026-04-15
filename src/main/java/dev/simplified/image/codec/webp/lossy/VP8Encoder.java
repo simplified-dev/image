@@ -1843,12 +1843,26 @@ public final class VP8Encoder {
     }
 
     /**
-     * SSE threshold below which {@link #encodeInterMacroblock} skips SPLITMV enumeration.
-     * Smooth content where a single MB-level MV already nails the prediction is unlikely
-     * to benefit from per-sub-block MVs; bypassing the per-scheme search saves substantial
-     * encode time on the common case. Tuning candidate for Phase 4.
+     * Lower-SSE bound below which {@link #encodeInterMacroblock} skips SPLITMV enumeration.
+     * Smooth content where a single MB-level MV already nails the prediction is unlikely to
+     * benefit from per-sub-block MVs; bypassing the per-scheme search keeps encode wall time
+     * bounded on the common case.
+     * <p>
+     * Tuned against the asset-renderer tooltip benchmark
+     * ({@code weapon_ss1_lossy.webp}, 454x260, 20 frames, q=0.9). The savings curve is
+     * a step function:
+     * <ul>
+     *   <li>gate &gt;= 16384 - all the easy SPLITMV wins captured (-106 bytes vs disabled).
+     *       Tooltip wall time at auto-threads ~887ms (~64ms over the disabled baseline).</li>
+     *   <li>1024 &lt;= gate &lt; 16384 - small additional savings (-484 to -590 bytes total)
+     *       at 2-3x the wall time. Marginal byte / runtime tradeoff.</li>
+     *   <li>gate &lt; 1024 - further savings (-1892 to -3278 bytes) at 5-12x runtime.
+     *       Worth opting into via a future encoder tier flag, not as the default.</li>
+     *   <li>gate &gt;&gt; 16384 - savings degrade due to per-frame proba-update ripple when
+     *       SPLITMV is picked sporadically on isolated very-high-SSE MBs.</li>
+     * </ul>
      */
-    private static final long SPLITMV_GATE_SSE = 16L * 256L;
+    private static final long SPLITMV_GATE_SSE = 16384L;
 
     /**
      * Resolves the LEFT and ABOVE neighbour sub-MVs for slot {@code j} of SPLITMV
