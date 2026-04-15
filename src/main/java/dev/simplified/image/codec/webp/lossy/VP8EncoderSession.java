@@ -103,6 +103,15 @@ public final class VP8EncoderSession {
      */
     private int motionSearchThreads = 1;
 
+    /**
+     * When {@code true}, each encoded frame runs a variance-based segmentation pass
+     * that assigns per-MB segment IDs + quantizer deltas so high-variance (detail)
+     * regions use coarser quantization while low-variance regions stay at the base
+     * quantizer. Frames with too little variance spread fall through to single-
+     * segment encode (no wasted segment-tree bits). Off by default.
+     */
+    private boolean autoSegment = false;
+
     /** Constructs a new {@code VP8EncoderSession} with no cached references. */
     public VP8EncoderSession() { }
 
@@ -127,6 +136,33 @@ public final class VP8EncoderSession {
             throw new IllegalArgumentException("motionSearchThreads must be >= 1");
         this.motionSearchThreads = threads;
         return this;
+    }
+
+    /**
+     * Enables or disables variance-based auto-segmentation for frames encoded
+     * through this session. When enabled, each frame runs a per-MB luma-variance
+     * analysis, quartile-buckets MBs into 4 segments, and emits per-segment quant
+     * deltas that apply higher quantization to high-variance regions. Frames
+     * whose variance spread is below the heuristic's internal gate fall through
+     * to single-segment encode and emit bit-identical output to the auto-segment-
+     * off path.
+     * <p>
+     * Per-frame decision - no cross-frame state. Each keyframe + P-frame
+     * independently chooses its segment map + deltas based on its own source.
+     * Decoder-agnostic: the emitted segment sub-header + per-MB segment-ID tree
+     * follow RFC 6386 section 10 and any spec-conformant VP8 decoder handles it.
+     *
+     * @param autoSegment true to enable variance-based auto-segmentation
+     * @return this session for chaining
+     */
+    public @NotNull VP8EncoderSession withAutoSegment(boolean autoSegment) {
+        this.autoSegment = autoSegment;
+        return this;
+    }
+
+    /** Returns {@code true} when auto-segmentation is enabled on this session. */
+    public boolean isAutoSegment() {
+        return autoSegment;
     }
 
     /**
@@ -156,8 +192,12 @@ public final class VP8EncoderSession {
             || pixels.width() != refWidth
             || pixels.height() != refHeight;
         if (needsKeyframe)
-            return VP8Encoder.encodeKeyframe(pixels, quality, this);
-        return VP8Encoder.encodePFrame(pixels, quality, this);
+            return autoSegment
+                ? VP8Encoder.encodeKeyframeAutoSegment(pixels, quality, this)
+                : VP8Encoder.encodeKeyframe(pixels, quality, this);
+        return autoSegment
+            ? VP8Encoder.encodePFrameAutoSegment(pixels, quality, this)
+            : VP8Encoder.encodePFrame(pixels, quality, this);
     }
 
     /** {@code true} when the {@code LAST} reference is available. */

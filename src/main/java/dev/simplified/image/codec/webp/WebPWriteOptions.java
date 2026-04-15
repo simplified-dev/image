@@ -37,6 +37,17 @@ public class WebPWriteOptions implements ImageWriteOptions {
      * and when {@code usePFrames == false}.
      */
     private final int motionSearchThreads;
+    /**
+     * When {@code true}, the lossy encoder runs a variance-based auto-segmentation
+     * pass per frame: source MBs are quartile-bucketed by per-MB luma variance and
+     * each quartile gets a different quantizer delta (high-variance regions get
+     * coarser quant where noise masking hides artifacts; low-variance regions stay
+     * at the base quantizer). Frames with too little variance spread fall through
+     * to single-segment encode with bit-identical output to the off path.
+     * Applies to both keyframes and P-frames on the animated-lossy path, and to
+     * the static-lossy path. Ignored for lossless encodes. Off by default.
+     */
+    private final boolean autoSegment;
 
     /**
      * Returns a new builder for WebP write options.
@@ -60,6 +71,7 @@ public class WebPWriteOptions implements ImageWriteOptions {
         private boolean usePFrames = false;
         private int forceKeyframeEvery = -1;
         private int motionSearchThreads = -1;
+        private boolean autoSegment = false;
 
         /**
          * Enables lossless encoding.
@@ -234,8 +246,32 @@ public class WebPWriteOptions implements ImageWriteOptions {
             return this;
         }
 
+        /**
+         * Enables variance-based auto-segmentation for the lossy encoder. Each frame
+         * runs a per-MB luma-variance analysis, quartile-buckets MBs into 4 segments,
+         * and emits per-segment quant deltas so high-variance regions absorb extra
+         * quantization under noise masking while low-variance regions stay at the
+         * base quantizer.
+         * <p>
+         * Frames whose variance spread is below the heuristic's internal gate (mostly
+         * flat content, solid colour, near-uniform tooltip backgrounds) fall through
+         * to a single-segment encode and emit output bit-identical to the off path.
+         * Callers can therefore enable this option globally without paying segment-
+         * tree overhead on content that cannot benefit.
+         * <p>
+         * Applies to both keyframes and P-frames on the animated-lossy path, and to
+         * the static-lossy path. Ignored for lossless encodes.
+         *
+         * @param autoSegment true to enable variance-based auto-segmentation
+         * @return this builder for chaining
+         */
+        public @NotNull Builder withAutoSegment(boolean autoSegment) {
+            this.autoSegment = autoSegment;
+            return this;
+        }
+
         public @NotNull WebPWriteOptions build() {
-            return new WebPWriteOptions(this.lossless, this.quality, this.loopCount, this.multithreaded, this.alphaCompression, this.usePFrames, this.forceKeyframeEvery, this.motionSearchThreads);
+            return new WebPWriteOptions(this.lossless, this.quality, this.loopCount, this.multithreaded, this.alphaCompression, this.usePFrames, this.forceKeyframeEvery, this.motionSearchThreads, this.autoSegment);
         }
 
     }

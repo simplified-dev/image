@@ -627,20 +627,94 @@ public final class VP8Encoder {
     public static byte @NotNull [] encodeWithAutoSegment(
         @NotNull PixelBuffer pixels, float quality
     ) {
-        int width = pixels.width();
-        int height = pixels.height();
-        int mbCols = (width + 15) / 16;
-        int mbRows = (height + 15) / 16;
+        // Route through the generic encodeFrame path so the auto-segment logic
+        // reuses the same MB loop + writeFrameHeader + loop-filter code that
+        // the baseline keyframe path uses. When the variance spread gate
+        // rejects the frame, applyAutoSegmentation leaves useSegment=false and
+        // the output collapses to the single-segment baseline.
+        return encodeFrame(pixels, quality, /*session=*/ null, /*isKeyframe=*/ true,
+            false, EMPTY_LF_DELTA, EMPTY_LF_DELTA,
+            /*forceSplitMv=*/ false, /*autoSegment=*/ true);
+    }
 
-        int[] mbSegmentAssignment = new int[mbCols * mbRows];
-        int[] segmentQuantDelta = new int[4];
-        if (!computeAutoSegmentAssignment(pixels.pixels(), width, height, mbCols, mbRows,
-                mbSegmentAssignment, segmentQuantDelta)) {
-            // Variance spread too narrow - single-segment encode wins on byte cost.
-            return encode(pixels, quality);
+    /**
+     * Session-aware auto-segment keyframe entry point. Used by
+     * {@link VP8EncoderSession} when {@code autoSegment} is on and the session
+     * encodes a keyframe (first frame of a stream, forced keyframe, or interval
+     * keyframe from the writer's {@code forceKeyframeEvery} setting).
+     *
+     * @param pixels source pixel buffer
+     * @param quality encoding quality in {@code [0.0, 1.0]}
+     * @param session reference-frame session
+     * @return the encoded VP8 keyframe payload bytes
+     */
+    static byte @NotNull [] encodeKeyframeAutoSegment(
+        @NotNull PixelBuffer pixels, float quality, @NotNull VP8EncoderSession session
+    ) {
+        return encodeFrame(pixels, quality, session, /*isKeyframe=*/ true,
+            false, EMPTY_LF_DELTA, EMPTY_LF_DELTA,
+            /*forceSplitMv=*/ false, /*autoSegment=*/ true);
+    }
+
+    /**
+     * Session-aware auto-segment P-frame entry point. Mirrors
+     * {@link #encodePFrame(PixelBuffer, float, VP8EncoderSession)} but runs the
+     * variance-based segment selector on the current frame before the MB loop.
+     * Per-frame: the segment sub-header is always re-emitted (VP8 has no
+     * cross-frame segment persistence), so each P-frame independently decides
+     * its own segment-ID map + quant deltas.
+     *
+     * @param pixels source pixel buffer
+     * @param quality encoding quality in {@code [0.0, 1.0]}
+     * @param session reference-frame session holding a valid LAST reference
+     * @return the encoded VP8 P-frame payload bytes
+     */
+    static byte @NotNull [] encodePFrameAutoSegment(
+        @NotNull PixelBuffer pixels, float quality, @NotNull VP8EncoderSession session
+    ) {
+        int qi = qualityToQi(quality);
+        if (pickFilterLevel(qi) > 0) {
+            return encodeFrame(pixels, quality, session, /*isKeyframe=*/ false,
+                true, EMPTY_LF_DELTA, LIBVPX_DEFAULT_P_MODE_LF_DELTA,
+                /*forceSplitMv=*/ false, /*autoSegment=*/ true);
         }
-        return encodeSegmentMappedKeyframe(pixels, quality, mbSegmentAssignment,
-            segmentQuantDelta, /*segmentLfDelta=*/ new int[4], /*absolute=*/ false);
+        return encodeFrame(pixels, quality, session, /*isKeyframe=*/ false,
+            false, EMPTY_LF_DELTA, EMPTY_LF_DELTA,
+            /*forceSplitMv=*/ false, /*autoSegment=*/ true);
+    }
+
+    /**
+     * Runs the variance-based segment selector on the source and installs the
+     * chosen segment IDs + quant deltas onto {@code s}. When the source has too
+     * little variance spread for segmentation to pay off
+     * ({@link #computeAutoSegmentAssignment} returns false), this is a no-op and
+     * the frame encodes as single-segment.
+     * <p>
+     * When segmentation is enabled, sets {@code s.useSegment = true}, installs
+     * {@code AUTO_SEGMENT_QUANT_DELTAS} relative deltas, fills {@code s.mbSegmentId}
+     * with the per-quartile assignment, and calls
+     * {@link State#rebuildSegmentMatrices} so the per-MB
+     * {@link State#applySegment} swap has non-trivial values to pick.
+     */
+    private static void applyAutoSegmentation(
+        @NotNull State s, int @NotNull [] argb, int width, int height, int qi
+    ) {
+        int[] assignment = new int[s.mbCols * s.mbRows];
+        int[] quantDelta = new int[4];
+        if (!computeAutoSegmentAssignment(argb, width, height, s.mbCols, s.mbRows,
+                assignment, quantDelta))
+            return;   // spread gate rejected - leave useSegment = false
+
+        s.useSegment = true;
+        s.updateMbSegmentationMap = true;
+        s.segmentAbsoluteDelta = false;
+        System.arraycopy(assignment, 0, s.mbSegmentId, 0, assignment.length);
+        System.arraycopy(quantDelta, 0, s.segmentQuantDelta, 0, 4);
+        // Uniform segment prior: 50/50 at probs[0], 50/50 inside each half.
+        s.segmentProbs[0] = 128;
+        s.segmentProbs[1] = 128;
+        s.segmentProbs[2] = 128;
+        s.rebuildSegmentMatrices(qi);
     }
 
     /**
@@ -875,13 +949,22 @@ public final class VP8Encoder {
         boolean useLfDelta, int @NotNull [] refLfDelta, int @NotNull [] modeLfDelta
     ) {
         return encodeFrame(pixels, quality, session, isKeyframe,
-            useLfDelta, refLfDelta, modeLfDelta, /*forceSplitMv=*/ false);
+            useLfDelta, refLfDelta, modeLfDelta, /*forceSplitMv=*/ false, /*autoSegment=*/ false);
     }
 
     private static byte @NotNull [] encodeFrame(
         @NotNull PixelBuffer pixels, float quality, @Nullable VP8EncoderSession session, boolean isKeyframe,
         boolean useLfDelta, int @NotNull [] refLfDelta, int @NotNull [] modeLfDelta,
         boolean forceSplitMv
+    ) {
+        return encodeFrame(pixels, quality, session, isKeyframe,
+            useLfDelta, refLfDelta, modeLfDelta, forceSplitMv, /*autoSegment=*/ false);
+    }
+
+    private static byte @NotNull [] encodeFrame(
+        @NotNull PixelBuffer pixels, float quality, @Nullable VP8EncoderSession session, boolean isKeyframe,
+        boolean useLfDelta, int @NotNull [] refLfDelta, int @NotNull [] modeLfDelta,
+        boolean forceSplitMv, boolean autoSegment
     ) {
         int width = pixels.width();
         int height = pixels.height();
@@ -903,6 +986,16 @@ public final class VP8Encoder {
         s.useLfDelta = useLfDelta;
         System.arraycopy(refLfDelta, 0, s.refLfDelta, 0, 4);
         System.arraycopy(modeLfDelta, 0, s.modeLfDelta, 0, 4);
+
+        // Auto-segmentation pass: variance-based segment selection + per-segment
+        // quant-delta installation. Runs before writeFrameHeader so the emitted
+        // segment sub-header reflects the installed deltas + segment IDs. When the
+        // variance spread gate rejects the frame (mostly flat content), useSegment
+        // stays false and the rest of the encode is bit-identical to a baseline
+        // single-segment encode. Must run BEFORE the segFilterLevel derivation
+        // below so the levels are re-derived in the segment-aware branch too.
+        if (autoSegment)
+            applyAutoSegmentation(s, pixels.pixels(), width, height, qi);
 
         // Derive per-segment effective filter levels. Single-segment streams leave
         // segmentLfDelta all zero so every entry equals the base level.

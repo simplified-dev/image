@@ -41,6 +41,7 @@ public class WebPImageWriter implements ImageWriter {
         boolean usePFrames = false;
         int forceKeyframeEvery = -1;
         int motionSearchThreads = -1;
+        boolean autoSegment = false;
 
         if (options instanceof WebPWriteOptions webpOptions) {
             lossless = webpOptions.isLossless();
@@ -51,16 +52,17 @@ public class WebPImageWriter implements ImageWriter {
             usePFrames = webpOptions.isUsePFrames();
             forceKeyframeEvery = webpOptions.getForceKeyframeEvery();
             motionSearchThreads = webpOptions.getMotionSearchThreads();
+            autoSegment = webpOptions.isAutoSegment();
         }
 
         if (data instanceof AnimatedImageData animated) {
             if (loopCount == 0 && animated.getLoopCount() != 0)
                 loopCount = animated.getLoopCount();
 
-            return writeAnimated(animated, lossless, quality, loopCount, multithreaded, usePFrames, forceKeyframeEvery, motionSearchThreads);
+            return writeAnimated(animated, lossless, quality, loopCount, multithreaded, usePFrames, forceKeyframeEvery, motionSearchThreads, autoSegment);
         }
 
-        return writeStatic(data, lossless, quality, alphaCompression);
+        return writeStatic(data, lossless, quality, alphaCompression, autoSegment);
     }
 
     /**
@@ -75,7 +77,7 @@ public class WebPImageWriter implements ImageWriter {
         return frameCount > 60 ? 30 : 0;
     }
 
-    private byte @NotNull [] writeStatic(@NotNull ImageData data, boolean lossless, float quality, boolean alphaCompression) {
+    private byte @NotNull [] writeStatic(@NotNull ImageData data, boolean lossless, float quality, boolean alphaCompression, boolean autoSegment) {
         PixelBuffer pixels = data.toPixelBuffer();
         byte[] payload;
 
@@ -87,7 +89,9 @@ public class WebPImageWriter implements ImageWriter {
             return RiffContainer.write(chunks);
         }
 
-        payload = VP8Encoder.encode(pixels, quality);
+        payload = autoSegment
+            ? VP8Encoder.encodeWithAutoSegment(pixels, quality)
+            : VP8Encoder.encode(pixels, quality);
         boolean hasAlpha = data.hasAlpha();
 
         ConcurrentList<WebPChunk> chunks = Concurrent.newList();
@@ -112,7 +116,8 @@ public class WebPImageWriter implements ImageWriter {
         boolean multithreaded,
         boolean usePFrames,
         int forceKeyframeEvery,
-        int motionSearchThreads
+        int motionSearchThreads,
+        boolean autoSegment
     ) {
         ConcurrentList<ImageFrame> frames = data.getFrames();
         boolean hasAlpha = data.hasAlpha();
@@ -130,7 +135,8 @@ public class WebPImageWriter implements ImageWriter {
                 ? Runtime.getRuntime().availableProcessors()
                 : motionSearchThreads;
             VP8EncoderSession vp8Session = new VP8EncoderSession()
-                .withMotionSearchThreads(mvThreads);
+                .withMotionSearchThreads(mvThreads)
+                .withAutoSegment(autoSegment);
             int keyInterval = resolveForceKeyframeEvery(forceKeyframeEvery, frames.size());
             encodedPayloads = Concurrent.newList();
             for (int i = 0; i < frames.size(); i++) {
@@ -149,7 +155,7 @@ public class WebPImageWriter implements ImageWriter {
         } else if (multithreaded) {
             var futures = frames.stream()
                 .map(frame -> CompletableFuture.supplyAsync(
-                    () -> encodeFrame(frame, lossless, quality),
+                    () -> encodeFrame(frame, lossless, quality, autoSegment),
                     java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()
                 ))
                 .collect(Concurrent.toList());
@@ -171,7 +177,7 @@ public class WebPImageWriter implements ImageWriter {
             }
         } else {
             encodedPayloads = frames.stream()
-                .map(frame -> encodeFrame(frame, lossless, quality))
+                .map(frame -> encodeFrame(frame, lossless, quality, autoSegment))
                 .collect(Concurrent.toList());
             if (perFrameAlpha) {
                 alphaPayloads = frames.stream()
@@ -205,13 +211,15 @@ public class WebPImageWriter implements ImageWriter {
         return RiffContainer.write(chunks);
     }
 
-    private byte @NotNull [] encodeFrame(@NotNull ImageFrame frame, boolean lossless, float quality) {
+    private byte @NotNull [] encodeFrame(@NotNull ImageFrame frame, boolean lossless, float quality, boolean autoSegment) {
         PixelBuffer pixels = frame.pixels();
 
         if (lossless)
             return VP8LEncoder.encode(pixels);
 
-        return VP8Encoder.encode(pixels, quality);
+        return autoSegment
+            ? VP8Encoder.encodeWithAutoSegment(pixels, quality)
+            : VP8Encoder.encode(pixels, quality);
     }
 
     private static byte @NotNull [] buildVP8XPayload(int width, int height, boolean animation, boolean alpha) {

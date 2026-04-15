@@ -324,6 +324,172 @@ class WebPRoundTripTest {
     }
 
     @Test
+    @DisplayName("static lossy with autoSegment differs from baseline on high-variance content and round-trips")
+    void staticLossyAutoSegmentViaWriter() throws IOException {
+        // 64x64 source with a smooth left half + high-variance right half (alternating
+        // 2-row stripes). Variance spread clears the auto-segment heuristic's gate so
+        // the encoder installs per-segment quant deltas via the writer's autoSegment
+        // option. Output bytes must differ from the autoSegment=false baseline, and
+        // the auto-segment output must round-trip through the decoder with healthy
+        // PSNR.
+        int W = 64, H = 64;
+        PixelBuffer buf = PixelBuffer.create(W, H);
+        for (int y = 0; y < H; y++) {
+            for (int x = 0; x < W; x++) {
+                int argb;
+                if (x < W / 2) {
+                    int v = (x + y) * 2;
+                    argb = 0xFF000000 | (v << 16) | (v << 8) | v;
+                } else {
+                    int v = ((y >> 1) & 1) != 0 ? 200 : 40;
+                    argb = 0xFF000000 | (v << 16) | (v << 8) | v;
+                }
+                buf.setPixel(x, y, argb);
+            }
+        }
+        StaticImageData image = new StaticImageData(ImageFrame.of(buf));
+        ImageFactory factory = new ImageFactory();
+
+        File baselineOut = outputDir.resolve("static_autoSeg_off.webp").toFile();
+        File autoSegOut = outputDir.resolve("static_autoSeg_on.webp").toFile();
+        factory.toFile(image, ImageFormat.WEBP, baselineOut,
+            WebPWriteOptions.builder().isLossless(false).withQuality(0.5f).build());
+        factory.toFile(image, ImageFormat.WEBP, autoSegOut,
+            WebPWriteOptions.builder().isLossless(false).withQuality(0.5f)
+                .withAutoSegment(true).build());
+
+        if (autoSegOut.length() >= baselineOut.length())
+            throw new AssertionError(String.format(
+                "autoSegment did not reduce static-lossy byte output on high-variance "
+                + "content: baseline=%d autoSeg=%d (expected strictly smaller)",
+                baselineOut.length(), autoSegOut.length()));
+
+        // Round-trip: decode the autoSegment stream and sanity-check PSNR.
+        ImageData decoded = factory.fromFile(autoSegOut);
+        PixelBuffer dec = decoded.toPixelBuffer();
+        long sse = 0;
+        long pixelCount = (long) W * H * 3;
+        for (int y = 0; y < H; y++)
+            for (int x = 0; x < W; x++) {
+                int a = buf.getPixel(x, y);
+                int b = dec.getPixel(x, y);
+                for (int shift : new int[] { 0, 8, 16 }) {
+                    int d = ((a >> shift) & 0xFF) - ((b >> shift) & 0xFF);
+                    sse += (long) d * d;
+                }
+            }
+        double mse = (double) sse / pixelCount;
+        double psnr = mse > 0 ? 10.0 * Math.log10((255.0 * 255.0) / mse) : 99.0;
+        if (psnr < 25.0)
+            throw new AssertionError(String.format(
+                "static-lossy autoSegment round-trip PSNR = %.2f dB (expected >= 25)",
+                psnr));
+    }
+
+    @Test
+    @DisplayName("static lossy autoSegment falls through to baseline on flat content (bit-identical via writer)")
+    void staticLossyAutoSegmentFallsThroughOnFlatContent() throws IOException {
+        // Solid-colour 32x32 source has zero per-MB variance. WebPImageWriter with
+        // autoSegment=true must route through VP8Encoder.encodeWithAutoSegment,
+        // which detects the variance gate failure and falls through to the single-
+        // segment path. Output files must therefore be byte-identical to the
+        // autoSegment=false baseline - no wasted segment-tree emit.
+        int W = 32, H = 32;
+        PixelBuffer buf = PixelBuffer.create(W, H);
+        buf.fill(0xFF808080);
+        StaticImageData image = new StaticImageData(ImageFrame.of(buf));
+        ImageFactory factory = new ImageFactory();
+
+        File offOut = outputDir.resolve("flat_autoSeg_off.webp").toFile();
+        File onOut = outputDir.resolve("flat_autoSeg_on.webp").toFile();
+        factory.toFile(image, ImageFormat.WEBP, offOut,
+            WebPWriteOptions.builder().isLossless(false).withQuality(0.5f).build());
+        factory.toFile(image, ImageFormat.WEBP, onOut,
+            WebPWriteOptions.builder().isLossless(false).withQuality(0.5f)
+                .withAutoSegment(true).build());
+
+        byte[] off = Files.readAllBytes(offOut.toPath());
+        byte[] on = Files.readAllBytes(onOut.toPath());
+        if (off.length != on.length)
+            throw new AssertionError(String.format(
+                "autoSegment did not fall through on flat content: "
+                + "baseline=%d autoSeg=%d (expected equal)", off.length, on.length));
+        for (int i = 0; i < off.length; i++)
+            if (off[i] != on[i])
+                throw new AssertionError(String.format(
+                    "autoSegment byte %d differs on flat content: "
+                    + "baseline=0x%02X autoSeg=0x%02X", i, off[i] & 0xFF, on[i] & 0xFF));
+    }
+
+    @Test
+    @DisplayName("animated lossy with P-frames + autoSegment round-trips cleanly via WebPImageWriter")
+    void animatedLossyPFramesWithAutoSegment() {
+        // 3-frame animation with high-variance content per frame (so the autoSegment
+        // spread gate clears on both keyframe and P-frame paths). Asserts the writer
+        // plumbs autoSegment through VP8EncoderSession for both frame types and the
+        // resulting WebP decodes without error via the roundtrip factory.fromFile.
+        int W = 64, H = 64;
+        ConcurrentList<ImageFrame> frames = Concurrent.newList();
+        for (int f = 0; f < 3; f++) {
+            PixelBuffer fb = PixelBuffer.create(W, H);
+            for (int y = 0; y < H; y++) {
+                for (int x = 0; x < W; x++) {
+                    int argb;
+                    if (x < W / 2) {
+                        int v = ((x + y + f) * 2) & 0xFF;
+                        argb = 0xFF000000 | (v << 16) | (v << 8) | v;
+                    } else {
+                        int v = (((y + f) >> 1) & 1) != 0 ? 200 : 40;
+                        argb = 0xFF000000 | (v << 16) | (v << 8) | v;
+                    }
+                    fb.setPixel(x, y, argb);
+                }
+            }
+            frames.add(ImageFrame.of(fb, 100, 0, 0,
+                FrameDisposal.DO_NOT_DISPOSE, FrameBlend.OVER));
+        }
+        AnimatedImageData anim = AnimatedImageData.builder()
+            .withWidth(W).withHeight(H)
+            .withFrames(frames)
+            .withLoopCount(0)
+            .withBackgroundColor(0)
+            .build();
+
+        File out = outputDir.resolve("anim_autoSeg.webp").toFile();
+        ImageFactory factory = new ImageFactory();
+        factory.toFile(anim, ImageFormat.WEBP, out,
+            WebPWriteOptions.builder().isLossless(false).withQuality(0.5f)
+                .usePFrames(true).withAutoSegment(true).build());
+
+        ImageData decoded = factory.fromFile(out);
+        if (!(decoded instanceof AnimatedImageData decAnim))
+            throw new AssertionError("expected AnimatedImageData, got " + decoded.getClass());
+        if (decAnim.getFrames().size() != 3)
+            throw new AssertionError("frame count mismatch: " + decAnim.getFrames().size());
+
+        // Sanity-check PSNR on frame 0 - any wire-format defect in the autoSegment
+        // P-frame path would either fail decode or land PSNR well below 20 dB.
+        PixelBuffer src0 = frames.get(0).pixels();
+        PixelBuffer dec0 = decAnim.getFrames().get(0).pixels();
+        long sse = 0;
+        long pixelCount = (long) W * H * 3;
+        for (int y = 0; y < H; y++)
+            for (int x = 0; x < W; x++) {
+                int a = src0.getPixel(x, y);
+                int b = dec0.getPixel(x, y);
+                for (int shift : new int[] { 0, 8, 16 }) {
+                    int d = ((a >> shift) & 0xFF) - ((b >> shift) & 0xFF);
+                    sse += (long) d * d;
+                }
+            }
+        double mse = (double) sse / pixelCount;
+        double psnr = mse > 0 ? 10.0 * Math.log10((255.0 * 255.0) / mse) : 99.0;
+        if (psnr < 22.0)
+            throw new AssertionError(String.format(
+                "animated autoSegment frame 0 PSNR = %.2f dB (expected >= 22)", psnr));
+    }
+
+    @Test
     @DisplayName("forceKeyframeEvery=N triggers intermediate keyframes (seekability knob)")
     void forceKeyframeEveryTriggersIntermediateKeyframes() {
         // A 6-frame stationary animation. At usePFrames=true + forceKeyframeEvery=3,
