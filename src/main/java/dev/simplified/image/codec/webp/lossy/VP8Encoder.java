@@ -345,9 +345,28 @@ public final class VP8Encoder {
         return encodeFrame(pixels, quality, null, /*isKeyframe=*/ true, true, refLfDelta, modeLfDelta);
     }
 
+    /**
+     * Mode-LF-delta vector applied to P-frames at non-zero filter level, mirroring
+     * libvpx's {@code set_default_lf_deltas} ({@code vp8/encoder/onyx_if.c:1272-1291}).
+     * Index layout is {@code [BPRED, ZEROMV, OTHER_INTER, SPLITMV]}. Only the ZEROMV
+     * slot gets a non-zero default: {@code -2} reduces (not disables) the loop-filter
+     * strength on stationary inter-skip MBs, attenuating cumulative drift across
+     * chained P-frames without losing deblocking on moving content.
+     */
+    private static final int[] LIBVPX_DEFAULT_P_MODE_LF_DELTA = { 0, -2, 0, 0 };
+
     private static byte @NotNull [] encodeFrame(
         @NotNull PixelBuffer pixels, float quality, @Nullable VP8EncoderSession session, boolean isKeyframe
     ) {
+        // P-frames at non-zero filter level pick up libvpx's default mode_lf_deltas so
+        // stationary-inter-skip chains don't accumulate loop-filter drift. Keyframes and
+        // filter-off paths skip the 16-bit header overhead. Callers with specific delta
+        // requirements use {@link #encodeWithLfDeltas} which bypasses this default.
+        int qi = qualityToQi(quality);
+        if (!isKeyframe && pickFilterLevel(qi) > 0) {
+            return encodeFrame(pixels, quality, session, isKeyframe,
+                true, EMPTY_LF_DELTA, LIBVPX_DEFAULT_P_MODE_LF_DELTA);
+        }
         return encodeFrame(pixels, quality, session, isKeyframe, false, EMPTY_LF_DELTA, EMPTY_LF_DELTA);
     }
 

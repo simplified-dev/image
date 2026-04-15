@@ -885,6 +885,48 @@ public class VP8CodecTest {
                     throw new AssertionError("ALTREF mutated by default P-frame at index " + i);
         }
 
+        @Test @DisplayName("conformance: P-frames at non-zero filter level attenuate drift via libvpx default mode_lf_delta[ZEROMV]=-2")
+        void pFrameDefaultLfDeltasAttenuateDrift() {
+            // libvpx's set_default_lf_deltas (vp8/encoder/onyx_if.c:1272-1291) sets
+            // mode_lf_deltas[ZERO_MV] = -2 on P-frames so stationary-inter-skip chains
+            // don't accumulate loop-filter drift. Test that a 10-frame stationary chain
+            // at q=0.5 (filter_level > 0) stays within a bounded MSE against frame 0 -
+            // without the default, the MB-outer-edge filter re-application per frame
+            // produces unbounded drift.
+            PixelBuffer buf = PixelBuffer.create(32, 32);
+            for (int y = 0; y < 32; y++)
+                for (int x = 0; x < 32; x++)
+                    buf.setPixel(x, y, 0xFF000000 | ((x * 8) << 16) | ((y * 8) << 8));
+
+            VP8EncoderSession encSess = new VP8EncoderSession();
+            VP8DecoderSession decSess = new VP8DecoderSession();
+            byte[] frame0Bytes = encSess.encode(buf, 0.5f, true);
+            PixelBuffer dec0 = decSess.decode(frame0Bytes);
+
+            long totalSqErr = 0;
+            int pixelCount = 0;
+            for (int i = 1; i < 10; i++) {
+                byte[] frameBytes = encSess.encode(buf, 0.5f, false);
+                PixelBuffer dec = decSess.decode(frameBytes);
+                for (int y = 0; y < 32; y++) {
+                    for (int x = 0; x < 32; x++) {
+                        int p0 = dec0.getPixel(x, y);
+                        int p1 = dec.getPixel(x, y);
+                        for (int shift : new int[] { 0, 8, 16 }) {
+                            int diff = ((p0 >> shift) & 0xFF) - ((p1 >> shift) & 0xFF);
+                            totalSqErr += (long) diff * diff;
+                            pixelCount++;
+                        }
+                    }
+                }
+            }
+            double mse = totalSqErr / (double) pixelCount;
+            if (mse > 1.5)
+                throw new AssertionError(String.format(
+                    "9-frame stationary P-chain MSE %.3f exceeds 1.5 - libvpx default lf "
+                    + "deltas not effectively attenuating filter drift", mse));
+        }
+
         @Test @DisplayName("conformance: coefficient proba updates round-trip through P-frame chain (RFC 6386 paragraph 13)")
         void coefficientProbaUpdatesRoundTripThroughPFrameChain() {
             // Build a 4-frame translating sequence. Each P-frame emits plenty of NEW_MV
