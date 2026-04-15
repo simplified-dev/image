@@ -95,8 +95,25 @@ public final class VP8Decoder {
         final int[] refLfDelta = new int[4];
         final int[] modeLfDelta = new int[4];
 
-        // Dequantizer steps (filled after VP8ParseQuant).
+        // Dequantizer steps for the currently-active segment (RFC 6386 section 9.3). The
+        // parser swaps these to {@code segY1Dc[mbSegmentId]} etc. when reading each MB's
+        // segment tree, so downstream dequant logic remains segment-agnostic.
         int y1Dc, y1Ac, y2Dc, y2Ac, uvDc, uvAc;
+
+        // Per-segment dequantizer steps, derived once after the frame header's quant
+        // section. Always 4 entries; single-segment streams have all 4 equal.
+        final int[] segY1Dc = new int[4];
+        final int[] segY1Ac = new int[4];
+        final int[] segY2Dc = new int[4];
+        final int[] segY2Ac = new int[4];
+        final int[] segUvDc = new int[4];
+        final int[] segUvAc = new int[4];
+
+        // Per-segment effective loop filter level (RFC 6386 section 9.3 + 15). Derived
+        // from the frame-header base level +/- alt_lf per segment (or absolute when
+        // segment_feature_mode = 1). All 4 entries equal the base level when segments
+        // are disabled.
+        final int[] segFilterLevel = new int[4];
 
         // Coefficient probabilities after parsing the 1056 update bits.
         final int[][][][] proba;
@@ -110,9 +127,14 @@ public final class VP8Decoder {
         boolean useSkipProba;
         int skipP;
 
-        // Segment map state (needed to correctly consume per-MB segment bits).
+        // Segment map state (RFC 6386 section 10). Populated from the frame header's
+        // segment sub-header. {@code updateMap} gates per-MB segment-ID bits in the
+        // boolean-coded MB stream; {@code segmentProbs} carries the 3 probs of the
+        // 4-leaf segment tree. {@code mbSegmentId} is written per MB during parse and
+        // read back at dequant time (via active-field swap) and by the loop filter.
         boolean updateMap;
         final int[] segmentProbs = { 255, 255, 255 };
+        final int[] mbSegmentId;
 
         // Inter-frame header state (populated only when !isKeyframe).
         int probIntra;
@@ -152,6 +174,7 @@ public final class VP8Decoder {
             java.util.Arrays.fill(this.mbSplitScheme, -1);
             this.mbRefFrame = new int[mbCols * mbRows];       // defaults to REF_INTRA = 0
             this.mbModeLfIdx = new int[mbCols * mbRows];       // defaults to MODE_NON_BPRED_INTRA = 0
+            this.mbSegmentId = new int[mbCols * mbRows];       // defaults to 0 (single-segment)
             this.proba = cloneProba(VP8Tables.COEFFS_PROBA_0);
             // Keyframes always reset MV probs to defaults; P-frames inherit from the
             // session's carried state, or fall back to defaults when no session / first
@@ -235,14 +258,17 @@ public final class VP8Decoder {
 
         // ── Segment header ──
         boolean useSegment = br.decodeBool() != 0;
+        boolean segmentAbsoluteDelta = false;
+        int[] segmentQuantDelta = new int[4];
+        int[] segmentLfDelta = new int[4];
         if (useSegment) {
             s.updateMap = br.decodeBool() != 0;
             if (br.decodeBool() != 0) {                       // update_data
-                br.decodeBool();                              // absolute_delta
+                segmentAbsoluteDelta = br.decodeBool() != 0;
                 for (int i = 0; i < 4; i++)
-                    if (br.decodeBool() != 0) br.decodeSint(7);
+                    if (br.decodeBool() != 0) segmentQuantDelta[i] = br.decodeSint(7);
                 for (int i = 0; i < 4; i++)
-                    if (br.decodeBool() != 0) br.decodeSint(6);
+                    if (br.decodeBool() != 0) segmentLfDelta[i] = br.decodeSint(6);
             }
             if (s.updateMap) {
                 for (int i = 0; i < 3; i++)
@@ -254,6 +280,13 @@ public final class VP8Decoder {
         boolean simpleFilter = br.decodeBool() != 0;
         int filterLevel = br.decodeUint(6);
         int sharpness = br.decodeUint(3);
+        // Derive per-segment effective filter levels (RFC 6386 section 15). Single-
+        // segment streams have segmentLfDelta all zero, so all 4 entries equal the
+        // base filterLevel. The loop filter picks segFilterLevel[mbSegmentId[mb]] per MB.
+        for (int seg = 0; seg < 4; seg++) {
+            int segLevel = segmentAbsoluteDelta ? segmentLfDelta[seg] : filterLevel + segmentLfDelta[seg];
+            s.segFilterLevel[seg] = Math.clamp(segLevel, 0, 63);
+        }
         s.useLfDelta = br.decodeBool() != 0;
         if (s.useLfDelta) {
             if (br.decodeBool() != 0) {                       // update_lf_delta
@@ -279,12 +312,27 @@ public final class VP8Decoder {
         int dquvDc = br.decodeBool() != 0 ? br.decodeSint(4) : 0;
         int dquvAc = br.decodeBool() != 0 ? br.decodeSint(4) : 0;
 
-        s.y1Dc = VP8Tables.DC_Q_LOOKUP[Math.clamp(baseQ + dqy1Dc, 0, 127)];
-        s.y1Ac = VP8Tables.AC_Q_LOOKUP[Math.clamp(baseQ, 0, 127)];
-        s.y2Dc = VP8Tables.DC_Q_LOOKUP[Math.clamp(baseQ + dqy2Dc, 0, 127)] * 2;
-        s.y2Ac = Math.max(8, VP8Tables.AC2_Q_LOOKUP[Math.clamp(baseQ + dqy2Ac, 0, 127)]);
-        s.uvDc = VP8Tables.DC_Q_LOOKUP[Math.clamp(baseQ + dquvDc, 0, 117)];
-        s.uvAc = VP8Tables.AC_Q_LOOKUP[Math.clamp(baseQ + dquvAc, 0, 127)];
+        // Derive per-segment quantizer steps. Single-segment streams have
+        // segmentQuantDelta all zero so all 4 entries collapse to the same values.
+        for (int seg = 0; seg < 4; seg++) {
+            int segBaseQ = Math.clamp(
+                segmentAbsoluteDelta ? segmentQuantDelta[seg] : baseQ + segmentQuantDelta[seg],
+                0, 127);
+            s.segY1Dc[seg] = VP8Tables.DC_Q_LOOKUP[Math.clamp(segBaseQ + dqy1Dc, 0, 127)];
+            s.segY1Ac[seg] = VP8Tables.AC_Q_LOOKUP[segBaseQ];
+            s.segY2Dc[seg] = VP8Tables.DC_Q_LOOKUP[Math.clamp(segBaseQ + dqy2Dc, 0, 127)] * 2;
+            s.segY2Ac[seg] = Math.max(8, VP8Tables.AC2_Q_LOOKUP[Math.clamp(segBaseQ + dqy2Ac, 0, 127)]);
+            s.segUvDc[seg] = VP8Tables.DC_Q_LOOKUP[Math.clamp(segBaseQ + dquvDc, 0, 117)];
+            s.segUvAc[seg] = VP8Tables.AC_Q_LOOKUP[Math.clamp(segBaseQ + dquvAc, 0, 127)];
+        }
+        // Seed the active fields from segment 0; per-MB swaps happen in decodeMacroblock
+        // / decodeInterMacroblock right after the segment ID read.
+        s.y1Dc = s.segY1Dc[0];
+        s.y1Ac = s.segY1Ac[0];
+        s.y2Dc = s.segY2Dc[0];
+        s.y2Ac = s.segY2Ac[0];
+        s.uvDc = s.segUvDc[0];
+        s.uvAc = s.segUvAc[0];
 
         // ── Inter-frame reference-buffer management (RFC 6386 section 9.7) ──
         if (!keyFrame) {
@@ -394,14 +442,21 @@ public final class VP8Decoder {
         // Loop filter. Normal + simple modes are both driven by the same per-MB
         // classification tables; ref_lf_delta / mode_lf_delta are applied when the
         // frame header set use_lf_delta = 1.
-        if (filterLevel > 0) {
+        // Guard against a trivial all-segments-off configuration at call time. For
+        // single-segment streams this matches the pre-segment behaviour exactly; for
+        // multi-segment streams the LoopFilter's own early-exit handles the
+        // zero-filter-level case per segment.
+        boolean anySegmentFilters = false;
+        for (int lvl : s.segFilterLevel) if (lvl > 0) { anySegmentFilters = true; break; }
+        if (anySegmentFilters) {
             LoopFilter.filterFrame(
                 s.reconY, s.reconU, s.reconV,
                 s.lumaStride, s.chromaStride,
                 s.mbCols, s.mbRows,
                 simpleFilter, filterLevel, sharpness,
                 s.mbRefFrame, s.mbModeLfIdx,
-                s.useLfDelta, s.refLfDelta, s.modeLfDelta
+                s.useLfDelta, s.refLfDelta, s.modeLfDelta,
+                s.mbSegmentId, s.segFilterLevel
             );
         }
 
@@ -431,17 +486,37 @@ public final class VP8Decoder {
     // Per-macroblock parse + reconstruct
     // ──────────────────────────────────────────────────────────────────────
 
+    /**
+     * Reads the per-MB segment-ID tree from the header partition (RFC 6386 section 10)
+     * when {@code updateMap = 1}, records it on {@link State#mbSegmentId}, and swaps
+     * the active dequantizer fields to the segment's pre-derived values so downstream
+     * token-dequant logic remains segment-agnostic. When {@code updateMap = 0} the
+     * segment ID defaults to 0 (preserving the current active quant fields).
+     */
+    private static void applySegmentId(
+        @NotNull State s, @NotNull BooleanDecoder br, int mbX, int mbY
+    ) {
+        int segId = 0;
+        if (s.updateMap) {
+            if (br.decodeBit(s.segmentProbs[0]) == 0)
+                segId = br.decodeBit(s.segmentProbs[1]);          // 0 or 1
+            else
+                segId = 2 + br.decodeBit(s.segmentProbs[2]);      // 2 or 3
+        }
+        s.mbSegmentId[mbY * s.mbCols + mbX] = segId;
+        s.y1Dc = s.segY1Dc[segId];
+        s.y1Ac = s.segY1Ac[segId];
+        s.y2Dc = s.segY2Dc[segId];
+        s.y2Ac = s.segY2Ac[segId];
+        s.uvDc = s.segUvDc[segId];
+        s.uvAc = s.segUvAc[segId];
+    }
+
     private static void decodeMacroblock(
         @NotNull State s, @NotNull BooleanDecoder br, @NotNull BooleanDecoder td,
         int mbX, int mbY
     ) {
-        // Segment map (consume bits; value unused since we don't track per-segment state).
-        if (s.updateMap) {
-            if (br.decodeBit(s.segmentProbs[0]) == 0)
-                br.decodeBit(s.segmentProbs[1]);
-            else
-                br.decodeBit(s.segmentProbs[2]);
-        }
+        applySegmentId(s, br, mbX, mbY);
 
         int skip = (s.useSkipProba && br.decodeBit(s.skipP) != 0) ? 1 : 0;
 
@@ -598,13 +673,7 @@ public final class VP8Decoder {
         @NotNull State s, @NotNull BooleanDecoder br, @NotNull BooleanDecoder td,
         int mbX, int mbY
     ) {
-        // Segment map (consume bits if enabled).
-        if (s.updateMap) {
-            if (br.decodeBit(s.segmentProbs[0]) == 0)
-                br.decodeBit(s.segmentProbs[1]);
-            else
-                br.decodeBit(s.segmentProbs[2]);
-        }
+        applySegmentId(s, br, mbX, mbY);
 
         int skip = (s.useSkipProba && br.decodeBit(s.skipP) != 0) ? 1 : 0;
         boolean isInter = br.decodeBit(s.probIntra) != 0;

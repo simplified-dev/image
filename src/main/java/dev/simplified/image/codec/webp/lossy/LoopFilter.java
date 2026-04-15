@@ -1,6 +1,7 @@
 package dev.simplified.image.codec.webp.lossy;
 
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 /**
  * VP8 deblocking loop filter applied at macroblock and 4x4 sub-block boundaries.
@@ -106,14 +107,54 @@ final class LoopFilter {
         int @NotNull [] mbRefFrame, int @NotNull [] mbModeLfIdx,
         boolean useLfDelta, int @NotNull [] refLfDelta, int @NotNull [] modeLfDelta
     ) {
-        if (filterLevel == 0) return;
+        filterFrame(planeY, planeU, planeV, yStride, uvStride, mbCols, mbRows,
+            simple, filterLevel, sharpness, mbRefFrame, mbModeLfIdx,
+            useLfDelta, refLfDelta, modeLfDelta,
+            /*mbSegmentId=*/ null, /*segmentFilterLevel=*/ null);
+    }
 
-        FInfo[][] strengths = computeStrengthsTable(
-            filterLevel, sharpness, useLfDelta, refLfDelta, modeLfDelta);
+    /**
+     * Segment-aware variant of {@link #filterFrame}. When {@code mbSegmentId} and
+     * {@code segmentFilterLevel} are non-null, each MB's base filter level is read
+     * from {@code segmentFilterLevel[mbSegmentId[mbIdx]]} (per RFC 6386 section 10);
+     * {@code ref_lf_delta} + {@code mode_lf_delta} still stack on top when
+     * {@code useLfDelta} is set. Passing {@code null} for either array reverts to
+     * the single-segment path using {@code filterLevel} for every MB.
+     */
+    static void filterFrame(
+        short @NotNull [] planeY, short[] planeU, short[] planeV,
+        int yStride, int uvStride, int mbCols, int mbRows,
+        boolean simple, int filterLevel, int sharpness,
+        int @NotNull [] mbRefFrame, int @NotNull [] mbModeLfIdx,
+        boolean useLfDelta, int @NotNull [] refLfDelta, int @NotNull [] modeLfDelta,
+        int @Nullable [] mbSegmentId, int @Nullable [] segmentFilterLevel
+    ) {
+        boolean segmented = mbSegmentId != null && segmentFilterLevel != null;
+
+        // Early-exit when every segment's filter level is zero.
+        if (segmented) {
+            boolean anyNonZero = false;
+            for (int lvl : segmentFilterLevel) if (lvl > 0) { anyNonZero = true; break; }
+            if (!anyNonZero) return;
+        } else if (filterLevel == 0) {
+            return;
+        }
+
+        // Precompute one [ref][mode] strengths table per segment (libvpx
+        // PrecomputeFilterStrengths, one iteration per segment). Single-segment
+        // streams build a single table; segmented streams build up to 4.
+        FInfo[][][] strengths = new FInfo[4][][];
+        for (int seg = 0; seg < 4; seg++) {
+            int level = segmented ? segmentFilterLevel[seg] : filterLevel;
+            strengths[seg] = computeStrengthsTable(
+                level, sharpness, useLfDelta, refLfDelta, modeLfDelta);
+        }
+
         for (int mbY = 0; mbY < mbRows; mbY++) {
             for (int mbX = 0; mbX < mbCols; mbX++) {
                 int mbIdx = mbY * mbCols + mbX;
-                FInfo info = strengths[mbRefFrame[mbIdx]][mbModeLfIdx[mbIdx]];
+                int segId = segmented ? mbSegmentId[mbIdx] : 0;
+                FInfo info = strengths[segId][mbRefFrame[mbIdx]][mbModeLfIdx[mbIdx]];
                 if (info.fLimit == 0) continue;
                 doFilter(planeY, planeU, planeV, yStride, uvStride, mbX, mbY, info, simple);
             }

@@ -196,6 +196,23 @@ public final class VP8Encoder {
         // defaults.
         VP8Costs.TokenCosts tokenCosts;
 
+        // Segment map state (RFC 6386 section 10). Disabled by default - only the
+        // {@link #encodeWithSegmentMap} test hook flips {@code useSegment} on. When
+        // enabled, {@code writeFrameHeader} emits the segment sub-header and the per-MB
+        // dispatcher emits {@code mbSegmentId} via the 4-leaf segment tree before each
+        // macroblock's normal header bits.
+        boolean useSegment;
+        boolean updateMbSegmentationMap;
+        boolean segmentAbsoluteDelta;
+        final int[] segmentQuantDelta = new int[4];
+        final int[] segmentLfDelta = new int[4];
+        final int[] segmentProbs = { 255, 255, 255 };
+        final int[] mbSegmentId;
+        // Per-segment effective filter level, passed to {@link LoopFilter#filterFrame}
+        // so per-segment LF deltas apply at filter time. All 4 entries equal the base
+        // filter level when segments are off.
+        final int[] segFilterLevel = new int[4];
+
         State(int width, int height, int qi, boolean isKeyframe, @Nullable VP8EncoderSession session) {
             this.isKeyframe = isKeyframe;
             this.session = session;
@@ -214,6 +231,7 @@ public final class VP8Encoder {
             this.mbMvCol = new int[mbCols * mbRows];
             this.mbRefFrame = new int[mbCols * mbRows];       // defaults to REF_INTRA = 0
             this.mbModeLfIdx = new int[mbCols * mbRows];       // defaults to MODE_NON_BPRED_INTRA = 0
+            this.mbSegmentId = new int[mbCols * mbRows];       // defaults to 0 (single-segment)
 
             this.y1Dc = VP8Tables.DC_Q_LOOKUP[qi];
             this.y1Ac = VP8Tables.AC_Q_LOOKUP[qi];
@@ -384,6 +402,134 @@ public final class VP8Encoder {
     }
 
     /**
+     * Test / library hook: encodes a keyframe with {@code use_segment = 1} and the
+     * supplied per-segment feature data. Assigns segment IDs to macroblocks via
+     * {@code mbSegmentAssignment[mbY * mbCols + mbX]} (values {@code 0..3}). Exercises
+     * RFC 6386 section 10 (segment header + per-MB segment tree emission) and
+     * section 15 (per-segment loop filter deltas).
+     * <p>
+     * Quant deltas are emitted to the bitstream - the decoder applies them at dequant
+     * time - but the encoder itself still uses a single quantizer at the frame's base
+     * QI. Bit-stream-wise this is valid but asymmetric; the encoder will over-emit
+     * residual bits relative to what a fully segment-aware encoder would pick, and
+     * the decoder's reconstructed pixels may differ from a single-segment baseline
+     * by the dequant delta. The hook therefore exists to validate decoder behaviour,
+     * not to exercise a production encode path.
+     *
+     * @param pixels source pixel buffer
+     * @param quality encoding quality in {@code [0.0, 1.0]}
+     * @param mbSegmentAssignment per-MB segment IDs (row-major, length mbCols*mbRows);
+     *                            each entry must be in {@code [0, 3]}
+     * @param segmentQuantDelta 4-entry per-segment quantizer delta (signed 7-bit)
+     * @param segmentLfDelta 4-entry per-segment filter-level delta (signed 6-bit)
+     * @param segmentAbsoluteDelta if true, deltas replace the base value rather than add
+     * @return the encoded VP8 keyframe payload bytes
+     */
+    public static byte @NotNull [] encodeWithSegmentMap(
+        @NotNull PixelBuffer pixels, float quality,
+        int @NotNull [] mbSegmentAssignment,
+        int @NotNull [] segmentQuantDelta, int @NotNull [] segmentLfDelta,
+        boolean segmentAbsoluteDelta
+    ) {
+        if (segmentQuantDelta.length != 4 || segmentLfDelta.length != 4)
+            throw new IllegalArgumentException("per-segment delta vectors must have length 4");
+        int mbCols = (pixels.width() + 15) / 16;
+        int mbRows = (pixels.height() + 15) / 16;
+        if (mbSegmentAssignment.length != mbCols * mbRows)
+            throw new IllegalArgumentException(
+                "mbSegmentAssignment length must equal mbCols*mbRows");
+        for (int id : mbSegmentAssignment)
+            if (id < 0 || id > 3)
+                throw new IllegalArgumentException("segment id must be in [0, 3]");
+        return encodeSegmentMappedKeyframe(pixels, quality, mbSegmentAssignment,
+            segmentQuantDelta, segmentLfDelta, segmentAbsoluteDelta);
+    }
+
+    private static byte @NotNull [] encodeSegmentMappedKeyframe(
+        @NotNull PixelBuffer pixels, float quality,
+        int @NotNull [] mbSegmentAssignment,
+        int @NotNull [] segmentQuantDelta, int @NotNull [] segmentLfDelta,
+        boolean segmentAbsoluteDelta
+    ) {
+        int width = pixels.width();
+        int height = pixels.height();
+        int qi = qualityToQi(quality);
+
+        State s = new State(width, height, qi, /*isKeyframe=*/ true, /*session=*/ null);
+        s.useSegment = true;
+        s.updateMbSegmentationMap = true;
+        s.segmentAbsoluteDelta = segmentAbsoluteDelta;
+        System.arraycopy(segmentQuantDelta, 0, s.segmentQuantDelta, 0, 4);
+        System.arraycopy(segmentLfDelta, 0, s.segmentLfDelta, 0, 4);
+        System.arraycopy(mbSegmentAssignment, 0, s.mbSegmentId, 0, mbSegmentAssignment.length);
+        // Uniform segment prior: 50/50 at probs[0], 50/50 inside each half. Works for
+        // any assignment without requiring histogram analysis.
+        s.segmentProbs[0] = 128;
+        s.segmentProbs[1] = 128;
+        s.segmentProbs[2] = 128;
+
+        // Derive per-segment effective filter levels for LoopFilter.
+        int baseFilterLevel = pickFilterLevel(qi);
+        for (int seg = 0; seg < 4; seg++) {
+            int level = segmentAbsoluteDelta
+                ? segmentLfDelta[seg]
+                : baseFilterLevel + segmentLfDelta[seg];
+            s.segFilterLevel[seg] = Math.clamp(level, 0, 63);
+        }
+
+        writeFrameHeader(s, qi);
+        s.tokenCosts = new VP8Costs.TokenCosts(s.tokenProba);
+
+        int[] argb = pixels.pixels();
+        for (int mbY = 0; mbY < s.mbRows; mbY++) {
+            java.util.Arrays.fill(s.leftNz, 0);
+            java.util.Arrays.fill(s.intraL, IntraPrediction.B_DC_PRED);
+            for (int mbX = 0; mbX < s.mbCols; mbX++) {
+                emitSegmentId(s.header, s.mbSegmentId[mbY * s.mbCols + mbX], s.segmentProbs);
+                encodeMacroblock(s, argb, width, height, mbX, mbY);
+            }
+        }
+
+        boolean anySegmentFilters = false;
+        for (int lvl : s.segFilterLevel) if (lvl > 0) { anySegmentFilters = true; break; }
+        if (anySegmentFilters) {
+            LoopFilter.filterFrame(
+                s.reconY, s.reconU, s.reconV,
+                s.lumaStride, s.chromaStride,
+                s.mbCols, s.mbRows,
+                /*simpleFilter=*/ false, baseFilterLevel, /*sharpness=*/ 0,
+                s.mbRefFrame, s.mbModeLfIdx,
+                s.useLfDelta, s.refLfDelta, s.modeLfDelta,
+                s.mbSegmentId, s.segFilterLevel
+            );
+        }
+
+        byte[] headerBytes = s.header.toByteArray();
+        byte[][] tokenBytes = new byte[NUM_TOKEN_PARTITIONS][];
+        for (int i = 0; i < NUM_TOKEN_PARTITIONS; i++)
+            tokenBytes[i] = s.tokens[i].toByteArray();
+        return assembleFrame(width, height, headerBytes, tokenBytes, /*isKeyframe=*/ true);
+    }
+
+    /**
+     * Emits the 4-leaf segment-ID tree at the current per-frame segment probabilities
+     * (RFC 6386 section 10 / 19.3). Wire format: {@code bit[probs[0]]} selects the
+     * segment-{0,1} vs segment-{2,3} half, then {@code bit[probs[1]]} or
+     * {@code bit[probs[2]]} picks within the half.
+     */
+    private static void emitSegmentId(
+        @NotNull BooleanEncoder h, int segId, int @NotNull [] probs
+    ) {
+        if (segId < 2) {
+            h.encodeBit(probs[0], 0);
+            h.encodeBit(probs[1], segId);
+        } else {
+            h.encodeBit(probs[0], 1);
+            h.encodeBit(probs[2], segId - 2);
+        }
+    }
+
+    /**
      * Mode-LF-delta vector applied to P-frames at non-zero filter level, mirroring
      * libvpx's {@code set_default_lf_deltas} ({@code vp8/encoder/onyx_if.c:1272-1291}).
      * Index layout is {@code [BPRED, ZEROMV, OTHER_INTER, SPLITMV]}. Only the ZEROMV
@@ -442,6 +588,16 @@ public final class VP8Encoder {
         System.arraycopy(refLfDelta, 0, s.refLfDelta, 0, 4);
         System.arraycopy(modeLfDelta, 0, s.modeLfDelta, 0, 4);
 
+        // Derive per-segment effective filter levels. Single-segment streams leave
+        // segmentLfDelta all zero so every entry equals the base level.
+        int baseFilterLevel = pickFilterLevel(qi);
+        for (int seg = 0; seg < 4; seg++) {
+            int level = s.segmentAbsoluteDelta
+                ? s.segmentLfDelta[seg]
+                : baseFilterLevel + s.segmentLfDelta[seg];
+            s.segFilterLevel[seg] = Math.clamp(level, 0, 63);
+        }
+
         writeFrameHeader(s, qi);
 
         // Freeze the post-update coefficient probs into a derived cost bundle for the
@@ -455,6 +611,12 @@ public final class VP8Encoder {
             java.util.Arrays.fill(s.leftNz, 0);
             java.util.Arrays.fill(s.intraL, IntraPrediction.B_DC_PRED);
             for (int mbX = 0; mbX < s.mbCols; mbX++) {
+                // Segment ID emits first in the MB header stream (RFC 6386 section 10),
+                // before skip / intra / mode bits. Mirrors the decoder's
+                // applySegmentId call at the top of its per-MB parse.
+                if (s.useSegment && s.updateMbSegmentationMap)
+                    emitSegmentId(s.header, s.mbSegmentId[mbY * s.mbCols + mbX], s.segmentProbs);
+
                 if (isKeyframe)
                     encodeMacroblock(s, argb, width, height, mbX, mbY);
                 else if (forceSplitMv)
@@ -469,14 +631,17 @@ public final class VP8Encoder {
         // compares source against a pre-filter recon while decoder copies a post-filter
         // ref - producing cumulative drift across P-frames.
         int filterLevel = pickFilterLevel(qi);
-        if (filterLevel > 0) {
+        boolean anySegmentFilters = false;
+        for (int lvl : s.segFilterLevel) if (lvl > 0) { anySegmentFilters = true; break; }
+        if (anySegmentFilters) {
             LoopFilter.filterFrame(
                 s.reconY, s.reconU, s.reconV,
                 s.lumaStride, s.chromaStride,
                 s.mbCols, s.mbRows,
                 /*simpleFilter=*/ false, filterLevel, /*sharpness=*/ 0,
                 s.mbRefFrame, s.mbModeLfIdx,
-                s.useLfDelta, s.refLfDelta, s.modeLfDelta
+                s.useLfDelta, s.refLfDelta, s.modeLfDelta,
+                s.mbSegmentId, s.segFilterLevel
             );
         }
 
@@ -554,8 +719,59 @@ public final class VP8Encoder {
             e.encodeBool(0);       // clamp_type
         }
 
-        // Segment header (shared).
-        e.encodeBool(0);           // use_segment
+        // Segment header (RFC 6386 section 10 / 19.2). Default is use_segment = 0;
+        // the {@link #encodeWithSegmentMap} test hook flips s.useSegment on and
+        // populates the per-segment data.
+        if (!s.useSegment) {
+            e.encodeBool(0);           // use_segment
+        } else {
+            e.encodeBool(1);           // use_segment
+            e.encodeBool(s.updateMbSegmentationMap ? 1 : 0);    // update_mb_segmentation_map
+
+            // update_segment_feature_data. We always emit (simpler than diffing) when
+            // either quant or lf deltas are non-zero. Emit a 1-bit with all-zero payload
+            // otherwise to keep the decoder in sync.
+            boolean anyDelta = false;
+            for (int i = 0; i < 4; i++)
+                if (s.segmentQuantDelta[i] != 0 || s.segmentLfDelta[i] != 0) {
+                    anyDelta = true;
+                    break;
+                }
+            if (!anyDelta) {
+                e.encodeBool(0);       // update_segment_feature_data = 0
+            } else {
+                e.encodeBool(1);       // update_segment_feature_data = 1
+                e.encodeBool(s.segmentAbsoluteDelta ? 1 : 0);   // segment_feature_mode
+                for (int i = 0; i < 4; i++) {
+                    if (s.segmentQuantDelta[i] != 0) {
+                        e.encodeBool(1);
+                        e.encodeSint(s.segmentQuantDelta[i], 7);
+                    } else {
+                        e.encodeBool(0);
+                    }
+                }
+                for (int i = 0; i < 4; i++) {
+                    if (s.segmentLfDelta[i] != 0) {
+                        e.encodeBool(1);
+                        e.encodeSint(s.segmentLfDelta[i], 6);
+                    } else {
+                        e.encodeBool(0);
+                    }
+                }
+            }
+
+            // Segment tree probabilities. Emit all 3 (flag + 8-bit literal per slot).
+            if (s.updateMbSegmentationMap) {
+                for (int i = 0; i < 3; i++) {
+                    if (s.segmentProbs[i] != 255) {
+                        e.encodeBool(1);
+                        e.encodeUint(s.segmentProbs[i], 8);
+                    } else {
+                        e.encodeBool(0);
+                    }
+                }
+            }
+        }
 
         // Filter header: normal filter at qi-derived strength. RFC 6386 section 9.1
         // pairs version=0 (which our frame tag emits) with the normal loop filter +

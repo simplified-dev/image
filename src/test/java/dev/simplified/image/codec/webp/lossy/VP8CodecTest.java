@@ -1302,6 +1302,155 @@ public class VP8CodecTest {
                     "SPLITMV-roundtrip-with-filter PSNR = %.2f dB (expected >= 35 dB)", psnr));
         }
 
+        @Test @DisplayName("conformance: segment map round-trip with zero deltas is bit-exact with use_segment=0 (RFC 6386 section 10)")
+        void segmentMapZeroDeltaRoundTrip() {
+            // When segmentQuantDelta and segmentLfDelta are all zero, every per-segment
+            // quantizer + filter level collapses to the base value. The decoder must
+            // produce pixels bit-identical to a use_segment=0 encode of the same source,
+            // confirming the segment header + per-MB segment-ID tree parse does not
+            // perturb reconstruction when the deltas are neutral. A misaligned segment
+            // tree read would desynchronize every downstream MB bit and catastrophically
+            // corrupt the image.
+            PixelBuffer src = PixelBuffer.create(32, 32);
+            for (int y = 0; y < 32; y++)
+                for (int x = 0; x < 32; x++)
+                    src.setPixel(x, y, 0xFF000000 | ((x * 8) << 16) | ((y * 8) << 8));
+
+            byte[] baseline = VP8Encoder.encode(src, 0.5f);
+            PixelBuffer baseDecoded = VP8Decoder.decode(baseline);
+
+            // Segment assignment: top row = segment 0, bottom row = segment 1. Quant
+            // and LF deltas are all zero, so effective per-segment settings are
+            // identical to the baseline.
+            int[] segAssignment = new int[2 * 2];   // 2x2 MB grid
+            segAssignment[0] = 0;
+            segAssignment[1] = 0;
+            segAssignment[2] = 1;
+            segAssignment[3] = 1;
+
+            byte[] segmented = VP8Encoder.encodeWithSegmentMap(
+                src, 0.5f, segAssignment, new int[4], new int[4], /*absolute=*/ false);
+            PixelBuffer segDecoded = VP8Decoder.decode(segmented);
+
+            for (int y = 0; y < 32; y++)
+                for (int x = 0; x < 32; x++) {
+                    int expected = baseDecoded.getPixel(x, y);
+                    int actual = segDecoded.getPixel(x, y);
+                    if (expected != actual)
+                        throw new AssertionError(String.format(
+                            "zero-delta segment-map encode pixel divergence at (%d, %d): "
+                            + "baseline=0x%08X segmented=0x%08X", x, y, expected, actual));
+                }
+        }
+
+        @Test @DisplayName("conformance: per-segment LF delta produces observable pixel divergence at segment boundary (RFC 6386 section 15)")
+        void segmentMapLfDeltaDivergence() {
+            // Gradient 32x32 split into two segments by MB row. Segment 0 (top row)
+            // gets delta 0; segment 1 (bottom row) gets delta +32 which saturates the
+            // filter level. If the decoder applied the LF deltas correctly at filter
+            // time, the bottom MBs will see substantially more filtering than the
+            // top MBs - producing observable pixel divergence between the two decodes
+            // (with zero delta vs with non-zero delta).
+            PixelBuffer src = PixelBuffer.create(32, 32);
+            for (int y = 0; y < 32; y++)
+                for (int x = 0; x < 32; x++) {
+                    int r = (x * 255) / 31;
+                    int g = (y * 255) / 31;
+                    int b = ((x + y) * 255) / 62;
+                    src.setPixel(x, y, 0xFF000000 | (r << 16) | (g << 8) | b);
+                }
+
+            int[] segAssignment = { 0, 0, 1, 1 };                 // top-row seg=0, bot-row seg=1
+            int[] lfDeltasZero = new int[4];
+            int[] lfDeltasActive = { 0, 32, 0, 0 };               // +32 on segment 1 only
+
+            byte[] streamZero = VP8Encoder.encodeWithSegmentMap(
+                src, 0.5f, segAssignment, new int[4], lfDeltasZero, /*absolute=*/ false);
+            byte[] streamActive = VP8Encoder.encodeWithSegmentMap(
+                src, 0.5f, segAssignment, new int[4], lfDeltasActive, /*absolute=*/ false);
+
+            PixelBuffer decZero = VP8Decoder.decode(streamZero);
+            PixelBuffer decActive = VP8Decoder.decode(streamActive);
+
+            // Deep-interior segment-0 pixels (y in [0, 7]) sit far from the MB boundary
+            // between segments and are unaffected by segment-1's edge filter. They must
+            // be bit-identical.
+            for (int y = 0; y < 8; y++)
+                for (int x = 0; x < 32; x++) {
+                    int a = decZero.getPixel(x, y);
+                    int b = decActive.getPixel(x, y);
+                    if (a != b)
+                        throw new AssertionError(String.format(
+                            "unexpected segment-0 interior divergence at (%d, %d): "
+                            + "zero-delta=0x%08X active-delta=0x%08X", x, y, a, b));
+                }
+
+            // Deep-interior segment-1 pixels must differ: the bottom MB row's filter
+            // level went from baseLevel to baseLevel+32 (clamped to 63), so the
+            // inner-edge + bottom-edge filter writes produce visibly different pixels.
+            // Pixels at the segment boundary (y near 15-20) also diverge because the
+            // cross-MB top-edge filter uses the receiving MB's FInfo.
+            int maxDiff = 0;
+            for (int y = 24; y < 32; y++)
+                for (int x = 0; x < 32; x++) {
+                    int a = decZero.getPixel(x, y);
+                    int b = decActive.getPixel(x, y);
+                    for (int shift : new int[] { 0, 8, 16 }) {
+                        int d = Math.abs(((a >> shift) & 0xFF) - ((b >> shift) & 0xFF));
+                        if (d > maxDiff) maxDiff = d;
+                    }
+                }
+            if (maxDiff < 2)
+                throw new AssertionError(String.format(
+                    "per-segment LF delta had no observable effect on segment 1: "
+                    + "max per-sample diff = %d (expected >= 2)", maxDiff));
+        }
+
+        @Test @DisplayName("conformance: per-segment quant delta produces non-trivial bitstream change (RFC 6386 section 9.3)")
+        void segmentMapQuantDeltaPropagates() {
+            // The encoder doesn't internally requantize per segment (see encodeWithSegmentMap
+            // Javadoc) but it does emit the per-segment quant deltas to the bitstream, so the
+            // decoder will dequantize each MB with different step sizes. This test verifies
+            // that the decoder's per-segment dequant path produces observably different
+            // pixels when one segment gets a large quant delta - proving the decoder actually
+            // wired the per-segment quantizer steps through dequant rather than using the
+            // base quantizer for every MB.
+            PixelBuffer src = PixelBuffer.create(32, 32);
+            for (int y = 0; y < 32; y++)
+                for (int x = 0; x < 32; x++)
+                    src.setPixel(x, y, 0xFF000000 | ((x * 8) << 16) | ((y * 8) << 8));
+
+            int[] segAssignment = { 0, 0, 1, 1 };
+            int[] quantDeltasZero = new int[4];
+            int[] quantDeltasActive = { 0, 50, 0, 0 };   // +50 on segment 1 heavily changes dequant
+
+            byte[] streamZero = VP8Encoder.encodeWithSegmentMap(
+                src, 0.5f, segAssignment, quantDeltasZero, new int[4], /*absolute=*/ false);
+            byte[] streamActive = VP8Encoder.encodeWithSegmentMap(
+                src, 0.5f, segAssignment, quantDeltasActive, new int[4], /*absolute=*/ false);
+
+            PixelBuffer decZero = VP8Decoder.decode(streamZero);
+            PixelBuffer decActive = VP8Decoder.decode(streamActive);
+
+            // Segment 1 (bottom half, y >= 16) must diverge because its dequant steps
+            // differ. Quant delta +50 multiplies every coefficient by a very different
+            // step, producing substantial pixel-level divergence.
+            int maxDiff = 0;
+            for (int y = 16; y < 32; y++)
+                for (int x = 0; x < 32; x++) {
+                    int a = decZero.getPixel(x, y);
+                    int b = decActive.getPixel(x, y);
+                    for (int shift : new int[] { 0, 8, 16 }) {
+                        int d = Math.abs(((a >> shift) & 0xFF) - ((b >> shift) & 0xFF));
+                        if (d > maxDiff) maxDiff = d;
+                    }
+                }
+            if (maxDiff < 10)
+                throw new AssertionError(String.format(
+                    "per-segment quant delta had no observable effect at decoder: "
+                    + "max per-sample diff = %d (expected >= 10 with quantDelta=+50)", maxDiff));
+        }
+
     }
 
     /**
