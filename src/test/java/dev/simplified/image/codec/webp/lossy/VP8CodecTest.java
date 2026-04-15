@@ -1302,6 +1302,38 @@ public class VP8CodecTest {
                     "SPLITMV-roundtrip-with-filter PSNR = %.2f dB (expected >= 35 dB)", psnr));
         }
 
+        @Test @DisplayName("conformance: subMvRefContext mirrors decoder's 5-way classifier (RFC 6386 section 17.3)")
+        void subMvRefContextClassifier() {
+            // The encoder's rate-cost estimation for SPLITMV must index the same
+            // SUB_MV_REF_PROB row the decoder will read. VP8Decoder.decodeSplitMv
+            // computes the context inline at lines 1051-1060; VP8Encoder.subMvRefContext
+            // is the matching static helper. This test pins the 5 cases:
+            //   ctx 0 = NORMAL                 (left != above, neither zero)
+            //   ctx 1 = LEFT_ZERO              (left == 0, above != 0)
+            //   ctx 2 = ABOVE_ZERO             (above == 0, left != 0)
+            //   ctx 3 = LEFT_ABOVE_SAME_NONZERO (left == above, both non-zero)
+            //   ctx 4 = LEFT_ABOVE_BOTH_ZERO   (both == 0)
+            assertThat("LEFT_ABOVE_BOTH_ZERO",
+                VP8Encoder.subMvRefContext(0, 0, 0, 0), is(4));
+            assertThat("LEFT_ZERO (above non-zero)",
+                VP8Encoder.subMvRefContext(0, 0, 4, -2), is(1));
+            assertThat("ABOVE_ZERO (left non-zero)",
+                VP8Encoder.subMvRefContext(-3, 5, 0, 0), is(2));
+            assertThat("LEFT_ABOVE_SAME_NONZERO",
+                VP8Encoder.subMvRefContext(7, -1, 7, -1), is(3));
+            assertThat("NORMAL (left != above, neither zero)",
+                VP8Encoder.subMvRefContext(2, 3, -1, 4), is(0));
+            // SAME-NONZERO must require both components equal, not just one.
+            assertThat("not SAME when only row matches",
+                VP8Encoder.subMvRefContext(2, 3, 2, 4), is(0));
+            assertThat("not SAME when only col matches",
+                VP8Encoder.subMvRefContext(2, 3, 5, 3), is(0));
+            // BOTH_ZERO precedence: lez && aez wins over the lez-only branch.
+            // (defensive - establishes the order-of-evaluation contract.)
+            assertThat("BOTH_ZERO not LEFT_ZERO when above also zero",
+                VP8Encoder.subMvRefContext(0, 0, 0, 0), is(4));
+        }
+
         @Test @DisplayName("conformance: segment map round-trip with zero deltas is bit-exact with use_segment=0 (RFC 6386 section 10)")
         void segmentMapZeroDeltaRoundTrip() {
             // When segmentQuantDelta and segmentLfDelta are all zero, every per-segment

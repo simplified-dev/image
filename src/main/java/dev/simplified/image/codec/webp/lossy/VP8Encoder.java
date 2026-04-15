@@ -118,6 +118,22 @@ public final class VP8Encoder {
         final int[] mbMvRow;
         final int[] mbMvCol;
 
+        // Per-4x4-sub-block MV grid for SPLITMV MBs (RFC 6386 section 17.3). Layout
+        // mirrors VP8Decoder.State:
+        //   bmiRow[mbIdx * 16 + k] where k is the 4x4 sub-block index (0..15 raster).
+        // Populated only for SPLITMV MBs - non-SPLITMV MBs leave their slots at the
+        // default 0 because the SPLITMV decode path gates the bmi[] read behind a
+        // {@code mbSplitScheme[neighbour] >= 0} check (see VP8Decoder.decodeSplitMv).
+        // Read by neighbouring SPLITMV MBs at the boundary to look up the right-column
+        // sub-MV (left neighbour) or bottom-row sub-MV (above neighbour) for the 5-way
+        // sub-MV-ref context classification.
+        final int[] bmiRow;
+        final int[] bmiCol;
+        // Per-MB SPLITMV partitioning scheme (0..3) or -1 for non-SPLITMV. Sentinel
+        // {@code -1} matches VP8Decoder.State and gates whether neighbouring SPLITMV
+        // MBs read this MB's bmi[] entries vs the MB-level mv.
+        final int[] mbSplitScheme;
+
         // Per-MB loop-filter classification tables (row-major mbY*mbCols + mbX):
         //   mbRefFrame[i]   = one of LoopFilter.REF_INTRA / REF_LAST / REF_GOLDEN / REF_ALTREF
         //   mbModeLfIdx[i]  = one of LoopFilter.MODE_NON_BPRED_INTRA / MODE_BPRED / MODE_ZEROMV
@@ -240,6 +256,10 @@ public final class VP8Encoder {
             this.mbIsInter = new boolean[mbCols * mbRows];
             this.mbMvRow = new int[mbCols * mbRows];
             this.mbMvCol = new int[mbCols * mbRows];
+            this.bmiRow = new int[mbCols * mbRows * 16];       // defaults to 0; filled per SPLITMV MB
+            this.bmiCol = new int[mbCols * mbRows * 16];
+            this.mbSplitScheme = new int[mbCols * mbRows];     // sentinel -1 = non-SPLITMV
+            java.util.Arrays.fill(this.mbSplitScheme, -1);
             this.mbRefFrame = new int[mbCols * mbRows];       // defaults to REF_INTRA = 0
             this.mbModeLfIdx = new int[mbCols * mbRows];       // defaults to MODE_NON_BPRED_INTRA = 0
             this.mbSegmentId = new int[mbCols * mbRows];       // defaults to 0 (single-segment)
@@ -1625,8 +1645,11 @@ public final class VP8Encoder {
      * Every MB emits scheme {@link VP8Tables#MBSPLIT_TOP_BOTTOM} with two
      * {@link VP8Tables#SUB_MV_REF_ZERO} sub-MVs and {@code mb_skip = 1}. All
      * neighbour sub-MVs are {@code (0, 0)} by construction, so the 5-way sub-MV
-     * context is {@code LEFT_ABOVE_BOTH_ZERO} (ctx 4) for every slot and emission
-     * does not need to track {@code bmiRow} / {@code bmiCol} on the encoder side.
+     * context is {@code LEFT_ABOVE_BOTH_ZERO} (ctx 4) for every slot.
+     * <p>
+     * The encoder's {@code bmiRow} / {@code bmiCol} / {@code mbSplitScheme} mirror
+     * is populated to match the decoder so future R-D-integrated SPLITMV emits at
+     * non-zero sub-MVs see consistent neighbour context.
      * <p>
      * Reconstruction is a direct {@code LAST}-reference copy, matching the decoder's
      * SPLITMV path at all-zero sub-MVs with {@code skip = 1}.
@@ -1660,12 +1683,22 @@ public final class VP8Encoder {
             emitTreeLeaf(h, VP8Tables.SUB_MV_REF_TREE, VP8Tables.SUB_MV_REF_ZERO, zeroCtxProbs);
 
         // Mirror decodeSplitMv's State updates: canonical MB-level MV is bmi[15] which
-        // is (0, 0) for this forced pattern.
+        // is (0, 0) for this forced pattern. The bmi[16] grid + mbSplitScheme are
+        // populated so neighbouring SPLITMV MBs see the same context the decoder will.
         int mbIdx = mbY * s.mbCols + mbX;
         s.mbIsI4x4[mbIdx] = false;
         s.mbIsInter[mbIdx] = true;
         s.mbMvRow[mbIdx] = 0;
         s.mbMvCol[mbIdx] = 0;
+        // bmiRow / bmiCol default to 0 from State allocation - explicit fill is a
+        // no-op for this all-zero forced pattern but documents the contract for
+        // future non-zero SPLITMV emit paths.
+        int bmiBase = mbIdx * 16;
+        for (int i = 0; i < 16; i++) {
+            s.bmiRow[bmiBase + i] = 0;
+            s.bmiCol[bmiBase + i] = 0;
+        }
+        s.mbSplitScheme[mbIdx] = VP8Tables.MBSPLIT_TOP_BOTTOM;
         s.mbRefFrame[mbIdx] = LoopFilter.REF_LAST;
         s.mbModeLfIdx[mbIdx] = LoopFilter.MODE_SPLITMV;
 
@@ -1675,6 +1708,31 @@ public final class VP8Encoder {
         copyRef8x8 (s.session.refV, s.session.refChromaStride, s.reconV, s.chromaStride, mbX, mbY);
 
         clearNzAndIntraContextForInterSkip(s, mbX);
+    }
+
+    /**
+     * Classifies the sub-MV reference probability context (RFC 6386 section 17.3 /
+     * libvpx {@code vp8_sub_mv_ref_prob3}) given the LEFT and ABOVE neighbour
+     * sub-MVs. Returns one of the 5 row indices into {@link VP8Tables#SUB_MV_REF_PROB}:
+     * {@code 0 = NORMAL}, {@code 1 = LEFT_ZERO}, {@code 2 = ABOVE_ZERO},
+     * {@code 3 = LEFT_ABOVE_SAME_NONZERO}, {@code 4 = LEFT_ABOVE_BOTH_ZERO}. Mirrors
+     * the classification at {@code VP8Decoder.decodeSplitMv} so encoder rate-cost
+     * estimation indexes the same proba row the decoder will read.
+     *
+     * @param leftRow  left-neighbour sub-MV row component (1/8-pel internal)
+     * @param leftCol  left-neighbour sub-MV col component
+     * @param aboveRow above-neighbour sub-MV row component
+     * @param aboveCol above-neighbour sub-MV col component
+     * @return context row index in {@code [0, 4]}
+     */
+    static int subMvRefContext(int leftRow, int leftCol, int aboveRow, int aboveCol) {
+        boolean lez = (leftRow == 0 && leftCol == 0);
+        boolean aez = (aboveRow == 0 && aboveCol == 0);
+        if (lez && aez) return 4;
+        if (lez) return 1;
+        if (aez) return 2;
+        if (leftRow == aboveRow && leftCol == aboveCol) return 3;
+        return 0;
     }
 
     /**
