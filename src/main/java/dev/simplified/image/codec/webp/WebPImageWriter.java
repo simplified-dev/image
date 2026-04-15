@@ -40,6 +40,7 @@ public class WebPImageWriter implements ImageWriter {
         boolean alphaCompression = true;
         boolean usePFrames = false;
         int forceKeyframeEvery = -1;
+        int motionSearchThreads = -1;
 
         if (options instanceof WebPWriteOptions webpOptions) {
             lossless = webpOptions.isLossless();
@@ -49,13 +50,14 @@ public class WebPImageWriter implements ImageWriter {
             alphaCompression = webpOptions.isAlphaCompression();
             usePFrames = webpOptions.isUsePFrames();
             forceKeyframeEvery = webpOptions.getForceKeyframeEvery();
+            motionSearchThreads = webpOptions.getMotionSearchThreads();
         }
 
         if (data instanceof AnimatedImageData animated) {
             if (loopCount == 0 && animated.getLoopCount() != 0)
                 loopCount = animated.getLoopCount();
 
-            return writeAnimated(animated, lossless, quality, loopCount, multithreaded, usePFrames, forceKeyframeEvery);
+            return writeAnimated(animated, lossless, quality, loopCount, multithreaded, usePFrames, forceKeyframeEvery, motionSearchThreads);
         }
 
         return writeStatic(data, lossless, quality, alphaCompression);
@@ -109,7 +111,8 @@ public class WebPImageWriter implements ImageWriter {
         int loopCount,
         boolean multithreaded,
         boolean usePFrames,
-        int forceKeyframeEvery
+        int forceKeyframeEvery,
+        int motionSearchThreads
     ) {
         ConcurrentList<ImageFrame> frames = data.getFrames();
         boolean hasAlpha = data.hasAlpha();
@@ -123,7 +126,11 @@ public class WebPImageWriter implements ImageWriter {
         ConcurrentList<byte[]> encodedPayloads;
         ConcurrentList<byte[]> alphaPayloads;
         if (!lossless && usePFrames) {
-            VP8EncoderSession vp8Session = new VP8EncoderSession();
+            int mvThreads = motionSearchThreads == -1
+                ? Runtime.getRuntime().availableProcessors()
+                : motionSearchThreads;
+            VP8EncoderSession vp8Session = new VP8EncoderSession()
+                .withMotionSearchThreads(mvThreads);
             int keyInterval = resolveForceKeyframeEvery(forceKeyframeEvery, frames.size());
             encodedPayloads = Concurrent.newList();
             for (int i = 0; i < frames.size(); i++) {
