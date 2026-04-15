@@ -41,7 +41,63 @@ final class LZ77 {
     private static final int HASH_SIZE = 1 << HASH_BITS;
     private static final int HASH_MASK = HASH_SIZE - 1;
     private static final int MAX_CHAIN_LENGTH = 64;
-    private static final int MIN_MATCH = 3;
+    /**
+     * Minimum match length libwebp accepts into its backward-reference stream
+     * ({@code MIN_LENGTH} in {@code src/enc/backward_references_enc.h}). Matches
+     * shorter than 4 pixels cost more bits as length+distance symbols than they
+     * save vs literal emission, so libwebp rejects them. Emitting shorter
+     * matches would be spec-conformant but produce sub-optimal compression.
+     */
+    static final int MIN_MATCH = 4;
+    /**
+     * Maximum match length libwebp emits ({@code MAX_LENGTH} in
+     * {@code src/enc/backward_references_enc.h}, equal to {@code (1 << 12) - 1}).
+     * Longer matches must be truncated to {@code 4095} and the remainder coded
+     * as a new token.
+     */
+    static final int MAX_LENGTH = (1 << 12) - 1;
+
+    /**
+     * libwebp's {@code plane_to_code_lut[128]} ({@code src/enc/backward_references_enc.c}):
+     * maps {@code (yoffset, xoffset)} pairs to plane-code-minus-1. Indexed by
+     * {@code yoffset * 16 + (8 - xoffset)} in the "left-half" branch of
+     * {@link #distanceToPlaneCode} and by {@code (yoffset + 1) * 16 + 8 + (xsize - xoffset)}
+     * in the "right-half" wraparound branch.
+     */
+    private static final int[] PLANE_TO_CODE_LUT = {
+         96,  73,  55,  39,  23,  13,   5,   1, 255, 255, 255, 255, 255, 255, 255, 255,
+        101,  78,  58,  42,  26,  16,   8,   2,   0,   3,   9,  17,  27,  43,  59,  79,
+        102,  86,  62,  46,  32,  20,  10,   6,   4,   7,  11,  21,  33,  47,  63,  87,
+        105,  90,  70,  52,  37,  28,  18,  14,  12,  15,  19,  29,  38,  53,  71,  91,
+        110,  99,  82,  66,  48,  35,  30,  24,  22,  25,  31,  36,  49,  67,  83, 100,
+        115, 108,  94,  76,  64,  50,  44,  40,  34,  41,  45,  51,  65,  77,  95, 109,
+        118, 113, 103,  92,  80,  68,  60,  56,  54,  57,  61,  69,  81,  93, 104, 114,
+        119, 116, 111, 106,  97,  88,  84,  74,  72,  75,  85,  89,  98, 107, 112, 117
+    };
+
+    /**
+     * Maps a linear pixel distance to a VP8L "plane code" (the encoder-side
+     * inverse of {@link #planeCodeToDistance}). Mirrors libwebp's
+     * {@code VP8LDistanceToPlaneCode}: neighbours within (yoffset in [0, 7],
+     * xoffset in [-7, 8]) get a 2-D plane code in {@code [1, 120]} via the
+     * {@link #PLANE_TO_CODE_LUT}; everything else is encoded as
+     * {@code dist + 120} so plane codes above 120 are literal linear distances.
+     *
+     * @param xsize image width in pixels (used to decompose {@code dist} into
+     *              {@code (yoffset, xoffset)})
+     * @param dist linear pixel distance ({@code >= 1})
+     * @return plane code ({@code >= 1})
+     */
+    static int distanceToPlaneCode(int xsize, int dist) {
+        int yoffset = dist / xsize;
+        int xoffset = dist - yoffset * xsize;
+        if (xoffset <= 8 && yoffset < 8) {
+            return PLANE_TO_CODE_LUT[yoffset * 16 + 8 - xoffset] + 1;
+        } else if (xoffset > xsize - 8 && yoffset < 7) {
+            return PLANE_TO_CODE_LUT[(yoffset + 1) * 16 + 8 + (xsize - xoffset)] + 1;
+        }
+        return dist + 120;
+    }
 
     private LZ77() { }
 
@@ -197,6 +253,38 @@ final class LZ77 {
 
     private static int hashPixel(int[] pixels, int pos) {
         return (pixels[pos] * 0x1E35A7BD) >>> (32 - HASH_BITS);
+    }
+
+    /**
+     * Encoder-side inverse of {@link #getCopyDistance} / {@link #decodeLength}:
+     * splits a value {@code V >= 1} into a Huffman symbol plus extra-bit payload,
+     * matching libwebp's {@code VP8LPrefixEncode}. Used for both length codes
+     * (positions 256..279 of the extended green alphabet) and distance plane
+     * codes (the 40-symbol distance alphabet) - libwebp uses the same prefix
+     * formula for both.
+     * <p>
+     * Small values ({@code V <= 4}) map directly to symbols 0..3 with zero
+     * extra bits. Larger values use the
+     * {@code code = 2 * highest_bit + second_highest_bit} formula with
+     * {@code extra_bits = highest_bit - 1} extra bits carrying the low bits of
+     * {@code V - 1}. The symbol range for encoders using a 24-symbol length
+     * alphabet is {@code [0, 23]}, corresponding to {@code V in [1, 4095]};
+     * for a 40-symbol distance alphabet the range is {@code [0, 39]},
+     * corresponding to {@code V in [1, 1 << 21]}.
+     *
+     * @param value value to encode ({@code >= 1})
+     * @return three-element array {@code [symbol, extraBits, extraValue]}
+     */
+    static int @NotNull [] prefixEncode(int value) {
+        if (value < 5) return new int[] { value - 1, 0, 0 };
+        // highest_bit = floor(log2(value - 1))
+        int v = value - 1;
+        int highestBit = 31 - Integer.numberOfLeadingZeros(v);
+        int secondBit = (v >> (highestBit - 1)) & 1;
+        int symbol = 2 * highestBit + secondBit;
+        int extraBits = highestBit - 1;
+        int extraValue = v & ((1 << extraBits) - 1);
+        return new int[] { symbol, extraBits, extraValue };
     }
 
     private static int matchLength(int[] pixels, int a, int b, int maxLen) {
