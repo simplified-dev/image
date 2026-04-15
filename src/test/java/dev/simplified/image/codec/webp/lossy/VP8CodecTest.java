@@ -1934,6 +1934,62 @@ public class VP8CodecTest {
                         parallelPf[i] & 0xFF));
         }
 
+        @Test @DisplayName("conformance: sub-block motion-search prepass produces byte-identical P-frame bitstream across thread counts")
+        void subBlockMotionSearchThreadingIsBitExact() {
+            // 32x32 non-uniform per-sub-MB motion content (same shape as
+            // splitMvRdNonUniformMotion): high-entropy keyframe, P-frame top half
+            // shifted +1 pixel right within each MB row, bottom half identical.
+            // This makes the whole-MB NEW-MV search leave substantial residual SSE,
+            // clearing SUB_MV_PREPASS_GATE_SSE so the 24-slot sub-block cache
+            // actually populates on most MBs. Encoding the same input across
+            // motionSearchThreads = {1, 2, 4} must produce byte-identical output,
+            // confirming the sub-block cache + findBestSubBlockMv fallback path
+            // preserves the existing bit-exact-across-threads contract.
+            int W = 32, H = 32;
+            PixelBuffer keyframe = PixelBuffer.create(W, H);
+            for (int y = 0; y < H; y++)
+                for (int x = 0; x < W; x++) {
+                    int mix = x * 0x9E3779B1 ^ y * 0x85EBCA77;
+                    int luma = (mix >>> 24) & 0xFF;
+                    keyframe.setPixel(x, y, 0xFF000000 | (luma << 16) | (luma << 8) | luma);
+                }
+            PixelBuffer pframe = PixelBuffer.create(W, H);
+            for (int y = 0; y < H; y++) {
+                int yLocal = y & 15;
+                for (int x = 0; x < W; x++) {
+                    int sx = (yLocal < 8 && x + 1 < W) ? x + 1 : x;
+                    pframe.setPixel(x, y, keyframe.getPixel(sx, y));
+                }
+            }
+
+            byte[][] pfPerThreadCount = new byte[3][];
+            int[] threadCounts = { 1, 2, 4 };
+            for (int ti = 0; ti < threadCounts.length; ti++) {
+                VP8EncoderSession sess = new VP8EncoderSession()
+                    .withMotionSearchThreads(threadCounts[ti]);
+                sess.encode(keyframe, 1.0f, true);              // seed LAST reference
+                pfPerThreadCount[ti] = sess.encode(pframe, 1.0f, false);
+            }
+
+            for (int ti = 1; ti < threadCounts.length; ti++) {
+                byte[] a = pfPerThreadCount[0];
+                byte[] b = pfPerThreadCount[ti];
+                if (a.length != b.length)
+                    throw new AssertionError(String.format(
+                        "P-frame length differs between motionSearchThreads=1 and =%d: "
+                        + "len(1)=%d len(%d)=%d - sub-block cache parallelism must not "
+                        + "change byte output", threadCounts[ti], a.length,
+                        threadCounts[ti], b.length));
+                for (int i = 0; i < a.length; i++)
+                    if (a[i] != b[i])
+                        throw new AssertionError(String.format(
+                            "P-frame byte %d differs between threads=1 and threads=%d: "
+                            + "serial=0x%02X parallel=0x%02X - sub-block prepass cache "
+                            + "leaked thread-count non-determinism into bit output",
+                            i, threadCounts[ti], a[i] & 0xFF, b[i] & 0xFF));
+            }
+        }
+
     }
 
     /**

@@ -253,6 +253,25 @@ public final class VP8Encoder {
         final int[] cachedMvWireRow;
         final int[] cachedMvWireCol;
         final boolean[] cachedMvFound;
+        // Best SSE from the 16x16 NEW-MV search cached so the sub-block prepass can
+        // cheaply gate on whether this MB is even a SPLITMV candidate. Set to
+        // {@link Integer#MAX_VALUE} when {@code cachedMvFound[i] = false} so
+        // null-MV MBs don't trigger sub-block work.
+        final int[] cachedMvBestSse;
+
+        // Per-MB per-slot sub-block motion-search cache, populated by the prepass for
+        // MBs whose 16x16 NEW-MV SSE is above {@link #SUB_MV_PREPASS_GATE_SSE}
+        // (the SPLITMV-R-D gate proxy). {@code cachedSubMvPrepassed[i]} = false
+        // means this MB was gated out of the sub-block prepass and a SPLITMV R-D
+        // caller must fall back to an on-demand {@link #computeBestSubBlockMv}.
+        // Layout: {@code cachedSubMvRow[mbIdx * SUB_MV_SLOT_COUNT + slotOffset(scheme) + j]}
+        // with {@code slotOffset} defined by {@link #subMvSlotBase}. Found flag is
+        // per-slot because individual slot searches can clip independently on MB
+        // edges even when the whole-MB search found a valid MV.
+        final boolean[] cachedSubMvPrepassed;
+        final int[] cachedSubMvRow;
+        final int[] cachedSubMvCol;
+        final boolean[] cachedSubMvValid;
 
         // Segment map state (RFC 6386 section 10). Disabled by default - only the
         // {@link #encodeWithSegmentMap} test hook flips {@code useSegment} on. When
@@ -299,6 +318,11 @@ public final class VP8Encoder {
             this.cachedMvWireRow = new int[mbCols * mbRows];
             this.cachedMvWireCol = new int[mbCols * mbRows];
             this.cachedMvFound = new boolean[mbCols * mbRows];
+            this.cachedMvBestSse = new int[mbCols * mbRows];
+            this.cachedSubMvPrepassed = new boolean[mbCols * mbRows];
+            this.cachedSubMvRow = new int[mbCols * mbRows * SUB_MV_SLOT_COUNT];
+            this.cachedSubMvCol = new int[mbCols * mbRows * SUB_MV_SLOT_COUNT];
+            this.cachedSubMvValid = new boolean[mbCols * mbRows * SUB_MV_SLOT_COUNT];
 
             // Populate per-segment quant + matrix + lambda tables from the base qi with
             // the current (all-zero at construction time) {@link #segmentQuantDelta}.
@@ -2225,6 +2249,41 @@ public final class VP8Encoder {
     private static final long SPLITMV_GATE_SSE = 16384L;
 
     /**
+     * SSE threshold applied against the 16x16 NEW-MV search result in the motion-
+     * search prepass to decide whether this MB is worth running the 24-slot sub-
+     * block MV prepass for. Set identically to {@link #SPLITMV_GATE_SSE} so MBs
+     * that the outer R-D gate will reject anyway are skipped at prepass time,
+     * avoiding wasted sub-block search on ~99% of tooltip MBs. MBs not prepassed
+     * fall back to on-demand serial {@link #computeBestSubBlockMv} calls inside
+     * {@link #buildBestSplitMvCandidate}, keeping correctness independent of the
+     * gate tuning.
+     */
+    private static final long SUB_MV_PREPASS_GATE_SSE = SPLITMV_GATE_SSE;
+
+    /**
+     * Number of distinct sub-block slot positions across all four SPLITMV schemes:
+     * 2 (TOP_BOTTOM) + 2 (LEFT_RIGHT) + 4 (QUARTERS) + 16 (EIGHTS). Each position
+     * has a distinct {@code (blockX0, blockY0, blockW, blockH)} tuple so no two
+     * scheme slots share a search result - the cache layout flatly indexes all 24.
+     */
+    private static final int SUB_MV_SLOT_COUNT = 24;
+
+    /**
+     * Flat-index offset per scheme into the {@code cachedSubMv*} arrays. A slot
+     * {@code j} of {@code scheme} lives at index
+     * {@code mbIdx * SUB_MV_SLOT_COUNT + subMvSlotBase(scheme) + j}.
+     */
+    private static int subMvSlotBase(int scheme) {
+        switch (scheme) {
+            case VP8Tables.MBSPLIT_TOP_BOTTOM: return 0;     // slots 0..1
+            case VP8Tables.MBSPLIT_LEFT_RIGHT: return 2;     // slots 2..3
+            case VP8Tables.MBSPLIT_QUARTERS:   return 4;     // slots 4..7
+            case VP8Tables.MBSPLIT_EIGHTS:     return 8;     // slots 8..23
+            default: throw new IllegalStateException("invalid SPLITMV scheme: " + scheme);
+        }
+    }
+
+    /**
      * Resolves the LEFT and ABOVE neighbour sub-MVs for slot {@code j} of SPLITMV
      * scheme {@code scheme} of MB {@code (mbX, mbY)}. Mirrors VP8Decoder.decodeSplitMv
      * (lines 1008-1049): intra-MB neighbour MVs come from {@code thisMbSlotRow} /
@@ -2515,9 +2574,11 @@ public final class VP8Encoder {
                         bestInternalRow = 0; bestInternalCol = 0;
                     }
                 }
-                // NEW (motion-searched)
-                int[] newWire = computeBestSubBlockMv(s, mb, mbX, mbY,
-                    blockX0, blockY0, blockW, blockH);
+                // NEW (motion-searched). Reads the prepass cache when the MB
+                // cleared SUB_MV_PREPASS_GATE_SSE; otherwise falls back to a
+                // serial on-demand search inside findBestSubBlockMv.
+                int[] newWire = findBestSubBlockMv(s, mb, mbX, mbY,
+                    scheme, j, blockX0, blockY0, blockW, blockH);
                 if (newWire != null) {
                     int newWireRow = newWire[0];
                     int newWireCol = newWire[1];
@@ -2832,12 +2893,19 @@ public final class VP8Encoder {
     /**
      * Runs the per-MB motion search for an inter frame in advance of the serial
      * R-D loop, caching the best wire MV into {@link State#cachedMvWireRow} /
-     * {@link State#cachedMvWireCol} / {@link State#cachedMvFound}.
+     * {@link State#cachedMvWireCol} / {@link State#cachedMvFound}. For MBs whose
+     * 16x16 NEW-MV SSE is above {@link #SUB_MV_PREPASS_GATE_SSE}, also runs the
+     * 24-slot sub-block MV search (2 TOP_BOTTOM + 2 LEFT_RIGHT + 4 QUARTERS + 16
+     * EIGHTS) and caches per-slot wire MVs into {@link State#cachedSubMvRow} etc.
      * <p>
      * Thread-safe: each MB's search reads {@code session.refY/refU/refV} (frozen
      * post-capture from the prior frame) and a per-MB {@link Macroblock} extracted
      * from the source pixels. No shared mutable State is touched, so the MB work
-     * can run on any worker pool.
+     * can run on any worker pool. Gate threshold is deterministic, so a given MB
+     * is either always prepassed or never prepassed regardless of thread count.
+     * When an MB is not prepassed and downstream SPLITMV R-D still needs a
+     * sub-block MV, {@link #findBestSubBlockMv} falls back to an on-demand serial
+     * {@link #computeBestSubBlockMv} call - preserving bit-exact output.
      */
     private static void runMotionSearchPrepass(
         @NotNull State s, int @NotNull [] argb, int width, int height
@@ -2851,11 +2919,20 @@ public final class VP8Encoder {
             int[] best = computeBestMv(s, mb, mbX, mbY);
             if (best == null) {
                 s.cachedMvFound[mbIdx] = false;
-            } else {
-                s.cachedMvWireRow[mbIdx] = best[0];
-                s.cachedMvWireCol[mbIdx] = best[1];
-                s.cachedMvFound[mbIdx] = true;
+                s.cachedMvBestSse[mbIdx] = Integer.MAX_VALUE;
+                // No valid whole-MB MV means sub-block searches also can't seed a
+                // meaningful result; skip the sub-block prepass for this MB.
+                return;
             }
+            s.cachedMvWireRow[mbIdx] = best[0];
+            s.cachedMvWireCol[mbIdx] = best[1];
+            s.cachedMvFound[mbIdx] = true;
+            s.cachedMvBestSse[mbIdx] = best[2];
+
+            // Gate: only run the 24-slot sub-block search when the 16x16 result
+            // leaves enough residual error that SPLITMV could plausibly win.
+            if ((long) best[2] >= SUB_MV_PREPASS_GATE_SSE)
+                runSubBlockPrepassForMb(s, mb, mbX, mbY, mbIdx);
         };
 
         if (s.motionSearchThreads <= 1) {
@@ -2881,11 +2958,86 @@ public final class VP8Encoder {
     }
 
     /**
+     * Fills the 24-slot sub-block MV cache for one MB by running
+     * {@link #computeBestSubBlockMv} against each scheme's slot geometries:
+     * 2 x 16x8 (TOP_BOTTOM), 2 x 8x16 (LEFT_RIGHT), 4 x 8x8 (QUARTERS),
+     * 16 x 4x4 (EIGHTS). Called only from {@link #runMotionSearchPrepass} for
+     * MBs whose 16x16 search cleared {@link #SUB_MV_PREPASS_GATE_SSE}.
+     * <p>
+     * Thread-safe under the same argument as the whole-MB search: reads only
+     * immutable session reference planes + the per-call {@link Macroblock}, writes
+     * only to disjoint cache slots indexed by {@code mbIdx * SUB_MV_SLOT_COUNT + ...}.
+     */
+    private static void runSubBlockPrepassForMb(
+        @NotNull State s, @NotNull Macroblock mb, int mbX, int mbY, int mbIdx
+    ) {
+        int base = mbIdx * SUB_MV_SLOT_COUNT;
+        for (int scheme : new int[] {
+            VP8Tables.MBSPLIT_TOP_BOTTOM,
+            VP8Tables.MBSPLIT_LEFT_RIGHT,
+            VP8Tables.MBSPLIT_QUARTERS,
+            VP8Tables.MBSPLIT_EIGHTS
+        }) {
+            int slotCount = VP8Tables.MBSPLIT_COUNT[scheme];
+            int slotBase = subMvSlotBase(scheme);
+            for (int j = 0; j < slotCount; j++) {
+                int geom = slotGeometry(scheme, j);
+                int blockX0 = geom & 0xFF;
+                int blockY0 = (geom >> 8) & 0xFF;
+                int blockW = (geom >> 16) & 0xFF;
+                int blockH = (geom >> 24) & 0xFF;
+                int[] wire = computeBestSubBlockMv(s, mb, mbX, mbY,
+                    blockX0, blockY0, blockW, blockH);
+                int cacheIdx = base + slotBase + j;
+                if (wire == null) {
+                    s.cachedSubMvValid[cacheIdx] = false;
+                } else {
+                    s.cachedSubMvRow[cacheIdx] = wire[0];
+                    s.cachedSubMvCol[cacheIdx] = wire[1];
+                    s.cachedSubMvValid[cacheIdx] = true;
+                }
+            }
+        }
+        s.cachedSubMvPrepassed[mbIdx] = true;
+    }
+
+    /**
+     * Cache lookup for a SPLITMV slot's NEW-MV. Returns the cached wire MV when the
+     * prepass ran for this MB and the slot's search found a valid candidate;
+     * falls back to an on-demand {@link #computeBestSubBlockMv} call (serial,
+     * from inside the R-D loop) otherwise. The fallback keeps output bit-exact
+     * regardless of {@link #SUB_MV_PREPASS_GATE_SSE} tuning - the gate is a perf
+     * heuristic, not a correctness contract.
+     *
+     * @return 2-entry {@code [wireRow, wireCol]} array, or {@code null} if no
+     *         valid MV exists for this slot (every candidate clipped)
+     */
+    private static int @org.jetbrains.annotations.Nullable [] findBestSubBlockMv(
+        @NotNull State s, @NotNull Macroblock mb, int mbX, int mbY,
+        int scheme, int j,
+        int blockX0, int blockY0, int blockW, int blockH
+    ) {
+        int mbIdx = mbY * s.mbCols + mbX;
+        if (s.cachedSubMvPrepassed[mbIdx]) {
+            int cacheIdx = mbIdx * SUB_MV_SLOT_COUNT + subMvSlotBase(scheme) + j;
+            if (!s.cachedSubMvValid[cacheIdx]) return null;
+            return new int[] { s.cachedSubMvRow[cacheIdx], s.cachedSubMvCol[cacheIdx] };
+        }
+        // Gate skipped this MB at prepass time - pay the search cost now. Rare on
+        // busy content (which would have cleared the gate); the outer SPLITMV_GATE_SSE
+        // in encodeInterMacroblock already filters most low-SSE MBs.
+        return computeBestSubBlockMv(s, mb, mbX, mbY, blockX0, blockY0, blockW, blockH);
+    }
+
+    /**
      * Computes the best NEW-MV for a single inter MB. Integer SAD search within
      * {@link #MOTION_SEARCH_RADIUS}, then half-pel, then quarter-pel refinement (the
      * quarter-pel pass runs only when half-pel improved on integer; see RFC 6386
      * paragraph 17.1). Returns {@code null} when every candidate lies outside the
-     * reference frame bounds.
+     * reference frame bounds, else a 3-entry array {@code [wireRow, wireCol, sse]}
+     * where {@code sse} is the luma SSE at the winning wire MV (used by the
+     * prepass as the {@link #SUB_MV_PREPASS_GATE_SSE} gate input; clamped to
+     * {@link Integer#MAX_VALUE}).
      * <p>
      * Called exactly once per MB from {@link #runMotionSearchPrepass}; the per-MB
      * serial R-D loop reads the cached result via {@link #findBestMv}.
@@ -2957,7 +3109,10 @@ public final class VP8Encoder {
                 }
             }
         }
-        return new int[] { bestWireRow, bestWireCol };
+        // 16x16 luma SSE is bounded by 256 * 255^2 = 16,646,400 < Integer.MAX_VALUE,
+        // but clamp defensively for the prepass-gate int cache.
+        int sseInt = (int) Math.min(bestSse, Integer.MAX_VALUE);
+        return new int[] { bestWireRow, bestWireCol, sseInt };
     }
 
     /** Sum of absolute differences between the 16x16 source block and a reference block. */
