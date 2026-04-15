@@ -2143,10 +2143,12 @@ public final class VP8Encoder {
     }
 
     /**
-     * Per-scheme greedy R-D over {@link VP8Tables#MBSPLIT_TOP_BOTTOM} /
-     * {@link VP8Tables#MBSPLIT_LEFT_RIGHT} / {@link VP8Tables#MBSPLIT_QUARTERS}.
-     * {@link VP8Tables#MBSPLIT_EIGHTS} (16 sub-MVs, 16 NEW searches) is skipped
-     * for cost.
+     * Per-scheme greedy R-D over all four SPLITMV schemes
+     * ({@link VP8Tables#MBSPLIT_TOP_BOTTOM} / {@link VP8Tables#MBSPLIT_LEFT_RIGHT} /
+     * {@link VP8Tables#MBSPLIT_QUARTERS} / {@link VP8Tables#MBSPLIT_EIGHTS}). The outer
+     * {@link #SPLITMV_GATE_SSE} gate in {@link #encodeInterMacroblock} ensures SPLITMV
+     * enumeration only runs on MBs where the non-SPLITMV best is meaningfully imperfect,
+     * bounding the per-MB cost of the 2 + 2 + 4 + 16 = 24 NEW MV searches across schemes.
      * <p>
      * For each scheme, walks slots in raster order and greedily picks the per-slot
      * sub-MV-ref category in {@code {LEFT, ABOVE, ZERO, NEW}} that minimises
@@ -2172,7 +2174,8 @@ public final class VP8Encoder {
         for (int scheme : new int[] {
             VP8Tables.MBSPLIT_TOP_BOTTOM,
             VP8Tables.MBSPLIT_LEFT_RIGHT,
-            VP8Tables.MBSPLIT_QUARTERS
+            VP8Tables.MBSPLIT_QUARTERS,
+            VP8Tables.MBSPLIT_EIGHTS
         }) {
             int slotCount = VP8Tables.MBSPLIT_COUNT[scheme];
             int fillCount = VP8Tables.MBSPLIT_FILL_COUNT[scheme];
