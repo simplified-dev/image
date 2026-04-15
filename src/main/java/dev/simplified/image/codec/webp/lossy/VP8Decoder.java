@@ -655,7 +655,9 @@ public final class VP8Decoder {
                 effInternalRow = wireRow << 1;
                 effInternalCol = wireCol << 1;
             } else {
-                throw new ImageDecodeException("VP8 SPLITMV not supported (Phase 2 scope)");
+                // SPLITMV (mvMode == 4): parse scheme + sub-MVs + per-sub-block MC.
+                decodeSplitMv(s, br, td, mbX, mbY, skip, refFrame, near);
+                return;
             }
 
             int mbIdx = mbY * s.mbCols + mbX;
@@ -904,6 +906,222 @@ public final class VP8Decoder {
         commitInterRecon16x16(s.reconY, s.lumaStride, mbX * 16, mbY * 16, predY, yCoefs, skip != 0);
         commitInterRecon8x8 (s.reconU, s.chromaStride, mbX * 8,  mbY * 8,  predU, uCoefs, skip != 0);
         commitInterRecon8x8 (s.reconV, s.chromaStride, mbX * 8,  mbY * 8,  predV, vCoefs, skip != 0);
+    }
+
+    /**
+     * SPLITMV decode path (RFC 6386 section 17.3). Parses the 4-way partitioning scheme,
+     * then per-slot: resolves left/above neighbour sub-MVs, classifies context (5-way),
+     * decodes LEFT/ABOVE/ZERO/NEW reference, fills the covered 4x4 slots. Persists the
+     * final 16-slot BMI grid plus the scheme on {@link State#bmiRow} / {@link State#bmiCol}
+     * / {@link State#mbSplitScheme} so downstream SPLITMV MBs can look up neighbour
+     * sub-MVs across the boundary. Builds per-4x4 luma + per-4x4 chroma motion-compensated
+     * prediction and funnels through {@link #decodeInterResidualAndCommit}.
+     */
+    private static void decodeSplitMv(
+        @NotNull State s, @NotNull BooleanDecoder br, @NotNull BooleanDecoder td,
+        int mbX, int mbY, int skip, int refFrame, @NotNull NearMvs.Result near
+    ) {
+        int scheme = br.decodeTree(VP8Tables.MBSPLIT_TREE, VP8Tables.MBSPLIT_PROBS);
+        int count = VP8Tables.MBSPLIT_COUNT[scheme];
+        int fillCount = VP8Tables.MBSPLIT_FILL_COUNT[scheme];
+        int mbIdx = mbY * s.mbCols + mbX;
+        int bmiBase = mbIdx * 16;
+
+        int bestInternalRow = near.bestRow;
+        int bestInternalCol = near.bestCol;
+
+        int[] slotRow = new int[16];
+        int[] slotCol = new int[16];
+        for (int j = 0; j < count; j++) {
+            int k = VP8Tables.MBSPLIT_OFFSET[scheme][j];
+
+            // Resolve LEFT neighbour sub-MV.
+            int leftRow, leftCol;
+            if ((k & 3) == 0) {
+                if (mbX == 0) {
+                    leftRow = leftCol = 0;
+                } else {
+                    int leftMbIdx = mbY * s.mbCols + mbX - 1;
+                    if (s.mbSplitScheme[leftMbIdx] >= 0) {
+                        leftRow = s.bmiRow[leftMbIdx * 16 + k + 3];
+                        leftCol = s.bmiCol[leftMbIdx * 16 + k + 3];
+                    } else if (s.mbIsInter[leftMbIdx]) {
+                        leftRow = s.mbMvRow[leftMbIdx];
+                        leftCol = s.mbMvCol[leftMbIdx];
+                    } else {
+                        leftRow = leftCol = 0;
+                    }
+                }
+            } else {
+                leftRow = slotRow[k - 1];
+                leftCol = slotCol[k - 1];
+            }
+
+            // Resolve ABOVE neighbour sub-MV.
+            int aboveRow, aboveCol;
+            if ((k >> 2) == 0) {
+                if (mbY == 0) {
+                    aboveRow = aboveCol = 0;
+                } else {
+                    int aboveMbIdx = (mbY - 1) * s.mbCols + mbX;
+                    if (s.mbSplitScheme[aboveMbIdx] >= 0) {
+                        aboveRow = s.bmiRow[aboveMbIdx * 16 + k + 12];
+                        aboveCol = s.bmiCol[aboveMbIdx * 16 + k + 12];
+                    } else if (s.mbIsInter[aboveMbIdx]) {
+                        aboveRow = s.mbMvRow[aboveMbIdx];
+                        aboveCol = s.mbMvCol[aboveMbIdx];
+                    } else {
+                        aboveRow = aboveCol = 0;
+                    }
+                }
+            } else {
+                aboveRow = slotRow[k - 4];
+                aboveCol = slotCol[k - 4];
+            }
+
+            // Classify 5-way context (libvpx vp8_sub_mv_ref_prob3 table).
+            boolean lez = (leftRow == 0 && leftCol == 0);
+            boolean aez = (aboveRow == 0 && aboveCol == 0);
+            boolean lea = (leftRow == aboveRow && leftCol == aboveCol);
+            int ctx;
+            if (lez && aez)             ctx = 4;   // LEFT_ABOVE_BOTH_ZERO
+            else if (lez)               ctx = 1;   // LEFT_ZERO
+            else if (aez)               ctx = 2;   // ABOVE_ZERO
+            else if (lea)               ctx = 3;   // LEFT_ABOVE_SAME_NONZERO
+            else                        ctx = 0;   // NORMAL
+
+            int[] prob = VP8Tables.SUB_MV_REF_PROB[ctx];
+            int ref = br.decodeTree(VP8Tables.SUB_MV_REF_TREE, prob);
+            int subRow, subCol;
+            if (ref == VP8Tables.SUB_MV_REF_LEFT) {
+                subRow = leftRow;
+                subCol = leftCol;
+            } else if (ref == VP8Tables.SUB_MV_REF_ABOVE) {
+                subRow = aboveRow;
+                subCol = aboveCol;
+            } else if (ref == VP8Tables.SUB_MV_REF_ZERO) {
+                subRow = 0;
+                subCol = 0;
+            } else {   // NEW4X4
+                int wireRow = decodeMvComponent(br, s.mvProba[0]);
+                int wireCol = decodeMvComponent(br, s.mvProba[1]);
+                subRow = (wireRow << 1) + bestInternalRow;
+                subCol = (wireCol << 1) + bestInternalCol;
+            }
+
+            // Fill the covered 4x4 slots.
+            for (int i = 0; i < fillCount; i++) {
+                int kFill = VP8Tables.MBSPLIT_FILL_OFFSET[scheme][j * fillCount + i];
+                slotRow[kFill] = subRow;
+                slotCol[kFill] = subCol;
+            }
+        }
+
+        // Persist full BMI grid + scheme for neighbour lookups.
+        for (int i = 0; i < 16; i++) {
+            s.bmiRow[bmiBase + i] = slotRow[i];
+            s.bmiCol[bmiBase + i] = slotCol[i];
+        }
+        s.mbSplitScheme[mbIdx] = scheme;
+
+        // Canonical MB-level MV = bmi[15] (libvpx convention for downstream NearMvs).
+        s.mbMvRow[mbIdx] = slotRow[15];
+        s.mbMvCol[mbIdx] = slotCol[15];
+        s.mbIsInter[mbIdx] = true;
+        s.mbIsI4x4[mbIdx] = false;
+        s.mbRefFrame[mbIdx] = refFrame;
+        s.mbModeLfIdx[mbIdx] = LoopFilter.MODE_SPLITMV;
+
+        // Reset intra-mode neighbour context for downstream intra MBs.
+        java.util.Arrays.fill(s.intraT, mbX * 4, mbX * 4 + 4, IntraPrediction.B_DC_PRED);
+        java.util.Arrays.fill(s.intraL, IntraPrediction.B_DC_PRED);
+
+        // Build per-sub-block motion-compensated prediction.
+        short[] predY = new short[256];
+        short[] predU = new short[64];
+        short[] predV = new short[64];
+        buildSplitMvPrediction(s, mbX, mbY, refFrame, slotRow, slotCol, predY, predU, predV);
+
+        decodeInterResidualAndCommit(s, td, mbX, mbY, skip, predY, predU, predV);
+    }
+
+    /**
+     * Builds the SPLITMV MB prediction: per-4x4 luma prediction using each sub-block's
+     * MV + per-4x4 chroma prediction using the 4-way average of the corresponding luma
+     * sub-MVs per RFC 6386 section 17.4 (round-half-away-from-zero, divided by 8).
+     */
+    private static void buildSplitMvPrediction(
+        @NotNull State s, int mbX, int mbY, int refFrame,
+        int @NotNull [] slotRow, int @NotNull [] slotCol,
+        short @NotNull [] predY, short @NotNull [] predU, short @NotNull [] predV
+    ) {
+        int refStrideY = s.session.refLumaStride;
+        int refH = s.session.refMbRows * 16;
+        int refStrideC = s.session.refChromaStride;
+        int refHC = s.session.refMbRows * 8;
+
+        short[] refY = s.session.lumaRef(refFrame);
+        short[] refU = s.session.uRef(refFrame);
+        short[] refV = s.session.vRef(refFrame);
+
+        // Luma: 16 x 4x4 sub-blocks.
+        short[] tmp = new short[16];
+        for (int by = 0; by < 4; by++) {
+            for (int bx = 0; bx < 4; bx++) {
+                int k = by * 4 + bx;
+                int mvRow = slotRow[k];
+                int mvCol = slotCol[k];
+                int refX = mbX * 16 + bx * 4 + (mvCol >> 3);
+                int refYPos = mbY * 16 + by * 4 + (mvRow >> 3);
+                int subX = mvCol & 7;
+                int subY = mvRow & 7;
+                SubpelPrediction.predict6tap(refY, refStrideY, refH,
+                    refX, refYPos, subX, subY, tmp, 4, 4, 4);
+                for (int y = 0; y < 4; y++)
+                    for (int x = 0; x < 4; x++)
+                        predY[(by * 4 + y) * 16 + (bx * 4 + x)] = tmp[y * 4 + x];
+            }
+        }
+
+        // Chroma: 4 x 4x4 chroma sub-blocks. Each averages 4 luma sub-MVs from the
+        // corresponding 8x8 luma quadrant. Libvpx's round-half-away-zero: (sum +
+        // sign_bias*4) / 8 where sign_bias is +1/-1 per the sign of the sum.
+        int[][] chromaLumaMap = {
+            { 0, 1, 4, 5 },     // chroma (0, 0)
+            { 2, 3, 6, 7 },     // chroma (1, 0)
+            { 8, 9, 12, 13 },   // chroma (0, 1)
+            { 10, 11, 14, 15 }  // chroma (1, 1)
+        };
+        short[] tmpU = new short[16];
+        short[] tmpV = new short[16];
+        for (int c = 0; c < 4; c++) {
+            int[] lumaBlocks = chromaLumaMap[c];
+            int sumRow = 0, sumCol = 0;
+            for (int lk : lumaBlocks) {
+                sumRow += slotRow[lk];
+                sumCol += slotCol[lk];
+            }
+            int chromaMvRow = (sumRow + (sumRow >= 0 ? 4 : -4)) / 8;
+            int chromaMvCol = (sumCol + (sumCol >= 0 ? 4 : -4)) / 8;
+
+            int cbX = c & 1;
+            int cbY = c >> 1;
+            int refXC = mbX * 8 + cbX * 4 + (chromaMvCol >> 3);
+            int refYC = mbY * 8 + cbY * 4 + (chromaMvRow >> 3);
+            int subX = chromaMvCol & 7;
+            int subY = chromaMvRow & 7;
+
+            SubpelPrediction.predict6tap(refU, refStrideC, refHC,
+                refXC, refYC, subX, subY, tmpU, 4, 4, 4);
+            SubpelPrediction.predict6tap(refV, refStrideC, refHC,
+                refXC, refYC, subX, subY, tmpV, 4, 4, 4);
+            for (int y = 0; y < 4; y++) {
+                for (int x = 0; x < 4; x++) {
+                    predU[(cbY * 4 + y) * 8 + cbX * 4 + x] = tmpU[y * 4 + x];
+                    predV[(cbY * 4 + y) * 8 + cbX * 4 + x] = tmpV[y * 4 + x];
+                }
+            }
+        }
     }
 
     /**
