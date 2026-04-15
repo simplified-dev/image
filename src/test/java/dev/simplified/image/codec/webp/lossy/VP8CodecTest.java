@@ -885,6 +885,62 @@ public class VP8CodecTest {
                     throw new AssertionError("ALTREF mutated by default P-frame at index " + i);
         }
 
+        @Test @DisplayName("conformance: coefficient proba updates round-trip through P-frame chain (RFC 6386 paragraph 13)")
+        void coefficientProbaUpdatesRoundTripThroughPFrameChain() {
+            // Build a 4-frame translating sequence. Each P-frame emits plenty of NEW_MV
+            // token residuals, populating the 1056-slot branch counters. By the later
+            // P-frames the encoder's prior-frame stats may drive coefficient proba
+            // updates. Either way, encoder + decoder must stay in lock-step: any
+            // divergence would corrupt every subsequent token emit within the frame,
+            // producing pixel-level garbage (not just a few dB of quantization noise).
+            int w = 64, h = 32;
+            PixelBuffer[] frames = new PixelBuffer[4];
+            for (int i = 0; i < 4; i++) {
+                PixelBuffer f = PixelBuffer.create(w, h);
+                for (int y = 0; y < h; y++) {
+                    for (int x = 0; x < w; x++) {
+                        int srcX = (x - 4 * i + w * 4) % w;          // +4 px shift per frame
+                        int c = 0xFF000000 | ((srcX * 4) << 16) | ((y * 8) << 8);
+                        f.setPixel(x, y, c);
+                    }
+                }
+                frames[i] = f;
+            }
+
+            VP8EncoderSession enc = new VP8EncoderSession();
+            VP8DecoderSession dec = new VP8DecoderSession();
+            for (int i = 0; i < frames.length; i++) {
+                byte[] bytes = enc.encode(frames[i], 1.0f, i == 0);
+                PixelBuffer decoded = dec.decode(bytes);
+                assertThat(String.format("frame %d width", i), decoded.width(), is(w));
+                assertThat(String.format("frame %d height", i), decoded.height(), is(h));
+
+                // Interior-region PSNR: stationary-zone reconstruction should be
+                // near-perfect at q=1.0. Divergence manifests as a catastrophic drop
+                // to < 15 dB because the token tree mis-walks send coefficients to
+                // wrong positions.
+                long sumSq = 0;
+                int n = 0;
+                for (int y = 8; y < h - 8; y++) {
+                    for (int x = 16; x < w - 16; x++) {              // skip wrap seam
+                        int src = frames[i].getPixel(x, y);
+                        int d = decoded.getPixel(x, y);
+                        for (int shift : new int[] { 0, 8, 16 }) {
+                            int diff = ((src >> shift) & 0xFF) - ((d >> shift) & 0xFF);
+                            sumSq += (long) diff * diff;
+                            n++;
+                        }
+                    }
+                }
+                double mse = sumSq / (double) n;
+                double psnr = mse == 0 ? Double.POSITIVE_INFINITY : 10.0 * Math.log10(255.0 * 255.0 / mse);
+                if (psnr < 30.0)
+                    throw new AssertionError(String.format(
+                        "frame %d interior PSNR %.2f dB below 30 dB - likely coef proba enc/dec divergence",
+                        i, psnr));
+            }
+        }
+
         @Test @DisplayName("conformance: Y-mode + UV-mode proba updates round-trip through intra-in-P fallback chain (RFC 6386 section 19.2)")
         void yModeUvModeProbaUpdatesRoundTripThroughIntraInP() {
             // Multi-frame sequence where each P-frame is a completely different solid
@@ -1782,7 +1838,7 @@ public class VP8CodecTest {
 
         private static byte[] encodeAndFinish(short[] coeffs, int first, int ctx0, int type) {
             BooleanEncoder enc = new BooleanEncoder(64);
-            VP8TokenEncoder.emit(enc, coeffs, first, ctx0, type, VP8Tables.COEFFS_PROBA_0);
+            VP8TokenEncoder.emit(enc, coeffs, first, ctx0, type, VP8Tables.COEFFS_PROBA_0, null);
             return enc.toByteArray();
         }
 

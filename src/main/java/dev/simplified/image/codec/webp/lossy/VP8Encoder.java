@@ -181,6 +181,15 @@ public final class VP8Encoder {
         final int[][] yModeBranches = new int[VP8Tables.YMODE_PROBA_INTER.length][2];
         final int[][] uvModeBranches = new int[VP8Tables.UV_MODE_PROBA_INTER.length][2];
 
+        // Per-frame coefficient token probabilities and branch observation counters.
+        // tokenProba starts at COEFFS_PROBA_0 every frame (refresh_entropy_probs=0
+        // semantics); the header emit may mutate individual slots based on prior-frame
+        // observations in session.prevTokenBranches. tokenBranches accumulates this
+        // frame's observations during emit for the NEXT frame's header.
+        final int[][][][] tokenProba;
+        final int[][][][][] tokenBranches =
+            new int[VP8Tables.NUM_TYPES][VP8Tables.NUM_BANDS][VP8Tables.NUM_CTX][VP8Tables.NUM_PROBAS][2];
+
         State(int width, int height, int qi, boolean isKeyframe, @Nullable VP8EncoderSession session) {
             this.isKeyframe = isKeyframe;
             this.session = session;
@@ -246,7 +255,26 @@ public final class VP8Encoder {
             // header mutates these for the rest of the frame only.
             this.yModeProba = VP8Tables.YMODE_PROBA_INTER.clone();
             this.uvModeProba = VP8Tables.UV_MODE_PROBA_INTER.clone();
+
+            // Token probabilities also start at defaults every frame (our encoder emits
+            // refresh_entropy_probs=0, so updates are per-frame only - decoder resets
+            // to defaults at each frame boundary and we must match).
+            this.tokenProba = deepCloneTokenProba(VP8Tables.COEFFS_PROBA_0);
         }
+    }
+
+    /** Deep-copies the {@code [NUM_TYPES][NUM_BANDS][NUM_CTX][NUM_PROBAS]} proba table. */
+    private static int[][][][] deepCloneTokenProba(int @NotNull [][][][] src) {
+        int[][][][] out = new int[src.length][][][];
+        for (int t = 0; t < src.length; t++) {
+            out[t] = new int[src[t].length][][];
+            for (int b = 0; b < src[t].length; b++) {
+                out[t][b] = new int[src[t][b].length][];
+                for (int c = 0; c < src[t][b].length; c++)
+                    out[t][b][c] = src[t][b][c].clone();
+            }
+        }
+        return out;
     }
 
     /**
@@ -331,6 +359,18 @@ public final class VP8Encoder {
         int height = pixels.height();
         int qi = qualityToQi(quality);
 
+        // Keyframes start a fresh adaptation window: the decoder's proba state resets
+        // to defaults on each keyframe, so stats from prior inter frames are stale.
+        // Clearing prev* here keeps session encodes bit-identical to static encodes
+        // across keyframe boundaries, and avoids the next P-frame picking updates off
+        // stale data.
+        if (isKeyframe && session != null) {
+            session.prevMvBranches = null;
+            session.prevYModeBranches = null;
+            session.prevUvModeBranches = null;
+            session.prevTokenBranches = null;
+        }
+
         State s = new State(width, height, qi, isKeyframe, session);
         s.useLfDelta = useLfDelta;
         System.arraycopy(refLfDelta, 0, s.refLfDelta, 0, 4);
@@ -375,6 +415,7 @@ public final class VP8Encoder {
             session.prevMvBranches = s.mvBranches;
             session.prevYModeBranches = s.yModeBranches;
             session.prevUvModeBranches = s.uvModeBranches;
+            session.prevTokenBranches = s.tokenBranches;
 
             // Keyframe refreshes all three reference slots (RFC 6386 section 9.7 -
             // keyframes implicitly overwrite LAST, GOLDEN, and ALTREF). P-frames
@@ -504,12 +545,11 @@ public final class VP8Encoder {
         if (!s.isKeyframe)
             e.encodeBool(1);       // refresh_last
 
-        // VP8ParseProba: 1056 "no update" bits.
-        for (int t = 0; t < VP8Tables.NUM_TYPES; t++)
-            for (int b = 0; b < VP8Tables.NUM_BANDS; b++)
-                for (int c = 0; c < VP8Tables.NUM_CTX; c++)
-                    for (int p = 0; p < VP8Tables.NUM_PROBAS; p++)
-                        e.encodeBit(VP8Tables.COEFFS_UPDATE_PROBA[t][b][c][p], 0);
+        // VP8ParseProba: 1056 per-slot update flags (RFC 6386 paragraph 13). Uses
+        // one-frame-lag stats from the session's prevTokenBranches to compute optimal
+        // probs and emit updates where cost-beneficial. On keyframes or the first
+        // frame of a session, prevTokenBranches is null and we emit all zeros.
+        emitTokenProbaUpdates(e, s);
 
         // Per-MB skip-flag proba. Keyframes keep the existing use_skip_proba=0 behaviour;
         // P-frames enable skip with a 50/50 default so the inter-skip MBs actually save
@@ -675,6 +715,78 @@ public final class VP8Encoder {
             }
         } else {
             e.encodeBool(0);
+        }
+    }
+
+    /** Minimum observations at a (type, band, ctx, probaIdx) slot before we consider a coef update. */
+    private static final int COEF_UPDATE_MIN_OBSERVATIONS = 4;
+
+    /**
+     * Emits the 1056-slot coefficient proba update section (RFC 6386 paragraph 13).
+     * For each of {@link VP8Tables#NUM_TYPES}x{@link VP8Tables#NUM_BANDS}x{@link
+     * VP8Tables#NUM_CTX}x{@link VP8Tables#NUM_PROBAS} slots, compares the cost of
+     * coding prior-frame observations at the current default vs the optimal
+     * observed prob; emits an update bit + 8-bit new prob when the savings exceed
+     * the update overhead. Mutates {@link State#tokenProba} so subsequent block
+     * emits use the updated values.
+     * <p>
+     * Slots with fewer than {@link #COEF_UPDATE_MIN_OBSERVATIONS} observations skip
+     * the comparison to avoid noisy updates driven by 1-2 outlier blocks.
+     */
+    private static void emitTokenProbaUpdates(@NotNull BooleanEncoder e, @NotNull State s) {
+        // Keyframes always start fresh - they reset every proba stream (MV, Y-mode,
+        // UV-mode probs all go back to defaults at the decoder's keyframe boundary)
+        // so carrying coef stats from a prior inter frame is stale. Behave like a
+        // stateless static encode and emit all-zero update flags.
+        int[][][][][] prev = (s.isKeyframe || s.session == null)
+            ? null : s.session.prevTokenBranches;
+        for (int t = 0; t < VP8Tables.NUM_TYPES; t++) {
+            for (int b = 0; b < VP8Tables.NUM_BANDS; b++) {
+                for (int c = 0; c < VP8Tables.NUM_CTX; c++) {
+                    for (int p = 0; p < VP8Tables.NUM_PROBAS; p++) {
+                        int flagProb = VP8Tables.COEFFS_UPDATE_PROBA[t][b][c][p];
+                        int currentProb = s.tokenProba[t][b][c][p];
+
+                        if (prev == null) {
+                            e.encodeBit(flagProb, 0);
+                            continue;
+                        }
+                        int ct0 = prev[t][b][c][p][0];
+                        int ct1 = prev[t][b][c][p][1];
+                        int total = ct0 + ct1;
+                        if (total < COEF_UPDATE_MIN_OBSERVATIONS) {
+                            e.encodeBit(flagProb, 0);
+                            continue;
+                        }
+
+                        int rawProb = (ct0 * 256 + total / 2) / total;
+                        if (rawProb < 1) rawProb = 1;
+                        if (rawProb > 255) rawProb = 255;
+                        if (rawProb == currentProb) {
+                            e.encodeBit(flagProb, 0);
+                            continue;
+                        }
+
+                        // Cost comparison in 1/256-bit units. Both paths include the
+                        // update-flag bit so the comparison is symmetric.
+                        long keepCost = (long) ct0 * VP8Costs.bitCost(0, currentProb)
+                                      + (long) ct1 * VP8Costs.bitCost(1, currentProb)
+                                      + VP8Costs.bitCost(0, flagProb);
+                        long updateCost = (long) ct0 * VP8Costs.bitCost(0, rawProb)
+                                        + (long) ct1 * VP8Costs.bitCost(1, rawProb)
+                                        + VP8Costs.bitCost(1, flagProb)
+                                        + 8 * 256;               // 8-bit new prob
+
+                        if (updateCost < keepCost) {
+                            e.encodeBit(flagProb, 1);
+                            e.encodeUint(rawProb, 8);
+                            s.tokenProba[t][b][c][p] = rawProb;
+                        } else {
+                            e.encodeBit(flagProb, 0);
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -1881,7 +1993,7 @@ public final class VP8Encoder {
                 int ctx = top[baseIdx + bx] + left[baseIdx + by];
                 VP8TokenEncoder.emit(
                     tokens, tr.zz[by * 2 + bx], 0, ctx,
-                    VP8Tables.TYPE_CHROMA_A, VP8Tables.COEFFS_PROBA_0);
+                    VP8Tables.TYPE_CHROMA_A, s.tokenProba, s.tokenBranches);
                 int nz = tr.nz[by * 2 + bx];
                 top[baseIdx + bx] = nz;
                 left[baseIdx + by] = nz;
@@ -2187,7 +2299,7 @@ public final class VP8Encoder {
         } else {
             int ctx = top[8] + left[8];
             int nz = VP8TokenEncoder.emit(
-                t, y2ZigZag, 0, ctx, VP8Tables.TYPE_I16_DC, VP8Tables.COEFFS_PROBA_0);
+                t, y2ZigZag, 0, ctx, VP8Tables.TYPE_I16_DC, s.tokenProba, s.tokenBranches);
             top[8] = left[8] = nz;
             yFirst = 1;
             yType = VP8Tables.TYPE_I16_AC;
@@ -2197,7 +2309,7 @@ public final class VP8Encoder {
             for (int x = 0; x < 4; x++) {
                 int ctx = top[x] + left[y];
                 int nz = VP8TokenEncoder.emit(
-                    t, yAcZigZag[y * 4 + x], yFirst, ctx, yType, VP8Tables.COEFFS_PROBA_0);
+                    t, yAcZigZag[y * 4 + x], yFirst, ctx, yType, s.tokenProba, s.tokenBranches);
                 top[x] = left[y] = nz;
             }
         }
