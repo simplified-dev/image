@@ -65,6 +65,20 @@ public final class VP8Decoder {
         final int[] mbMvRow;
         final int[] mbMvCol;
 
+        // Per-4x4-sub-block MV grid for SPLITMV MBs (RFC 6386 section 17.3). Layout:
+        //   bmiRow[mbIdx * 16 + k] where k is the 4x4 sub-block index (0..15 raster).
+        // Used by neighbouring SPLITMV MBs at the boundary to look up the right-column
+        // sub-MV (left neighbour) or bottom-row sub-MV (above neighbour) via
+        // {@code left_block_mv} / {@code above_block_mv} (libvpx findnearmv.c). For
+        // non-SPLITMV MBs, all 16 entries carry the MB-level MV so the neighbour lookup
+        // works uniformly.
+        final int[] bmiRow;
+        final int[] bmiCol;
+        // Per-MB SPLITMV partitioning scheme (0..3) or -1 for non-SPLITMV. Consumed by
+        // neighbouring SPLITMV MBs to decide whether to read bmi[k+3] / bmi[k+12] versus
+        // the MB-level mv (libvpx: inline "left_mb.mode == SPLITMV" check).
+        final int[] mbSplitScheme;
+
         // Per-MB loop-filter classification tables (row-major mbY*mbCols + mbX):
         //   mbRefFrame[i]   = LoopFilter.REF_INTRA / REF_LAST / REF_GOLDEN / REF_ALTREF
         //   mbModeLfIdx[i]  = LoopFilter.MODE_{NON_BPRED_INTRA, BPRED, ZEROMV, OTHER_INTER, SPLITMV}
@@ -132,6 +146,10 @@ public final class VP8Decoder {
             this.mbIsInter = new boolean[mbCols * mbRows];
             this.mbMvRow = new int[mbCols * mbRows];
             this.mbMvCol = new int[mbCols * mbRows];
+            this.bmiRow = new int[mbCols * mbRows * 16];
+            this.bmiCol = new int[mbCols * mbRows * 16];
+            this.mbSplitScheme = new int[mbCols * mbRows];
+            java.util.Arrays.fill(this.mbSplitScheme, -1);
             this.mbRefFrame = new int[mbCols * mbRows];       // defaults to REF_INTRA = 0
             this.mbModeLfIdx = new int[mbCols * mbRows];       // defaults to MODE_NON_BPRED_INTRA = 0
             this.proba = cloneProba(VP8Tables.COEFFS_PROBA_0);
@@ -807,6 +825,19 @@ public final class VP8Decoder {
         short[] predV = new short[64];
         buildInterPrediction(s, mbX, mbY, wireRow, wireCol, refFrame, predY, predU, predV);
 
+        decodeInterResidualAndCommit(s, td, mbX, mbY, skip, predY, predU, predV);
+    }
+
+    /**
+     * Residual-decode and commit for an inter MB whose MC prediction has already been
+     * built into {@code predY} / {@code predU} / {@code predV}. Shared between the
+     * whole-MB inter path ({@link #decodeInterWithMv}) and the SPLITMV per-sub-block
+     * path which builds prediction differently but uses the same token layout.
+     */
+    private static void decodeInterResidualAndCommit(
+        @NotNull State s, @NotNull BooleanDecoder td, int mbX, int mbY, int skip,
+        short @NotNull [] predY, short @NotNull [] predU, short @NotNull [] predV
+    ) {
         int[] top = s.topNz[mbX];
         int[] left = s.leftNz;
 
@@ -816,7 +847,7 @@ public final class VP8Decoder {
         short[][] vCoefs = new short[4][16];
 
         if (skip != 0) {
-            // Skip with NEW_MV: no residual, prediction is the final reconstruction.
+            // Skip: no residual, prediction is the final reconstruction.
             for (int i = 0; i < 9; i++) { top[i] = 0; left[i] = 0; }
         } else {
             // Y2 first (inter MBs that aren't B_PRED always have Y2).

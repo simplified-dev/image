@@ -142,7 +142,11 @@ final class LoopFilter {
                     if (modeDeltaIdx >= 0) level += modeLfDelta[modeDeltaIdx];
                 }
                 level = Math.clamp(level, 0, 63);
-                boolean inner = (mode == MODE_BPRED);
+                // Inner edges are filtered for both B_PRED and SPLITMV (RFC 6386 section
+                // 15.4, libvpx {@code skip_lf = mode != B_PRED && mode != SPLITMV && skip}).
+                // Our strengths table doesn't see the skip flag, so we set inner=true
+                // for these two modes unconditionally; other inter modes leave it false.
+                boolean inner = (mode == MODE_BPRED || mode == MODE_SPLITMV);
                 out[ref][mode] = buildFInfo(level, sharpness, inner);
             }
         }
