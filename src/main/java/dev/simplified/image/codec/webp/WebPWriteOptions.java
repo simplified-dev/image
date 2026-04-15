@@ -113,7 +113,21 @@ public class WebPWriteOptions implements ImageWriteOptions {
         }
 
         /**
-         * Sets whether to use multi-threaded encoding for animated images.
+         * Sets whether to use multi-threaded encoding for animated images. When
+         * enabled, frames are encoded concurrently on a virtual-thread executor
+         * (one task per frame).
+         * <p>
+         * <b>Silently ignored when {@link #usePFrames(boolean)} is on:</b> the
+         * P-frame writer must encode frames sequentially because every P-frame
+         * reads the prior frame's post-loop-filter reconstruction from a shared
+         * {@code VP8EncoderSession}. Parallelising frames would break inter-frame
+         * prediction. Use {@link #withMotionSearchThreads(int)} for parallelism
+         * inside each P-frame instead.
+         * <p>
+         * The two parallelism knobs are functionally non-overlapping:
+         * {@code multithreaded} only acts on the all-keyframe path
+         * ({@code usePFrames=false} or {@code lossless=true}); {@code motionSearchThreads}
+         * only acts on the P-frame path. They cannot oversubscribe CPU.
          *
          * @param multithreaded true to encode frames in parallel
          * @return this builder for chaining
@@ -192,7 +206,13 @@ public class WebPWriteOptions implements ImageWriteOptions {
 
         /**
          * Sets the VP8 P-frame motion-search parallelism. Only meaningful for lossy
-         * animated output with {@link #usePFrames(boolean)} enabled; ignored otherwise.
+         * animated output with {@link #usePFrames(boolean)} enabled; ignored otherwise
+         * (the keyframe-only path has no motion search to parallelise).
+         * <p>
+         * Composes safely with {@link #isMultithreaded(boolean)}: the P-frame writer
+         * encodes frames sequentially regardless of {@code multithreaded}, so the only
+         * active parallelism on the P-frame path is this per-MB motion-search prepass.
+         * The two knobs cannot oversubscribe CPU.
          * <p>
          * Values:
          * <ul>
