@@ -39,6 +39,7 @@ public class WebPImageWriter implements ImageWriter {
         boolean multithreaded = true;
         boolean alphaCompression = true;
         boolean usePFrames = false;
+        int forceKeyframeEvery = -1;
 
         if (options instanceof WebPWriteOptions webpOptions) {
             lossless = webpOptions.isLossless();
@@ -47,16 +48,29 @@ public class WebPImageWriter implements ImageWriter {
             multithreaded = webpOptions.isMultithreaded();
             alphaCompression = webpOptions.isAlphaCompression();
             usePFrames = webpOptions.isUsePFrames();
+            forceKeyframeEvery = webpOptions.getForceKeyframeEvery();
         }
 
         if (data instanceof AnimatedImageData animated) {
             if (loopCount == 0 && animated.getLoopCount() != 0)
                 loopCount = animated.getLoopCount();
 
-            return writeAnimated(animated, lossless, quality, loopCount, multithreaded, usePFrames);
+            return writeAnimated(animated, lossless, quality, loopCount, multithreaded, usePFrames, forceKeyframeEvery);
         }
 
         return writeStatic(data, lossless, quality, alphaCompression);
+    }
+
+    /**
+     * Auto-picks a sensible {@code forceKeyframeEvery} when the caller left the
+     * option at its sentinel default ({@code -1}): tooltip-length animations
+     * (<= 60 frames) stay at single-keyframe max compression, longer animations
+     * switch to a 30-frame interval so viewers can seek. Callers who set an
+     * explicit value (including {@code 0}) are honoured as-is.
+     */
+    private static int resolveForceKeyframeEvery(int configured, int frameCount) {
+        if (configured != -1) return configured;
+        return frameCount > 60 ? 30 : 0;
     }
 
     private byte @NotNull [] writeStatic(@NotNull ImageData data, boolean lossless, float quality, boolean alphaCompression) {
@@ -94,7 +108,8 @@ public class WebPImageWriter implements ImageWriter {
         float quality,
         int loopCount,
         boolean multithreaded,
-        boolean usePFrames
+        boolean usePFrames,
+        int forceKeyframeEvery
     ) {
         ConcurrentList<ImageFrame> frames = data.getFrames();
         boolean hasAlpha = data.hasAlpha();
@@ -109,10 +124,12 @@ public class WebPImageWriter implements ImageWriter {
         ConcurrentList<byte[]> alphaPayloads;
         if (!lossless && usePFrames) {
             VP8EncoderSession vp8Session = new VP8EncoderSession();
+            int keyInterval = resolveForceKeyframeEvery(forceKeyframeEvery, frames.size());
             encodedPayloads = Concurrent.newList();
             for (int i = 0; i < frames.size(); i++) {
                 ImageFrame frame = frames.get(i);
-                boolean forceKey = (i == 0);
+                boolean forceKey = (i == 0)
+                    || (keyInterval > 0 && i % keyInterval == 0);
                 encodedPayloads.add(vp8Session.encode(frame.pixels(), quality, forceKey));
             }
             if (perFrameAlpha) {

@@ -324,6 +324,106 @@ class WebPRoundTripTest {
     }
 
     @Test
+    @DisplayName("forceKeyframeEvery=N triggers intermediate keyframes (seekability knob)")
+    void forceKeyframeEveryTriggersIntermediateKeyframes() {
+        // A 6-frame stationary animation. At usePFrames=true + forceKeyframeEvery=3,
+        // frames 0 and 3 are keyframes; 1, 2, 4, 5 are P-frames. Vs the default
+        // forceKeyframeEvery=0 (single-keyframe), this must produce a strictly
+        // larger file because two keyframes cost more than one + five P-frames of
+        // inter-skip on stationary content. Still decodable round-trip.
+        ConcurrentList<ImageFrame> frames = Concurrent.newList();
+        for (int f = 0; f < 6; f++) {
+            PixelBuffer fb = PixelBuffer.create(32, 32);
+            for (int y = 0; y < 32; y++)
+                for (int x = 0; x < 32; x++)
+                    fb.setPixel(x, y, 0xFF000000 | ((x * 8) << 16) | ((y * 8) << 8));
+            frames.add(ImageFrame.of(fb, 100, 0, 0,
+                FrameDisposal.DO_NOT_DISPOSE, FrameBlend.OVER));
+        }
+        AnimatedImageData anim = AnimatedImageData.builder()
+            .withWidth(32).withHeight(32)
+            .withFrames(frames)
+            .withLoopCount(0)
+            .withBackgroundColor(0)
+            .build();
+
+        ImageFactory factory = new ImageFactory();
+        File singleKey = outputDir.resolve("anim_forcekey_0.webp").toFile();
+        File everyThree = outputDir.resolve("anim_forcekey_3.webp").toFile();
+        factory.toFile(anim, ImageFormat.WEBP, singleKey,
+            WebPWriteOptions.builder().isLossless(false).withQuality(1.0f).usePFrames(true)
+                .withForceKeyframeEvery(0).build());
+        factory.toFile(anim, ImageFormat.WEBP, everyThree,
+            WebPWriteOptions.builder().isLossless(false).withQuality(1.0f).usePFrames(true)
+                .withForceKeyframeEvery(3).build());
+
+        if (everyThree.length() <= singleKey.length())
+            throw new AssertionError(String.format(
+                "forceKeyframeEvery=3 (%d B) should be larger than single-keyframe (%d B)",
+                everyThree.length(), singleKey.length()));
+
+        // Round-trip: reader must decode the interspersed-keyframe output correctly.
+        ImageData decoded = factory.fromFile(everyThree);
+        if (!(decoded instanceof AnimatedImageData decAnim))
+            throw new AssertionError("expected AnimatedImageData, got " + decoded.getClass());
+        if (decAnim.getFrames().size() != 6)
+            throw new AssertionError("frame count mismatch: " + decAnim.getFrames().size());
+        PixelBuffer frame0 = decAnim.getFrames().get(0).pixels();
+        for (int f = 1; f < 6; f++) {
+            PixelBuffer fb = decAnim.getFrames().get(f).pixels();
+            for (int y = 0; y < 32; y++)
+                for (int x = 0; x < 32; x++)
+                    if (fb.getPixel(x, y) != frame0.getPixel(x, y))
+                        throw new AssertionError(String.format(
+                            "frame %d pixel (%d,%d) differs from frame 0", f, x, y));
+        }
+    }
+
+    @Test
+    @DisplayName("forceKeyframeEvery default (-1) on short animations matches explicit 0")
+    void forceKeyframeEveryDefaultMatchesZeroOnShortAnimations() {
+        // The writer's auto-default gates on total frame count: <= 60 frames keeps
+        // forceKeyframeEvery at 0 to maximise compression on tooltip-length content;
+        // > 60 frames switches to 30 for seekability. A 6-frame animation must hit
+        // the "short" branch and produce bit-identical output to explicit 0.
+        ConcurrentList<ImageFrame> frames = Concurrent.newList();
+        for (int f = 0; f < 6; f++) {
+            PixelBuffer fb = PixelBuffer.create(32, 32);
+            for (int y = 0; y < 32; y++)
+                for (int x = 0; x < 32; x++)
+                    fb.setPixel(x, y, 0xFF000000 | ((x * 8) << 16) | ((y * 8) << 8));
+            frames.add(ImageFrame.of(fb, 100, 0, 0,
+                FrameDisposal.DO_NOT_DISPOSE, FrameBlend.OVER));
+        }
+        AnimatedImageData anim = AnimatedImageData.builder()
+            .withWidth(32).withHeight(32)
+            .withFrames(frames)
+            .withLoopCount(0)
+            .withBackgroundColor(0)
+            .build();
+
+        ImageFactory factory = new ImageFactory();
+        File explicitZero = outputDir.resolve("anim_default_explicit0.webp").toFile();
+        File leftDefault = outputDir.resolve("anim_default_auto.webp").toFile();
+        factory.toFile(anim, ImageFormat.WEBP, explicitZero,
+            WebPWriteOptions.builder().isLossless(false).withQuality(1.0f).usePFrames(true)
+                .withForceKeyframeEvery(0).build());
+        factory.toFile(anim, ImageFormat.WEBP, leftDefault,
+            WebPWriteOptions.builder().isLossless(false).withQuality(1.0f).usePFrames(true).build());
+
+        try {
+            byte[] a = Files.readAllBytes(explicitZero.toPath());
+            byte[] b = Files.readAllBytes(leftDefault.toPath());
+            assertThat("short-anim default output length matches explicit 0",
+                b.length, is(a.length));
+            for (int i = 0; i < a.length; i++)
+                assertThat("byte " + i + " matches", b[i], is(a[i]));
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    @Test
     @DisplayName("animated lossy + alpha decodes through libwebp with bit-exact alpha per frame")
     void animatedLossyAlphaLibwebpRoundTrip() throws Exception {
         // 3 frames with SOURCE blending so libwebp's animated decoder emits each frame's
