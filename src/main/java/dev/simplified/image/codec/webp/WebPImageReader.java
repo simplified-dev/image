@@ -110,6 +110,19 @@ public class WebPImageReader implements ImageReader {
         // where a frame references the prior frame's reconstruction.
         VP8DecoderSession vp8Session = new VP8DecoderSession();
 
+        // Canvas state for partial-frame composition. Each ANMF's decoded sub-
+        // buffer is composited onto this canvas per the frame's blend flag; the
+        // canvas BEFORE compositing is disposed per the prior frame's disposal
+        // flag (DISPOSE_BACKGROUND clears the prior bbox region to the ANIM
+        // chunk's background colour, DO_NOT_DISPOSE leaves it). The resulting
+        // full-canvas snapshot is what we hand back as each frame's pixels -
+        // matches libwebp's WebPAnimDecoder behaviour and makes
+        // AnimatedImageData callers see each frame as a complete image.
+        int[] canvas = new int[canvasWidth * canvasHeight];
+        java.util.Arrays.fill(canvas, backgroundColor);
+        int priorFrameX = 0, priorFrameY = 0, priorFrameW = 0, priorFrameH = 0;
+        FrameDisposal priorDisposal = FrameDisposal.DO_NOT_DISPOSE;
+
         for (WebPChunk chunk : chunks) {
             if (chunk.type() != WebPChunk.Type.ANMF) continue;
 
@@ -156,24 +169,85 @@ public class WebPImageReader implements ImageReader {
                 subOffset = dataStart + subSize + (subSize & 1);
             }
 
-            PixelBuffer framePixels;
+            PixelBuffer subPixels;
             if (vp8lSub != null) {
-                framePixels = VP8LDecoder.decode(vp8lSub);
+                subPixels = VP8LDecoder.decode(vp8lSub);
             } else if (vp8Sub != null) {
-                framePixels = vp8Session.decode(vp8Sub);
+                subPixels = vp8Session.decode(vp8Sub);
                 if (alphSub != null)
-                    mergeAlphaPlane(framePixels, alphSub);
+                    mergeAlphaPlane(subPixels, alphSub);
             } else {
                 throw new ImageDecodeException("ANMF frame has no VP8 or VP8L sub-chunk");
             }
 
-            if (framePixels.width() != frameW || framePixels.height() != frameH)
+            if (subPixels.width() != frameW || subPixels.height() != frameH)
                 throw new ImageDecodeException(
                     "ANMF frame size mismatch: declared %dx%d but decoded %dx%d",
-                    frameW, frameH, framePixels.width(), framePixels.height()
+                    frameW, frameH, subPixels.width(), subPixels.height()
                 );
 
-            frames.add(ImageFrame.of(framePixels, durationMs, frameX, frameY, disposal, blend));
+            // Apply PRIOR frame's disposal to the canvas (the spec puts
+            // disposal at the START of the next frame's rendering, not after
+            // the prior frame was emitted).
+            if (priorDisposal == FrameDisposal.RESTORE_TO_BACKGROUND) {
+                int x0 = Math.max(0, priorFrameX);
+                int y0 = Math.max(0, priorFrameY);
+                int x1 = Math.min(canvasWidth, priorFrameX + priorFrameW);
+                int y1 = Math.min(canvasHeight, priorFrameY + priorFrameH);
+                for (int y = y0; y < y1; y++)
+                    for (int x = x0; x < x1; x++)
+                        canvas[y * canvasWidth + x] = backgroundColor;
+            }
+
+            // Composite the partial-frame pixels onto the canvas per blend flag.
+            int[] subPx = subPixels.pixels();
+            int dstX0 = Math.max(0, frameX);
+            int dstY0 = Math.max(0, frameY);
+            int dstX1 = Math.min(canvasWidth, frameX + frameW);
+            int dstY1 = Math.min(canvasHeight, frameY + frameH);
+            for (int y = dstY0; y < dstY1; y++) {
+                int srcRow = (y - frameY) * frameW;
+                int dstRow = y * canvasWidth;
+                for (int x = dstX0; x < dstX1; x++) {
+                    int src = subPx[srcRow + (x - frameX)];
+                    if (blend == FrameBlend.SOURCE) {
+                        canvas[dstRow + x] = src;
+                    } else {
+                        // FrameBlend.OVER: alpha-composite src over dst.
+                        int srcA = (src >>> 24) & 0xFF;
+                        if (srcA == 0xFF) {
+                            canvas[dstRow + x] = src;
+                        } else if (srcA != 0) {
+                            int dst = canvas[dstRow + x];
+                            int dstA = (dst >>> 24) & 0xFF;
+                            int outA = srcA + dstA * (255 - srcA) / 255;
+                            if (outA == 0) {
+                                canvas[dstRow + x] = 0;
+                            } else {
+                                int sr = (src >>> 16) & 0xFF, sg = (src >>> 8) & 0xFF, sb = src & 0xFF;
+                                int dr = (dst >>> 16) & 0xFF, dg = (dst >>> 8) & 0xFF, db = dst & 0xFF;
+                                int or = (sr * srcA + dr * dstA * (255 - srcA) / 255) / outA;
+                                int og = (sg * srcA + dg * dstA * (255 - srcA) / 255) / outA;
+                                int ob = (sb * srcA + db * dstA * (255 - srcA) / 255) / outA;
+                                canvas[dstRow + x] = (outA << 24) | (or << 16) | (og << 8) | ob;
+                            }
+                        }
+                        // srcA == 0 leaves canvas pixel unchanged.
+                    }
+                }
+            }
+
+            // Snapshot the full canvas as this frame's pixels so callers see
+            // composed full-image data (matching libwebp's WebPAnimDecoder).
+            int[] snapshot = canvas.clone();
+            PixelBuffer composed = PixelBuffer.of(snapshot, canvasWidth, canvasHeight);
+            frames.add(ImageFrame.of(composed, durationMs, 0, 0, disposal, blend));
+
+            priorFrameX = frameX;
+            priorFrameY = frameY;
+            priorFrameW = frameW;
+            priorFrameH = frameH;
+            priorDisposal = disposal;
         }
 
         if (frames.isEmpty())

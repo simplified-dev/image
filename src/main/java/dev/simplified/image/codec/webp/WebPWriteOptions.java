@@ -28,6 +28,7 @@ public class WebPWriteOptions implements ImageWriteOptions {
      * 0 otherwise). Ignored when {@code usePFrames == false}.
      */
     private final int forceKeyframeEvery;
+
     /**
      * Parallelism for the VP8 P-frame motion-search prepass. {@code -1} defers to
      * the writer ({@code Runtime.availableProcessors()}); {@code 1} forces
@@ -37,6 +38,7 @@ public class WebPWriteOptions implements ImageWriteOptions {
      * and when {@code usePFrames == false}.
      */
     private final int motionSearchThreads;
+
     /**
      * When {@code true}, the lossy encoder runs a variance-based auto-segmentation
      * pass per frame: source MBs are quartile-bucketed by per-MB luma variance and
@@ -48,6 +50,7 @@ public class WebPWriteOptions implements ImageWriteOptions {
      * the static-lossy path. Ignored for lossless encodes. Off by default.
      */
     private final boolean autoSegment;
+
     /**
      * Near-lossless preprocessing level for lossless (VP8L) encodes, on an
      * inverted {@code [0..100]} scale where {@code 100} is off (default) and
@@ -193,8 +196,7 @@ public class WebPWriteOptions implements ImageWriteOptions {
          * bitstreams with synthesised reference state (this project's own reader,
          * libvpx-based decoders); libwebp-based tools (Chrome, Firefox,
          * Pillow-via-libwebp, ffmpeg-built-against-libwebp, Android / iOS system
-         * decoders) will not accept the output. See
-         * {@code research/WebP-ANMF-PFrame-Interop.md} for the full investigation.
+         * decoders) will not accept the output.
          *
          * @param usePFrames true to enable P-frames for animated lossy encode
          * @return this builder for chaining
