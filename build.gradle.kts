@@ -43,4 +43,9 @@ dependencies {
 
 tasks.test {
     useJUnitPlatform()
+    // Forward the libwebp-parity harness's Python-interpreter override to the
+    // test JVM so golden-reference tests can locate a Python install with the
+    // `webp` package when the default one on PATH doesn't have it. See
+    // `ConformanceHelper.startPython` for usage.
+    System.getProperty("vp8.pythonBin")?.let { systemProperty("vp8.pythonBin", it) }
 }

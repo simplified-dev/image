@@ -769,6 +769,25 @@ public class VP8CodecTest {
         }
 
         private static Process startPython(String script) {
+            // Environments where the default python3 on PATH doesn't have the
+            // {@code webp} package (e.g. Windows with the Microsoft Store stub
+            // shadowing a working install) can point at a specific interpreter
+            // via the {@code vp8.pythonBin} JVM system property or the
+            // {@code VP8_PYTHON_BIN} env var. Gradle's test fork only forwards
+            // system properties by default, so the property path is preferred;
+            // the env var is a convenience for ad-hoc runs. Falls back to the
+            // usual launchers otherwise. Tests still self-skip when none of
+            // the attempts can {@code import webp}.
+            String override = System.getProperty("vp8.pythonBin");
+            if (override == null || override.isEmpty())
+                override = System.getenv("VP8_PYTHON_BIN");
+            if (override != null && !override.isEmpty()) {
+                try {
+                    ProcessBuilder pb = new ProcessBuilder(override, "-c", script);
+                    pb.redirectErrorStream(true);
+                    return pb.start();
+                } catch (java.io.IOException ignored) { }
+            }
             for (String cmd : new String[]{"python3", "python", "py"}) {
                 try {
                     ProcessBuilder pb = new ProcessBuilder(cmd, "-c", script);
@@ -2107,22 +2126,30 @@ public class VP8CodecTest {
          */
         static byte[] encodeWithLibwebp(PixelBuffer src, int quality) throws Exception {
             java.nio.file.Path out = java.nio.file.Files.createTempFile("libwebp-enc-", ".webp");
+            // Pixel data goes through a temp binary file rather than inlining into
+            // the Python script, so sources larger than ~8k pixels don't hit the
+            // Windows 32KB command-line length limit.
+            java.nio.file.Path rawIn = java.nio.file.Files.createTempFile("libwebp-enc-raw-", ".bin");
             try {
-                StringBuilder pixels = new StringBuilder();
+                byte[] raw = new byte[src.width() * src.height() * 4];
+                int idx = 0;
                 for (int y = 0; y < src.height(); y++) {
                     for (int x = 0; x < src.width(); x++) {
                         int p = src.getPixel(x, y);
-                        pixels.append(String.format("%d,%d,%d,%d,",
-                            (p >> 16) & 0xFF, (p >> 8) & 0xFF, p & 0xFF, (p >>> 24) & 0xFF));
+                        raw[idx++] = (byte) ((p >> 16) & 0xFF);
+                        raw[idx++] = (byte) ((p >> 8) & 0xFF);
+                        raw[idx++] = (byte) (p & 0xFF);
+                        raw[idx++] = (byte) ((p >>> 24) & 0xFF);
                     }
                 }
+                java.nio.file.Files.write(rawIn, raw);
                 String script =
                     "import sys\n" +
                     "try:\n" +
                     "    import webp, numpy as np\n" +
                     "except ImportError:\n" +
                     "    print('NO_WEBP'); sys.exit(2)\n" +
-                    "raw = bytes([" + pixels.substring(0, pixels.length() - 1) + "])\n" +
+                    "with open(r'" + rawIn.toAbsolutePath() + "', 'rb') as f: raw = f.read()\n" +
                     "arr = np.frombuffer(raw, dtype=np.uint8).reshape(" + src.height() + ", " + src.width() + ", 4)\n" +
                     "pic = webp.WebPPicture.from_numpy(arr, pilmode='RGBA')\n" +
                     "cfg = webp.WebPConfig.new(quality=" + quality + ")\n" +
@@ -2139,6 +2166,7 @@ public class VP8CodecTest {
                 return extractVp8Payload(riff);
             } finally {
                 java.nio.file.Files.deleteIfExists(out);
+                java.nio.file.Files.deleteIfExists(rawIn);
             }
         }
 
@@ -2209,6 +2237,25 @@ public class VP8CodecTest {
         }
 
         private static Process startPython(String script) {
+            // Environments where the default python3 on PATH doesn't have the
+            // {@code webp} package (e.g. Windows with the Microsoft Store stub
+            // shadowing a working install) can point at a specific interpreter
+            // via the {@code vp8.pythonBin} JVM system property or the
+            // {@code VP8_PYTHON_BIN} env var. Gradle's test fork only forwards
+            // system properties by default, so the property path is preferred;
+            // the env var is a convenience for ad-hoc runs. Falls back to the
+            // usual launchers otherwise. Tests still self-skip when none of
+            // the attempts can {@code import webp}.
+            String override = System.getProperty("vp8.pythonBin");
+            if (override == null || override.isEmpty())
+                override = System.getenv("VP8_PYTHON_BIN");
+            if (override != null && !override.isEmpty()) {
+                try {
+                    ProcessBuilder pb = new ProcessBuilder(override, "-c", script);
+                    pb.redirectErrorStream(true);
+                    return pb.start();
+                } catch (java.io.IOException ignored) { }
+            }
             for (String cmd : new String[]{"python3", "python", "py"}) {
                 try {
                     ProcessBuilder pb = new ProcessBuilder(cmd, "-c", script);
