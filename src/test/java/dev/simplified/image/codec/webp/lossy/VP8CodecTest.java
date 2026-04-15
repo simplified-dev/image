@@ -1709,13 +1709,14 @@ public class VP8CodecTest {
 
         @Test @DisplayName("conformance: per-segment quant delta produces non-trivial bitstream change (RFC 6386 section 9.3)")
         void segmentMapQuantDeltaPropagates() {
-            // The encoder doesn't internally requantize per segment (see encodeWithSegmentMap
-            // Javadoc) but it does emit the per-segment quant deltas to the bitstream, so the
-            // decoder will dequantize each MB with different step sizes. This test verifies
-            // that the decoder's per-segment dequant path produces observably different
-            // pixels when one segment gets a large quant delta - proving the decoder actually
-            // wired the per-segment quantizer steps through dequant rather than using the
-            // base quantizer for every MB.
+            // Encoder and decoder both honour per-segment quant deltas symmetrically:
+            // the encoder swaps its active QuantMatrix + R-D lambda to the segment's
+            // pre-derived values before trellis + residualCost on each MB, and the
+            // decoder dequantizes with the matching step. This test verifies that a
+            // large delta on one segment produces observably different pixels relative
+            // to an all-zero delta baseline - proving the per-segment quantizer path
+            // is actually wired end-to-end rather than falling back to the base QI on
+            // every MB.
             PixelBuffer src = PixelBuffer.create(32, 32);
             for (int y = 0; y < 32; y++)
                 for (int x = 0; x < 32; x++)
@@ -1750,6 +1751,45 @@ public class VP8CodecTest {
                 throw new AssertionError(String.format(
                     "per-segment quant delta had no observable effect at decoder: "
                     + "max per-sample diff = %d (expected >= 10 with quantDelta=+50)", maxDiff));
+        }
+
+        @Test @DisplayName("conformance: per-segment quant delta changes encoder byte output (RFC 6386 section 10)")
+        void segmentMapQuantDeltaAffectsEncoderBytes() {
+            // Encoder trellises each MB at its segment's quantizer (see
+            // State.applySegment). Under the pre-Task-16 behaviour the encoder ran
+            // every MB at the frame's base quantizer and only the decoder applied
+            // the per-segment dequant delta, so byte output was identical across all
+            // quant-delta values. This test asserts that a negative delta (which
+            // lowers the segment's QI, raising quality) strictly increases byte
+            // output and a positive delta strictly decreases it, proving the
+            // encoder-side swap is actually wired.
+            PixelBuffer src = PixelBuffer.create(32, 32);
+            for (int y = 0; y < 32; y++)
+                for (int x = 0; x < 32; x++)
+                    src.setPixel(x, y, 0xFF000000 | ((x * 8) << 16) | ((y * 8) << 8));
+
+            int[] segAssignment = { 0, 0, 1, 1 };         // segments 0 and 1 both active
+            int[] zero = new int[4];
+            int[] lowerQi = { 0, -30, 0, 0 };             // segment 1 at higher quality
+            int[] higherQi = { 0, +30, 0, 0 };            // segment 1 at lower quality
+
+            byte[] baseStream = VP8Encoder.encodeWithSegmentMap(
+                src, 0.5f, segAssignment, zero, new int[4], /*absolute=*/ false);
+            byte[] higherQualityStream = VP8Encoder.encodeWithSegmentMap(
+                src, 0.5f, segAssignment, lowerQi, new int[4], /*absolute=*/ false);
+            byte[] lowerQualityStream = VP8Encoder.encodeWithSegmentMap(
+                src, 0.5f, segAssignment, higherQi, new int[4], /*absolute=*/ false);
+
+            if (higherQualityStream.length <= baseStream.length)
+                throw new AssertionError(String.format(
+                    "negative segment quant delta did not increase bytes: "
+                    + "base=%d higher-quality=%d (expected strictly greater)",
+                    baseStream.length, higherQualityStream.length));
+            if (lowerQualityStream.length >= baseStream.length)
+                throw new AssertionError(String.format(
+                    "positive segment quant delta did not decrease bytes: "
+                    + "base=%d lower-quality=%d (expected strictly smaller)",
+                    baseStream.length, lowerQualityStream.length));
         }
 
         @Test @DisplayName("conformance: parallel motion-search prepass produces byte-identical P-frame bitstream")

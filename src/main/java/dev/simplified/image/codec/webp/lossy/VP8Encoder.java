@@ -143,16 +143,47 @@ public final class VP8Encoder {
         final int[] mbRefFrame;
         final int[] mbModeLfIdx;
 
-        // Quantizer steps.
-        final int y1Dc, y1Ac, y2Dc, y2Ac, uvDc, uvAc;
+        // Active quantizer steps for the MB currently being encoded. Mirror of the
+        // decoder's State fields of the same names. Swapped by {@link #applySegment}
+        // to the {@code seg*} arrays below when per-MB segment IDs change; collapse
+        // to the base-qi values when segmentation is off (all 4 segment slots carry
+        // identical entries).
+        int y1Dc, y1Ac, y2Dc, y2Ac, uvDc, uvAc;
 
-        // Trellis / R-D matrices (per-coefficient q, iq, bias, sharpen).
-        final QuantMatrix y1Mtx, y2Mtx, uvMtx;
+        // Active trellis / R-D matrices (per-coefficient q, iq, bias, sharpen) for the
+        // MB currently being encoded. Swapped by {@link #applySegment} together with
+        // the quant steps.
+        QuantMatrix y1Mtx, y2Mtx, uvMtx;
 
-        // R-D lambdas, derived from QI via libwebp's {@code SetupMatrices} formulas.
+        // Active R-D lambdas for the MB currently being encoded, derived from the
+        // segment's quant steps via libwebp's {@code SetupMatrices} formulas.
         // {@code score = RD_DISTO_MULT * distortion + rate * lambda}.
-        final int lambdaI4, lambdaUv;
-        final int lambdaTrellisI4, lambdaTrellisI16, lambdaTrellisUv;
+        int lambdaI4, lambdaUv;
+        int lambdaTrellisI4, lambdaTrellisI16, lambdaTrellisUv;
+
+        // Per-segment pre-derived quant + matrix + lambda tables, indexed by segment ID
+        // (0..3). Populated by {@link #rebuildSegmentMatrices} from the frame's base
+        // {@code qi}, {@link #segmentQuantDelta}, and {@link #segmentAbsoluteDelta}.
+        // When segmentation is off every slot holds the base-qi values so
+        // {@code applySegment(0)} is a no-op swap back to baseline. Mirrors the
+        // decoder's {@code segY1Dc[4]}..{@code segUvAc[4]} tables but extends them with
+        // per-segment QuantMatrix and R-D lambda copies so the encoder can actually
+        // run trellis + residualCost at the per-MB segment quantizer instead of the
+        // frame-base one.
+        final int[] segY1Dc = new int[4];
+        final int[] segY1Ac = new int[4];
+        final int[] segY2Dc = new int[4];
+        final int[] segY2Ac = new int[4];
+        final int[] segUvDc = new int[4];
+        final int[] segUvAc = new int[4];
+        final QuantMatrix[] segY1Mtx = new QuantMatrix[4];
+        final QuantMatrix[] segY2Mtx = new QuantMatrix[4];
+        final QuantMatrix[] segUvMtx = new QuantMatrix[4];
+        final int[] segLambdaI4 = new int[4];
+        final int[] segLambdaUv = new int[4];
+        final int[] segLambdaTrellisI4 = new int[4];
+        final int[] segLambdaTrellisI16 = new int[4];
+        final int[] segLambdaTrellisUv = new int[4];
 
         final BooleanEncoder header;                // first partition: frame header + per-MB modes
         final BooleanEncoder[] tokens;              // token partitions: MB row {@code y} writes to
@@ -269,28 +300,14 @@ public final class VP8Encoder {
             this.cachedMvWireCol = new int[mbCols * mbRows];
             this.cachedMvFound = new boolean[mbCols * mbRows];
 
-            this.y1Dc = VP8Tables.DC_Q_LOOKUP[qi];
-            this.y1Ac = VP8Tables.AC_Q_LOOKUP[qi];
-            this.y2Dc = VP8Tables.DC_Q_LOOKUP[qi] * 2;
-            this.y2Ac = VP8Tables.AC2_Q_LOOKUP[qi];
-            int uvQi = Math.min(qi, 117);          // spec: uvDc saturates at QI 117
-            this.uvDc = VP8Tables.DC_Q_LOOKUP[uvQi];
-            this.uvAc = VP8Tables.AC_Q_LOOKUP[qi];
-
-            this.y1Mtx = QuantMatrix.luma(y1Dc, y1Ac);
-            this.y2Mtx = QuantMatrix.lumaY2(y2Dc, y2Ac);
-            this.uvMtx = QuantMatrix.chroma(uvDc, uvAc);
-
-            // libwebp's average-quantizer-driven lambdas. We don't have per-segment quant so
-            // q_i4 == y1Ac (average of the flat matrix), q_i16 == y2Ac, q_uv == uvAc.
-            int qI4 = y1Ac;
-            int qUv = uvAc;
-            int qI16 = y2Ac;
-            this.lambdaI4 = Math.max(1, (3 * qI4 * qI4) >> 7);
-            this.lambdaUv = Math.max(1, (3 * qUv * qUv) >> 6);
-            this.lambdaTrellisI4 = Math.max(1, (7 * qI4 * qI4) >> 3);
-            this.lambdaTrellisI16 = Math.max(1, (qI16 * qI16) >> 2);
-            this.lambdaTrellisUv = Math.max(1, (qUv * qUv) << 1);
+            // Populate per-segment quant + matrix + lambda tables from the base qi with
+            // the current (all-zero at construction time) {@link #segmentQuantDelta}.
+            // Segment-aware paths may overwrite {@code segmentQuantDelta} later and
+            // re-call {@link #rebuildSegmentMatrices(int)} to refresh the tables.
+            rebuildSegmentMatrices(qi);
+            // Seed the active fields from segment 0 so the first-MB path runs at the
+            // base quantizer when no {@link #applySegment(int)} call has happened yet.
+            applySegment(0);
 
             this.header = new BooleanEncoder(2048);
             int perPartBytes = Math.max(1024, mbCols * mbRows * 1024 / NUM_TOKEN_PARTITIONS);
@@ -320,6 +337,86 @@ public final class VP8Encoder {
             // refresh_entropy_probs=0, so updates are per-frame only - decoder resets
             // to defaults at each frame boundary and we must match).
             this.tokenProba = deepCloneTokenProba(VP8Tables.COEFFS_PROBA_0);
+        }
+
+        /**
+         * Rebuilds the per-segment quant step, {@link QuantMatrix}, and R-D lambda
+         * tables for all 4 segment slots from the current {@link #segmentQuantDelta}
+         * / {@link #segmentAbsoluteDelta} plus the supplied frame base {@code qi}.
+         * <p>
+         * Mirrors the decoder's per-segment quant derivation ({@code VP8Decoder}
+         * section at {@code baseQ + dq*} - RFC 6386 section 9.3) and extends it with
+         * {@link QuantMatrix} + libwebp {@code SetupMatrices} lambda derivations so
+         * the encoder can actually run per-segment trellis + residualCost. When
+         * segmentation is off every slot receives identical values so
+         * {@link #applySegment} is bit-safe to call unconditionally. Active fields are
+         * not touched - callers must follow up with {@link #applySegment(int)} if
+         * they need the active quantizer refreshed.
+         *
+         * @param qi frame base quantizer index in {@code [0, 127]}
+         */
+        void rebuildSegmentMatrices(int qi) {
+            for (int seg = 0; seg < 4; seg++) {
+                int segBaseQ = Math.clamp(
+                    segmentAbsoluteDelta ? segmentQuantDelta[seg] : qi + segmentQuantDelta[seg],
+                    0, 127);
+                int y1Dc = VP8Tables.DC_Q_LOOKUP[segBaseQ];
+                int y1Ac = VP8Tables.AC_Q_LOOKUP[segBaseQ];
+                int y2Dc = VP8Tables.DC_Q_LOOKUP[segBaseQ] * 2;
+                int y2Ac = VP8Tables.AC2_Q_LOOKUP[segBaseQ];       // min 8 (spec); AC2_Q_LOOKUP already clamps
+                int uvDc = VP8Tables.DC_Q_LOOKUP[Math.min(segBaseQ, 117)]; // spec: uvDc saturates at QI 117
+                int uvAc = VP8Tables.AC_Q_LOOKUP[segBaseQ];
+                segY1Dc[seg] = y1Dc;
+                segY1Ac[seg] = y1Ac;
+                segY2Dc[seg] = y2Dc;
+                segY2Ac[seg] = y2Ac;
+                segUvDc[seg] = uvDc;
+                segUvAc[seg] = uvAc;
+                segY1Mtx[seg] = QuantMatrix.luma(y1Dc, y1Ac);
+                segY2Mtx[seg] = QuantMatrix.lumaY2(y2Dc, y2Ac);
+                segUvMtx[seg] = QuantMatrix.chroma(uvDc, uvAc);
+                // libwebp-style quantizer-driven lambdas, per-segment. q_i4 = y1Ac
+                // (the flat AC step), q_i16 = y2Ac, q_uv = uvAc.
+                int qI4 = y1Ac;
+                int qUv = uvAc;
+                int qI16 = y2Ac;
+                segLambdaI4[seg] = Math.max(1, (3 * qI4 * qI4) >> 7);
+                segLambdaUv[seg] = Math.max(1, (3 * qUv * qUv) >> 6);
+                segLambdaTrellisI4[seg] = Math.max(1, (7 * qI4 * qI4) >> 3);
+                segLambdaTrellisI16[seg] = Math.max(1, (qI16 * qI16) >> 2);
+                segLambdaTrellisUv[seg] = Math.max(1, (qUv * qUv) << 1);
+            }
+        }
+
+        /**
+         * Swaps the active quant + matrix + lambda fields to the supplied segment's
+         * pre-derived values. Mirrors the decoder's {@code applySegmentId} active-field
+         * swap (see {@link VP8Decoder}) extended to also swap {@link QuantMatrix}
+         * references and R-D lambdas so per-MB trellis + residualCost run at the
+         * segment's quantizer.
+         * <p>
+         * When segmentation is off every segment slot carries identical base-qi
+         * values, so calls are effectively no-ops; single-segment encode paths can
+         * call this unconditionally without diverging from the pre-segmentation
+         * baseline.
+         *
+         * @param segId segment ID in {@code [0, 3]}
+         */
+        void applySegment(int segId) {
+            this.y1Dc = segY1Dc[segId];
+            this.y1Ac = segY1Ac[segId];
+            this.y2Dc = segY2Dc[segId];
+            this.y2Ac = segY2Ac[segId];
+            this.uvDc = segUvDc[segId];
+            this.uvAc = segUvAc[segId];
+            this.y1Mtx = segY1Mtx[segId];
+            this.y2Mtx = segY2Mtx[segId];
+            this.uvMtx = segUvMtx[segId];
+            this.lambdaI4 = segLambdaI4[segId];
+            this.lambdaUv = segLambdaUv[segId];
+            this.lambdaTrellisI4 = segLambdaTrellisI4[segId];
+            this.lambdaTrellisI16 = segLambdaTrellisI16[segId];
+            this.lambdaTrellisUv = segLambdaTrellisUv[segId];
         }
     }
 
@@ -444,13 +541,12 @@ public final class VP8Encoder {
      * RFC 6386 section 10 (segment header + per-MB segment tree emission) and
      * section 15 (per-segment loop filter deltas).
      * <p>
-     * Quant deltas are emitted to the bitstream - the decoder applies them at dequant
-     * time - but the encoder itself still uses a single quantizer at the frame's base
-     * QI. Bit-stream-wise this is valid but asymmetric; the encoder will over-emit
-     * residual bits relative to what a fully segment-aware encoder would pick, and
-     * the decoder's reconstructed pixels may differ from a single-segment baseline
-     * by the dequant delta. The hook therefore exists to validate decoder behaviour,
-     * not to exercise a production encode path.
+     * Both encoder and decoder apply the per-segment quant deltas symmetrically: the
+     * encoder swaps its active {@link QuantMatrix} + R-D lambda to the segment's
+     * pre-derived values before running trellis + residualCost on each MB
+     * ({@code State.applySegment}), and the decoder dequantizes each MB with the
+     * matching segment step. Callers select segment IDs themselves - this hook does
+     * no variance / complexity analysis on the source.
      *
      * @param pixels source pixel buffer
      * @param quality encoding quality in {@code [0.0, 1.0]}
@@ -498,6 +594,11 @@ public final class VP8Encoder {
         System.arraycopy(segmentQuantDelta, 0, s.segmentQuantDelta, 0, 4);
         System.arraycopy(segmentLfDelta, 0, s.segmentLfDelta, 0, 4);
         System.arraycopy(mbSegmentAssignment, 0, s.mbSegmentId, 0, mbSegmentAssignment.length);
+        // Rebuild the per-segment quant / matrix / lambda tables now that the non-zero
+        // deltas are installed on State. The constructor populated them with all-zero
+        // deltas; this refresh produces the per-segment quantizers the decoder will
+        // actually dequantize with, so the encoder's trellis + residualCost match.
+        s.rebuildSegmentMatrices(qi);
         // Uniform segment prior: 50/50 at probs[0], 50/50 inside each half. Works for
         // any assignment without requiring histogram analysis.
         s.segmentProbs[0] = 128;
@@ -521,7 +622,12 @@ public final class VP8Encoder {
             java.util.Arrays.fill(s.leftNz, 0);
             java.util.Arrays.fill(s.intraL, IntraPrediction.B_DC_PRED);
             for (int mbX = 0; mbX < s.mbCols; mbX++) {
-                emitSegmentId(s.header, s.mbSegmentId[mbY * s.mbCols + mbX], s.segmentProbs);
+                int segId = s.mbSegmentId[mbY * s.mbCols + mbX];
+                emitSegmentId(s.header, segId, s.segmentProbs);
+                // Swap the active quant + matrix + lambda fields to this MB's segment
+                // before encode so trellis + residualCost run at the segment's
+                // quantizer. Mirrors the decoder's applySegmentId swap-active pattern.
+                s.applySegment(segId);
                 encodeMacroblock(s, argb, width, height, mbX, mbY);
             }
         }
@@ -658,9 +764,16 @@ public final class VP8Encoder {
             for (int mbX = 0; mbX < s.mbCols; mbX++) {
                 // Segment ID emits first in the MB header stream (RFC 6386 section 10),
                 // before skip / intra / mode bits. Mirrors the decoder's
-                // applySegmentId call at the top of its per-MB parse.
-                if (s.useSegment && s.updateMbSegmentationMap)
-                    emitSegmentId(s.header, s.mbSegmentId[mbY * s.mbCols + mbX], s.segmentProbs);
+                // applySegmentId call at the top of its per-MB parse. Active quant +
+                // matrix + lambda fields are swapped to the segment's pre-derived
+                // values immediately after so downstream trellis + residualCost run
+                // at the segment's quantizer.
+                if (s.useSegment) {
+                    int segId = s.mbSegmentId[mbY * s.mbCols + mbX];
+                    if (s.updateMbSegmentationMap)
+                        emitSegmentId(s.header, segId, s.segmentProbs);
+                    s.applySegment(segId);
+                }
 
                 if (isKeyframe)
                     encodeMacroblock(s, argb, width, height, mbX, mbY);
