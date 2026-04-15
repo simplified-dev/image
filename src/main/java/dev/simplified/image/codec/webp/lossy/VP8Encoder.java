@@ -156,6 +156,19 @@ public final class VP8Encoder {
         boolean signBiasGolden;
         boolean signBiasAltref;
 
+        // MV component probabilities active for this frame (RFC 6386 section 19.2).
+        // Keyframes start from {@link VP8Tables#MV_DEFAULT_PROBA}; P-frames inherit from
+        // session and may mutate slots chosen by {@link #writeFrameHeader} when emitting
+        // updates. Passed to {@link #emitMvComponent} so tokens match what the decoder
+        // will decode.
+        final int[][] mvProba;
+
+        // MV branch counts accumulated during this frame's emit pass. Layout
+        // {@code [component][slot][outcome]} with outcome in {0, 1}. Stashed on the
+        // session at end-of-frame so the NEXT frame's header can compute optimal probs
+        // with one-frame lag (libvpx's approach - avoids a two-pass encode).
+        final int[][][] mvBranches = new int[2][VP8Tables.NUM_MV_PROBAS][2];
+
         State(int width, int height, int qi, boolean isKeyframe, @Nullable VP8EncoderSession session) {
             this.isKeyframe = isKeyframe;
             this.session = session;
@@ -203,6 +216,19 @@ public final class VP8Encoder {
             this.tokens = new BooleanEncoder[NUM_TOKEN_PARTITIONS];
             for (int i = 0; i < NUM_TOKEN_PARTITIONS; i++)
                 this.tokens[i] = new BooleanEncoder(perPartBytes);
+
+            // Keyframes always reset MV probs to defaults; P-frames inherit the probs
+            // the decoder carried forward from the prior frame via session.mvProba.
+            this.mvProba = new int[2][VP8Tables.NUM_MV_PROBAS];
+            if (isKeyframe || session == null) {
+                for (int c = 0; c < 2; c++)
+                    System.arraycopy(VP8Tables.MV_DEFAULT_PROBA[c], 0, this.mvProba[c], 0,
+                        VP8Tables.NUM_MV_PROBAS);
+            } else {
+                for (int c = 0; c < 2; c++)
+                    System.arraycopy(session.mvProba[c], 0, this.mvProba[c], 0,
+                        VP8Tables.NUM_MV_PROBAS);
+            }
         }
     }
 
@@ -325,6 +351,12 @@ public final class VP8Encoder {
         }
 
         if (session != null) {
+            // Stash MV proba state + this-frame branch counts for the next frame's
+            // header emit (RFC 6386 section 19.2 one-frame-lag proba updates).
+            for (int c = 0; c < 2; c++)
+                System.arraycopy(s.mvProba[c], 0, session.mvProba[c], 0, VP8Tables.NUM_MV_PROBAS);
+            session.prevMvBranches = s.mvBranches;
+
             // Keyframe refreshes all three reference slots (RFC 6386 section 9.7 -
             // keyframes implicitly overwrite LAST, GOLDEN, and ALTREF). P-frames
             // default to {@code refresh_last = 1, refresh_golden = refresh_alt = 0,
@@ -481,10 +513,77 @@ public final class VP8Encoder {
             // uv_mode_probs: update-flag (0 = keep defaults, 3 more bits suppressed).
             e.encodeBool(0);
 
-            // mv_prob_update: 2 components * 19 probs = 38 update-flag bits, all 0.
-            for (int c = 0; c < 2; c++)
-                for (int p = 0; p < 19; p++)
-                    e.encodeBit(VP8Tables.MV_UPDATE_PROBA[c][p], 0);
+            // mv_prob_update: 2 components * 19 probs. Uses one-frame-lag branch counts
+            // from the prior frame (via session.prevMvBranches) to pick optimal probs
+            // per slot. The first P-frame has no prior stats and emits all-zero flags.
+            emitMvProbaUpdates(e, s);
+        }
+    }
+
+    /**
+     * Emits the per-frame MV proba update section (RFC 6386 section 19.2). For each of
+     * the 2x{@link VP8Tables#NUM_MV_PROBAS} slots, compares the cost of continuing to
+     * code prior-frame observations at the current proba vs switching to the optimal
+     * quantized proba; emits the 1-bit update flag and optional 7-bit literal
+     * accordingly. Mutates {@link State#mvProba} so subsequent MV emits use the
+     * post-update value.
+     * <p>
+     * The MV wire format stores probs as a 7-bit literal mapping 0 -> 1 and non-zero
+     * -> (lit << 1), so the reachable set is {1, 2, 4, 6, ..., 254} (128 values).
+     * Costs are compared in {@code 1/256} bits via {@link VP8Costs#bitCost}.
+     */
+    private static void emitMvProbaUpdates(@NotNull BooleanEncoder e, @NotNull State s) {
+        int[][][] prevBranches = s.session != null ? s.session.prevMvBranches : null;
+
+        for (int c = 0; c < 2; c++) {
+            for (int p = 0; p < VP8Tables.NUM_MV_PROBAS; p++) {
+                int currentProb = s.mvProba[c][p];
+                int updateFlagProb = VP8Tables.MV_UPDATE_PROBA[c][p];
+
+                // No prior stats (first inter frame) or no observations at this slot:
+                // keep current prob with a single "no update" flag bit.
+                if (prevBranches == null) {
+                    e.encodeBit(updateFlagProb, 0);
+                    continue;
+                }
+                int ct0 = prevBranches[c][p][0];
+                int ct1 = prevBranches[c][p][1];
+                int total = ct0 + ct1;
+                if (total == 0) {
+                    e.encodeBit(updateFlagProb, 0);
+                    continue;
+                }
+
+                // Optimal prob(0) from observations, clamped + quantized to the wire set.
+                int rawProb = (ct0 * 256 + total / 2) / total;
+                if (rawProb < 1) rawProb = 1;
+                if (rawProb > 255) rawProb = 255;
+                int lit = rawProb >> 1;
+                int quantProb = lit != 0 ? (lit << 1) : 1;
+
+                if (quantProb == currentProb) {
+                    e.encodeBit(updateFlagProb, 0);
+                    continue;
+                }
+
+                // Cost comparison in 1/256 bit units. Both paths include the update-flag
+                // bit itself so the comparison is symmetric.
+                long keepCost = (long) ct0 * VP8Costs.bitCost(0, currentProb)
+                              + (long) ct1 * VP8Costs.bitCost(1, currentProb)
+                              + VP8Costs.bitCost(0, updateFlagProb);
+                long updateCost = (long) ct0 * VP8Costs.bitCost(0, quantProb)
+                                + (long) ct1 * VP8Costs.bitCost(1, quantProb)
+                                + VP8Costs.bitCost(1, updateFlagProb)
+                                + 7 * 256;                   // 7-bit literal cost
+
+                if (updateCost < keepCost) {
+                    e.encodeBit(updateFlagProb, 1);
+                    e.encodeUint(lit, 7);
+                    s.mvProba[c][p] = quantProb;
+                } else {
+                    e.encodeBit(updateFlagProb, 0);
+                }
+            }
         }
     }
 
@@ -724,8 +823,8 @@ public final class VP8Encoder {
             h.encodeBit(INTER_PROB_LAST, 0);
             emitTreeLeaf(h, VP8Tables.MV_REF_TREE, mvMode, mvRefProbs);
             if (mvMode == 3) {
-                emitMvComponent(h, wireRow, VP8Tables.MV_DEFAULT_PROBA[0]);
-                emitMvComponent(h, wireCol, VP8Tables.MV_DEFAULT_PROBA[1]);
+                emitMvComponent(h, wireRow, s.mvProba[0], s.mvBranches[0]);
+                emitMvComponent(h, wireCol, s.mvProba[1], s.mvBranches[1]);
             }
 
             int mbIdx = mbY * s.mbCols + mbX;
@@ -1429,29 +1528,68 @@ public final class VP8Encoder {
      * @param v the component value in quarter-pel wire units
      * @param probs the 19-element probability vector for this component
      */
-    private static void emitMvComponent(@NotNull BooleanEncoder w, int v, int @NotNull [] probs) {
+    private static void emitMvComponent(
+        @NotNull BooleanEncoder w, int v, int @NotNull [] probs, int[] @Nullable [] branches
+    ) {
         int x = Math.abs(v);
         if (x < VP8Tables.MV_SHORT_COUNT) {
             w.encodeBit(probs[VP8Tables.MVP_IS_SHORT], 0);
+            countBranch(branches, VP8Tables.MVP_IS_SHORT, 0);
             // Small tree uses probs[MVP_SHORT..MVP_SHORT+6].
             int[] smallProbs = new int[VP8Tables.MV_SHORT_COUNT - 1];
             System.arraycopy(probs, VP8Tables.MVP_SHORT, smallProbs, 0, smallProbs.length);
-            emitTreeLeaf(w, VP8Tables.MV_SMALL_TREE, x, smallProbs);
+            emitSmallMvTreeLeaf(w, x, smallProbs, branches);
             if (x == 0) return;
         } else {
             w.encodeBit(probs[VP8Tables.MVP_IS_SHORT], 1);
+            countBranch(branches, VP8Tables.MVP_IS_SHORT, 1);
             // Emit bits 0..2 in order.
-            for (int i = 0; i < 3; i++)
-                w.encodeBit(probs[VP8Tables.MVP_BITS + i], (x >> i) & 1);
+            for (int i = 0; i < 3; i++) {
+                int bit = (x >> i) & 1;
+                w.encodeBit(probs[VP8Tables.MVP_BITS + i], bit);
+                countBranch(branches, VP8Tables.MVP_BITS + i, bit);
+            }
             // Emit bits 9..4 in reverse order (skipping bit 3 - see below).
-            for (int i = VP8Tables.MV_LONG_BITS - 1; i > 3; i--)
-                w.encodeBit(probs[VP8Tables.MVP_BITS + i], (x >> i) & 1);
+            for (int i = VP8Tables.MV_LONG_BITS - 1; i > 3; i--) {
+                int bit = (x >> i) & 1;
+                w.encodeBit(probs[VP8Tables.MVP_BITS + i], bit);
+                countBranch(branches, VP8Tables.MVP_BITS + i, bit);
+            }
             // Bit 3 is only emitted when any higher bit is set; otherwise implicit 1
             // (since x >= 8 always has bit 3 set when high bits are 0).
-            if ((x & 0xFFF0) != 0)
-                w.encodeBit(probs[VP8Tables.MVP_BITS + 3], (x >> 3) & 1);
+            if ((x & 0xFFF0) != 0) {
+                int bit = (x >> 3) & 1;
+                w.encodeBit(probs[VP8Tables.MVP_BITS + 3], bit);
+                countBranch(branches, VP8Tables.MVP_BITS + 3, bit);
+            }
         }
-        w.encodeBit(probs[VP8Tables.MVP_SIGN], v < 0 ? 1 : 0);
+        int signBit = v < 0 ? 1 : 0;
+        w.encodeBit(probs[VP8Tables.MVP_SIGN], signBit);
+        countBranch(branches, VP8Tables.MVP_SIGN, signBit);
+    }
+
+    /**
+     * Walks {@link VP8Tables#MV_SMALL_TREE} for small-MV magnitude {@code value}, emits
+     * each branch bit using {@code smallProbs}, and also increments {@code branches} at
+     * the full-MV slot index (with {@link VP8Tables#MVP_SHORT} offset) when non-null.
+     * Piggybacks on {@link #findTreePath} so the tree traversal logic lives in one place.
+     */
+    private static void emitSmallMvTreeLeaf(
+        @NotNull BooleanEncoder w, int value, int @NotNull [] smallProbs, int[] @Nullable [] branches
+    ) {
+        int[] pathBranches = new int[16];
+        int[] pathNodes = new int[16];
+        int depth = findTreePath(VP8Tables.MV_SMALL_TREE, 0, -value, pathBranches, pathNodes, 0);
+        for (int i = 0; i < depth; i++) {
+            int probaIdx = pathNodes[i] >> 1;
+            w.encodeBit(smallProbs[probaIdx], pathBranches[i]);
+            countBranch(branches, VP8Tables.MVP_SHORT + probaIdx, pathBranches[i]);
+        }
+    }
+
+    /** Increments {@code branches[slot][outcome]} when {@code branches} is non-null. */
+    private static void countBranch(int[] @Nullable [] branches, int slot, int outcome) {
+        if (branches != null) branches[slot][outcome]++;
     }
 
     /** Output of the per-MB 16x16 luma encode: zig-zag coefficients for emit + reconstruction. */

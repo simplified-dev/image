@@ -87,6 +87,11 @@ public final class VP8Decoder {
         // Coefficient probabilities after parsing the 1056 update bits.
         final int[][][][] proba;
 
+        // MV component probabilities (RFC 6386 section 19.2). Keyframes reset this to
+        // MV_DEFAULT_PROBA; P-frames may update individual slots. Carried across frames
+        // via the decoder session.
+        final int[][] mvProba;
+
         // Per-MB skip bit state.
         boolean useSkipProba;
         int skipP;
@@ -130,6 +135,16 @@ public final class VP8Decoder {
             this.mbRefFrame = new int[mbCols * mbRows];       // defaults to REF_INTRA = 0
             this.mbModeLfIdx = new int[mbCols * mbRows];       // defaults to MODE_NON_BPRED_INTRA = 0
             this.proba = cloneProba(VP8Tables.COEFFS_PROBA_0);
+            // Keyframes always reset MV probs to defaults; P-frames inherit from the
+            // session's carried state, or fall back to defaults when no session / first
+            // frame (should not happen since P-frames need a reference anyway).
+            if (isKeyframe || session == null) {
+                this.mvProba = VP8DecoderSession.cloneMvProba();
+            } else {
+                this.mvProba = new int[2][VP8Tables.NUM_MV_PROBAS];
+                for (int c = 0; c < 2; c++)
+                    System.arraycopy(session.mvProba[c], 0, this.mvProba[c], 0, VP8Tables.NUM_MV_PROBAS);
+            }
         }
     }
 
@@ -303,10 +318,14 @@ public final class VP8Decoder {
                     s.uvModeProba[i] = br.decodeUint(8);
             }
             // MV probabilities - each of 2*19 slots has an update flag at MV_UPDATE_PROBA.
+            // The wire value is a 7-bit literal; libvpx maps 0 -> 1 and non-zero -> (lit << 1).
             for (int c = 0; c < 2; c++)
-                for (int p = 0; p < VP8Tables.NUM_MV_PROBAS; p++)
-                    if (br.decodeBit(VP8Tables.MV_UPDATE_PROBA[c][p]) != 0)
-                        br.decodeUint(7);            // new MV prob (Phase 1: never actually updated)
+                for (int p = 0; p < VP8Tables.NUM_MV_PROBAS; p++) {
+                    if (br.decodeBit(VP8Tables.MV_UPDATE_PROBA[c][p]) != 0) {
+                        int lit = br.decodeUint(7);
+                        s.mvProba[c][p] = lit != 0 ? (lit << 1) : 1;
+                    }
+                }
         }
 
         // ── Token partition decoders ──
@@ -376,6 +395,8 @@ public final class VP8Decoder {
             updateReferenceBuffers(session, s, width, height);
             session.signBiasGolden = s.signBiasGolden;
             session.signBiasAltref = s.signBiasAltref;
+            for (int c = 0; c < 2; c++)
+                System.arraycopy(s.mvProba[c], 0, session.mvProba[c], 0, VP8Tables.NUM_MV_PROBAS);
         }
 
         // ── YCbCr -> ARGB (fancy bilinear chroma upsampling, matching libwebp) ──
@@ -611,8 +632,8 @@ public final class VP8Decoder {
                 effInternalRow = near.nearRow;
                 effInternalCol = near.nearCol;
             } else if (mvMode == 3) {
-                int wireRow = decodeMvComponent(br, VP8Tables.MV_DEFAULT_PROBA[0]);
-                int wireCol = decodeMvComponent(br, VP8Tables.MV_DEFAULT_PROBA[1]);
+                int wireRow = decodeMvComponent(br, s.mvProba[0]);
+                int wireCol = decodeMvComponent(br, s.mvProba[1]);
                 effInternalRow = wireRow << 1;
                 effInternalCol = wireCol << 1;
             } else {

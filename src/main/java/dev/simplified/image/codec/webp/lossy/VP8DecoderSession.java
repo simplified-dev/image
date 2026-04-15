@@ -66,8 +66,24 @@ public final class VP8DecoderSession {
     /** Sign-bias flag for the altref reference (symmetric to {@link #signBiasGolden}). */
     boolean signBiasAltref;
 
+    /**
+     * MV component probabilities carried across frames (RFC 6386 section 19.2). Layout
+     * {@code [component][slot]} - 2 components x {@link VP8Tables#NUM_MV_PROBAS} slots.
+     * Reset to {@link VP8Tables#MV_DEFAULT_PROBA} on each keyframe; P-frames may update
+     * individual slots via the per-slot update-flag mechanism in the frame header.
+     */
+    int[] @NotNull [] mvProba = cloneMvProba();
+
     /** Constructs a new {@code VP8DecoderSession} with no cached references. */
     public VP8DecoderSession() { }
+
+    /** Deep-copies {@link VP8Tables#MV_DEFAULT_PROBA} so per-frame updates don't mutate the source. */
+    static int[] @NotNull [] cloneMvProba() {
+        int[][] out = new int[2][VP8Tables.NUM_MV_PROBAS];
+        for (int c = 0; c < 2; c++)
+            System.arraycopy(VP8Tables.MV_DEFAULT_PROBA[c], 0, out[c], 0, VP8Tables.NUM_MV_PROBAS);
+        return out;
+    }
 
     /**
      * Decodes a VP8 bitstream (keyframe or P-frame) into pixel data. P-frames require
@@ -105,6 +121,7 @@ public final class VP8DecoderSession {
         refMbCols = refMbRows = 0;
         refWidth = refHeight = 0;
         signBiasGolden = signBiasAltref = false;
+        mvProba = cloneMvProba();
     }
 
     /**
