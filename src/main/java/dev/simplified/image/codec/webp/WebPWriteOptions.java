@@ -28,6 +28,15 @@ public class WebPWriteOptions implements ImageWriteOptions {
      * 0 otherwise). Ignored when {@code usePFrames == false}.
      */
     private final int forceKeyframeEvery;
+    /**
+     * Parallelism for the VP8 P-frame motion-search prepass. {@code -1} defers to
+     * the writer ({@code Runtime.availableProcessors()}); {@code 1} forces
+     * deterministic serial search; {@code N >= 1} uses exactly {@code N} worker
+     * threads. Motion-searched MVs are a hint, not a correctness requirement, so
+     * output is bit-identical across thread counts. Ignored for lossless encodes
+     * and when {@code usePFrames == false}.
+     */
+    private final int motionSearchThreads;
 
     /**
      * Returns a new builder for WebP write options.
@@ -50,6 +59,7 @@ public class WebPWriteOptions implements ImageWriteOptions {
         private boolean alphaCompression = true;
         private boolean usePFrames = false;
         private int forceKeyframeEvery = -1;
+        private int motionSearchThreads = -1;
 
         /**
          * Enables lossless encoding.
@@ -171,8 +181,32 @@ public class WebPWriteOptions implements ImageWriteOptions {
             return this;
         }
 
+        /**
+         * Sets the VP8 P-frame motion-search parallelism. Only meaningful for lossy
+         * animated output with {@link #usePFrames(boolean)} enabled; ignored otherwise.
+         * <p>
+         * Values:
+         * <ul>
+         *   <li>{@code -1} (default) - defer to the writer:
+         *       {@link Runtime#availableProcessors()}.</li>
+         *   <li>{@code 1} - serial / deterministic: no pool overhead, identical output
+         *       across environments.</li>
+         *   <li>{@code N > 1} - use exactly {@code N} worker threads. Output is
+         *       bit-identical regardless of thread count.</li>
+         * </ul>
+         *
+         * @param threads worker-thread count, or {@code -1} for the writer default
+         * @return this builder for chaining
+         */
+        public @NotNull Builder withMotionSearchThreads(int threads) {
+            if (threads != -1 && threads < 1)
+                throw new IllegalArgumentException("motionSearchThreads must be -1 or >= 1");
+            this.motionSearchThreads = threads;
+            return this;
+        }
+
         public @NotNull WebPWriteOptions build() {
-            return new WebPWriteOptions(this.lossless, this.quality, this.loopCount, this.multithreaded, this.alphaCompression, this.usePFrames, this.forceKeyframeEvery);
+            return new WebPWriteOptions(this.lossless, this.quality, this.loopCount, this.multithreaded, this.alphaCompression, this.usePFrames, this.forceKeyframeEvery, this.motionSearchThreads);
         }
 
     }
