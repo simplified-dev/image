@@ -1484,6 +1484,65 @@ public class VP8CodecTest {
                     psnr));
         }
 
+        @Test @DisplayName("conformance: SPLITMV-residual flavour roundtrip at reduced quality (Task 11 follow-up 1)")
+        void splitMvResidualRoundTrip() {
+            // 32x32 input with non-uniform per-sub-MB motion (same shape as
+            // splitMvRdNonUniformMotion) at q=0.5 so the encoder exercises both the skip
+            // and residual SPLITMV flavours. SplitMvResidualCandidate follows the wire
+            // format of SplitMvCandidate plus a Y2 + 16 Y AC + chroma token payload
+            // mirroring InterResidualCandidate's commit(); a wire-format defect would
+            // cause the decoder to mis-consume the token partition and either crash or
+            // drop PSNR well below 20 dB.
+            int W = 32, H = 32;
+            PixelBuffer keyframe = PixelBuffer.create(W, H);
+            for (int y = 0; y < H; y++)
+                for (int x = 0; x < W; x++) {
+                    int mix = x * 0x9E3779B1 ^ y * 0x85EBCA77;
+                    int luma = (mix >>> 24) & 0xFF;
+                    keyframe.setPixel(x, y, 0xFF000000 | (luma << 16) | (luma << 8) | luma);
+                }
+            PixelBuffer pframe = PixelBuffer.create(W, H);
+            for (int y = 0; y < H; y++) {
+                int yLocal = y & 15;
+                for (int x = 0; x < W; x++) {
+                    int sx = (yLocal < 8 && x + 1 < W) ? x + 1 : x;
+                    pframe.setPixel(x, y, keyframe.getPixel(sx, y));
+                }
+            }
+
+            VP8EncoderSession encSess = new VP8EncoderSession();
+            byte[] kf = encSess.encode(keyframe, 0.5f, true);
+            byte[] pf = encSess.encode(pframe, 0.5f, false);
+
+            VP8DecoderSession decSess = new VP8DecoderSession();
+            decSess.decode(kf);
+            PixelBuffer pfDecoded = decSess.decode(pf);
+
+            long sumSq = 0;
+            int n = 0;
+            for (int y = 0; y < H; y++)
+                for (int x = 0; x < W; x++) {
+                    int a = pframe.getPixel(x, y);
+                    int b = pfDecoded.getPixel(x, y);
+                    for (int shift : new int[] { 0, 8, 16 }) {
+                        int diff = ((a >> shift) & 0xFF) - ((b >> shift) & 0xFF);
+                        sumSq += (long) diff * diff;
+                        n++;
+                    }
+                }
+            double mse = sumSq / (double) n;
+            double psnr = mse == 0 ? Double.POSITIVE_INFINITY
+                : 10.0 * Math.log10(255.0 * 255.0 / mse);
+            // 25 dB threshold: below this would mean the decoder desynchronised from
+            // the token stream (wire-format defect) or the reconstruction is degraded
+            // beyond what q=0.5 filtering + trellis quantization can produce.
+            if (psnr < 25.0)
+                throw new AssertionError(String.format(
+                    "SPLITMV-residual-flavour roundtrip PSNR = %.2f dB (expected >= 25 dB) - "
+                    + "likely wire-format defect in SplitMvResidualCandidate.commit()",
+                    psnr));
+        }
+
         @Test @DisplayName("conformance: SPLITMV gate suppresses enumeration on smooth content (Task 11 phase 3)")
         void splitMvGateSuppressesOnSmoothContent() {
             // Solid-colour MBs have ZeroMV-skip SSE = 0, well below SPLITMV_GATE_SSE.

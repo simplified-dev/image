@@ -1585,6 +1585,103 @@ public final class VP8Encoder {
         }
     }
 
+    /**
+     * SPLITMV macroblock with a coded residual ({@code mb_skip = 0}). Same wire
+     * layout as {@link SplitMvCandidate} for the MB-type / scheme / sub-MV-ref
+     * bits, but follows with a Y2 + 16 Y AC + chroma token payload built from
+     * the (source - per-4x4-MC-prediction) residual. Useful when the per-4x4
+     * prediction is close but not exact - the trellis can clean up small
+     * mismatches that SPLITMV-skip would leave in the reconstruction.
+     */
+    private static final class SplitMvResidualCandidate extends InterCandidate {
+        final int scheme;
+        final int slotCount;
+        final int @NotNull [] slotRow16;
+        final int @NotNull [] slotCol16;
+        final int @NotNull [] slotRef;
+        final int @NotNull [] slotInternalRow;
+        final int @NotNull [] slotInternalCol;
+        final int @NotNull [] slotWireRow;
+        final int @NotNull [] slotWireCol;
+        final short @NotNull [] predU, predV;
+        final @NotNull I16Result i16;
+        final @NotNull ChromaTrellisResult u;
+        final @NotNull ChromaTrellisResult v;
+        final int @NotNull [] mvRefProbs;
+        SplitMvResidualCandidate(long sse, int rate, int lambda, int scheme,
+                                 int @NotNull [] slotRow16, int @NotNull [] slotCol16,
+                                 int @NotNull [] slotRef,
+                                 int @NotNull [] slotInternalRow, int @NotNull [] slotInternalCol,
+                                 int @NotNull [] slotWireRow, int @NotNull [] slotWireCol,
+                                 short @NotNull [] predU, short @NotNull [] predV,
+                                 @NotNull I16Result i16,
+                                 @NotNull ChromaTrellisResult u, @NotNull ChromaTrellisResult v,
+                                 int @NotNull [] mvRefProbs) {
+            super(sse, rate, lambda);
+            this.scheme = scheme;
+            this.slotCount = VP8Tables.MBSPLIT_COUNT[scheme];
+            this.slotRow16 = slotRow16;
+            this.slotCol16 = slotCol16;
+            this.slotRef = slotRef;
+            this.slotInternalRow = slotInternalRow;
+            this.slotInternalCol = slotInternalCol;
+            this.slotWireRow = slotWireRow;
+            this.slotWireCol = slotWireCol;
+            this.predU = predU;
+            this.predV = predV;
+            this.i16 = i16;
+            this.u = u;
+            this.v = v;
+            this.mvRefProbs = mvRefProbs;
+        }
+        @Override
+        void commit(@NotNull State s, int mbX, int mbY) {
+            BooleanEncoder h = s.header;
+            h.encodeBit(INTER_SKIP_PROBA, 0);
+            h.encodeBit(INTER_PROB_INTRA, 1);
+            h.encodeBit(INTER_PROB_LAST, 0);
+            emitTreeLeaf(h, VP8Tables.MV_REF_TREE, 4, mvRefProbs);
+            emitTreeLeaf(h, VP8Tables.MBSPLIT_TREE, scheme, VP8Tables.MBSPLIT_PROBS);
+
+            int[] scratch = new int[4];
+            for (int j = 0; j < slotCount; j++) {
+                resolveSplitMvNeighbours(s, mbX, mbY, scheme, j, slotRow16, slotCol16, scratch);
+                int ctx = subMvRefContext(scratch[0], scratch[1], scratch[2], scratch[3]);
+                emitTreeLeaf(h, VP8Tables.SUB_MV_REF_TREE, slotRef[j], VP8Tables.SUB_MV_REF_PROB[ctx]);
+                if (slotRef[j] == VP8Tables.SUB_MV_REF_NEW) {
+                    emitMvComponent(h, slotWireRow[j], s.mvProba[0], s.mvBranches[0]);
+                    emitMvComponent(h, slotWireCol[j], s.mvProba[1], s.mvBranches[1]);
+                }
+            }
+
+            int mbIdx = mbY * s.mbCols + mbX;
+            int bmiBase = mbIdx * 16;
+            for (int i = 0; i < 16; i++) {
+                s.bmiRow[bmiBase + i] = slotRow16[i];
+                s.bmiCol[bmiBase + i] = slotCol16[i];
+            }
+            s.mbSplitScheme[mbIdx] = scheme;
+            s.mbMvRow[mbIdx] = slotRow16[15];
+            s.mbMvCol[mbIdx] = slotCol16[15];
+            s.mbIsInter[mbIdx] = true;
+            s.mbIsI4x4[mbIdx] = false;
+            s.mbRefFrame[mbIdx] = LoopFilter.REF_LAST;
+            s.mbModeLfIdx[mbIdx] = LoopFilter.MODE_SPLITMV;
+
+            commitLumaToRecon(s, mbX, mbY, i16.recon);
+
+            java.util.Arrays.fill(s.intraT, mbX * 4, mbX * 4 + 4, IntraPrediction.B_DC_PRED);
+            java.util.Arrays.fill(s.intraL, IntraPrediction.B_DC_PRED);
+
+            BooleanEncoder tokenPart = s.tokens[mbY & (NUM_TOKEN_PARTITIONS - 1)];
+            emitLumaTokens(s, tokenPart, mbX, /*isBPred=*/ false, i16.y2ZigZag, i16.yAcZigZag);
+            emitChromaTokensFromTrellis(s, tokenPart, mbX, u, /*isU=*/ true);
+            emitChromaTokensFromTrellis(s, tokenPart, mbX, v, /*isU=*/ false);
+            commitChromaFromDequant(s.reconU, s.chromaStride, mbX, mbY, predU, u.dequant);
+            commitChromaFromDequant(s.reconV, s.chromaStride, mbX, mbY, predV, v.dequant);
+        }
+    }
+
     /** Returns the lower-R-D of the two candidates, or {@code next} when {@code prev} is null. */
     private static @NotNull InterCandidate chooseBetter(
         @Nullable InterCandidate prev, @NotNull InterCandidate next
@@ -1739,7 +1836,7 @@ public final class VP8Encoder {
         // cannot benefit from the extra MV-tree bits.
         if (best.sse > SPLITMV_GATE_SSE) {
             InterCandidate split = buildBestSplitMvCandidate(
-                s, mb, mbX, mbY, mvRefProbs, skipBit1, baseInterHeader, lambda
+                s, mb, mbX, mbY, mvRefProbs, skipBit0, skipBit1, baseInterHeader, lambda
             );
             if (split != null) best = chooseBetter(best, split);
         }
@@ -2047,26 +2144,29 @@ public final class VP8Encoder {
 
     /**
      * Per-scheme greedy R-D over {@link VP8Tables#MBSPLIT_TOP_BOTTOM} /
-     * {@link VP8Tables#MBSPLIT_LEFT_RIGHT} / {@link VP8Tables#MBSPLIT_QUARTERS} for
-     * the SPLITMV-skip candidate. {@link VP8Tables#MBSPLIT_EIGHTS} (16 sub-MVs, 16
-     * NEW searches) is intentionally skipped for cost; can be revisited in Phase 4.
+     * {@link VP8Tables#MBSPLIT_LEFT_RIGHT} / {@link VP8Tables#MBSPLIT_QUARTERS}.
+     * {@link VP8Tables#MBSPLIT_EIGHTS} (16 sub-MVs, 16 NEW searches) is skipped
+     * for cost.
      * <p>
      * For each scheme, walks slots in raster order and greedily picks the per-slot
      * sub-MV-ref category in {@code {LEFT, ABOVE, ZERO, NEW}} that minimises
-     * {@code sub_block_sse * RD_DISTO_MULT + sub_rate * lambda}. Then builds the full
-     * per-4x4 MC prediction (luma + chroma via RFC 6386 section 17.4 averaging) and
-     * returns the candidate with the lowest whole-MB R-D score.
+     * {@code sub_block_sse * RD_DISTO_MULT + sub_rate * lambda}. Then builds the
+     * full per-4x4 MC prediction (luma + chroma via RFC 6386 section 17.4 averaging)
+     * and evaluates BOTH the skip flavour ({@link SplitMvCandidate}) and the
+     * residual flavour ({@link SplitMvResidualCandidate}, which trellises the
+     * (source - per-4x4-MC) residual through the same Y2 + 16 Y AC + chroma
+     * pipeline used by whole-MB inter residuals). Returns the minimum-R-D winner
+     * across all {scheme, flavour} pairs.
      * <p>
      * Returns {@code null} when none of the considered schemes produced a usable
      * prediction (e.g., all NEW searches clipped).
      */
     private static @org.jetbrains.annotations.Nullable InterCandidate buildBestSplitMvCandidate(
         @NotNull State s, @NotNull Macroblock mb, int mbX, int mbY,
-        int @NotNull [] mvRefProbs, int skipBit1, int baseInterHeader, int lambda
+        int @NotNull [] mvRefProbs, int skipBit0, int skipBit1, int baseInterHeader, int lambda
     ) {
         InterCandidate best = null;
-        int splitmvHeaderRate = skipBit1 + baseInterHeader
-                              + VP8Costs.treeLeafBitCost(VP8Tables.MV_REF_TREE, 4, mvRefProbs);
+        int splitmvMvRefRate = VP8Costs.treeLeafBitCost(VP8Tables.MV_REF_TREE, 4, mvRefProbs);
         int[] neighbourScratch = new int[4];
 
         for (int scheme : new int[] {
@@ -2084,8 +2184,11 @@ public final class VP8Encoder {
             int[] slotWireRow = new int[slotCount];
             int[] slotWireCol = new int[slotCount];
 
-            int schemeRate = splitmvHeaderRate
-                + VP8Costs.treeLeafBitCost(VP8Tables.MBSPLIT_TREE, scheme, VP8Tables.MBSPLIT_PROBS);
+            // slotsRate = MBSPLIT_TREE leaf cost + per-slot bits. Excludes the
+            // skip bit + base inter header + MV_REF_TREE leaf (those vary by
+            // flavour / are common across flavours respectively).
+            int slotsRate = VP8Costs.treeLeafBitCost(
+                VP8Tables.MBSPLIT_TREE, scheme, VP8Tables.MBSPLIT_PROBS);
 
             for (int j = 0; j < slotCount; j++) {
                 resolveSplitMvNeighbours(s, mbX, mbY, scheme, j, slotRow16, slotCol16, neighbourScratch);
@@ -2175,7 +2278,7 @@ public final class VP8Encoder {
                 slotInternalCol[j] = bestInternalCol;
                 slotWireRow[j] = bestWireRow;
                 slotWireCol[j] = bestWireCol;
-                schemeRate += bestRate;
+                slotsRate += bestRate;
 
                 // Fill the covered 4x4 slots with this slot's MV.
                 for (int i = 0; i < fillCount; i++) {
@@ -2192,17 +2295,39 @@ public final class VP8Encoder {
             short[] predU = new short[64];
             short[] predV = new short[64];
             buildSplitMvPredictionEncoder(s, mbX, mbY, slotRow16, slotCol16, predY, predU, predV);
-            long sse = sumSquaredError(mb.y, predY)
-                     + sumSquaredError(mb.cb, predU)
-                     + sumSquaredError(mb.cr, predV);
 
-            InterCandidate cand = new SplitMvCandidate(
-                sse, schemeRate, lambda, scheme,
+            // Skip flavour: reconstruction = prediction, no trellis.
+            long skipSse = sumSquaredError(mb.y, predY)
+                         + sumSquaredError(mb.cb, predU)
+                         + sumSquaredError(mb.cr, predV);
+            int skipTotalRate = skipBit1 + baseInterHeader + splitmvMvRefRate + slotsRate;
+            best = chooseBetter(best, new SplitMvCandidate(
+                skipSse, skipTotalRate, lambda, scheme,
                 slotRow16, slotCol16, slotRef,
                 slotInternalRow, slotInternalCol, slotWireRow, slotWireCol,
                 predY, predU, predV, mvRefProbs
-            );
-            best = chooseBetter(best, cand);
+            ));
+
+            // Residual flavour: trellis (mb - prediction) through the standard inter
+            // Y2 + 16 Y AC + chroma pipeline (same as InterResidualCandidate). The
+            // decoder treats SPLITMV residuals identically to any other inter
+            // residual (VP8Decoder.decodeInterResidualAndCommit).
+            I16Result i16 = trellisI16(s, mb.y, predY, mbX);
+            ChromaTrellisResult u = trellisChroma(s, mbX, mb.cb, predU, /*isU=*/ true);
+            ChromaTrellisResult v = trellisChroma(s, mbX, mb.cr, predV, /*isU=*/ false);
+            short[] reconU = reconstructChroma8x8(predU, u.dequant);
+            short[] reconV = reconstructChroma8x8(predV, v.dequant);
+            long residSse = sumSquaredError(mb.y, i16.recon)
+                          + sumSquaredError(mb.cb, reconU)
+                          + sumSquaredError(mb.cr, reconV);
+            int residTotalRate = skipBit0 + baseInterHeader + splitmvMvRefRate + slotsRate
+                               + i16.rate + u.rate + v.rate;
+            best = chooseBetter(best, new SplitMvResidualCandidate(
+                residSse, residTotalRate, lambda, scheme,
+                slotRow16, slotCol16, slotRef,
+                slotInternalRow, slotInternalCol, slotWireRow, slotWireCol,
+                predU, predV, i16, u, v, mvRefProbs
+            ));
         }
         return best;
     }
