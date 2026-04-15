@@ -84,6 +84,16 @@ public final class VP8EncoderSession {
     /** Previous frame's UV-mode tree branch counts. 3 slots. See {@link #prevYModeBranches}. */
     int @org.jetbrains.annotations.Nullable [][] prevUvModeBranches;
 
+    /**
+     * Previous frame's coefficient token tree branch observations (RFC 6386 section
+     * 19.2 per-frame proba updates). Shape
+     * {@code [NUM_TYPES][NUM_BANDS][NUM_CTX][NUM_PROBAS][outcome]} =
+     * {@code [4][8][3][11][2]}. {@code null} until the first frame completes. Used by
+     * the header emit to decide whether each of 1056 per-slot coefficient probs is
+     * worth updating vs keeping at the current default.
+     */
+    int[][] @org.jetbrains.annotations.Nullable [][][] prevTokenBranches;
+
     /** Constructs a new {@code VP8EncoderSession} with no cached references. */
     public VP8EncoderSession() { }
 
@@ -145,6 +155,7 @@ public final class VP8EncoderSession {
         prevMvBranches = null;
         prevYModeBranches = null;
         prevUvModeBranches = null;
+        prevTokenBranches = null;
     }
 
     /**
