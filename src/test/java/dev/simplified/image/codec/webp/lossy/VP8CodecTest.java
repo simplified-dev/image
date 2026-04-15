@@ -481,6 +481,127 @@ public class VP8CodecTest {
             }
         }
 
+        // ──── Sub-block motion search (Task 11 phase 2) ────
+
+        @Test @DisplayName("computeBestSubBlockMv: zero-shift source recovers MV (0, 0) for 16x16 block")
+        void subBlockSearchZeroShift() {
+            int W = 64, H = 64;
+            short[] refY = makeUniqueLumaPlane(W, H);
+            VP8EncoderSession session = newSessionWithRef(refY, W, H);
+            VP8Encoder.State state = new VP8Encoder.State(W, H, 36, false, session);
+
+            Macroblock mb = new Macroblock();
+            int mbX = 1, mbY = 1;
+            for (int y = 0; y < 16; y++)
+                for (int x = 0; x < 16; x++)
+                    mb.y[y * 16 + x] = refY[(mbY * 16 + y) * W + (mbX * 16 + x)];
+
+            int[] mv = VP8Encoder.computeBestSubBlockMv(state, mb, mbX, mbY, 0, 0, 16, 16);
+            assertThat("zero-shift wire row", mv[0], is(0));
+            assertThat("zero-shift wire col", mv[1], is(0));
+        }
+
+        @Test @DisplayName("computeBestSubBlockMv: positive integer shift recovers wire MV (16x16 block)")
+        void subBlockSearchPositiveShift() {
+            int W = 64, H = 64;
+            short[] refY = makeUniqueLumaPlane(W, H);
+            VP8EncoderSession session = newSessionWithRef(refY, W, H);
+            VP8Encoder.State state = new VP8Encoder.State(W, H, 36, false, session);
+
+            Macroblock mb = new Macroblock();
+            int mbX = 1, mbY = 1, dxShift = 3, dyShift = -2;
+            for (int y = 0; y < 16; y++)
+                for (int x = 0; x < 16; x++)
+                    mb.y[y * 16 + x] = refY[(mbY * 16 + y + dyShift) * W + (mbX * 16 + x + dxShift)];
+
+            int[] mv = VP8Encoder.computeBestSubBlockMv(state, mb, mbX, mbY, 0, 0, 16, 16);
+            // Wire units = quarter-pel; integer-pel shift of K resolves to wire = K * 4.
+            assertThat("wire row = dyShift * 4", mv[0], is(dyShift * 4));
+            assertThat("wire col = dxShift * 4", mv[1], is(dxShift * 4));
+        }
+
+        @Test @DisplayName("computeBestSubBlockMv: per-sub-block 8x8 search isolates per-slot source (RFC 6386 section 17.3)")
+        void subBlockSearch8x8PerSlot() {
+            // QUARTERS scheme has 4 sub-MVs each over an 8x8 sub-block. Probe the top-left
+            // and bottom-right slots with distinct shifts to confirm the search reads only
+            // its own (blockX0, blockY0, blockW, blockH) window of mb.y.
+            int W = 64, H = 64;
+            short[] refY = makeUniqueLumaPlane(W, H);
+            VP8EncoderSession session = newSessionWithRef(refY, W, H);
+            VP8Encoder.State state = new VP8Encoder.State(W, H, 36, false, session);
+
+            Macroblock mb = new Macroblock();
+            int mbX = 1, mbY = 1;
+
+            // Top-left 8x8 sub-block: source = ref shifted (+1, 0).
+            for (int y = 0; y < 8; y++)
+                for (int x = 0; x < 8; x++)
+                    mb.y[y * 16 + x] = refY[(mbY * 16 + y) * W + (mbX * 16 + x + 1)];
+            int[] mvTL = VP8Encoder.computeBestSubBlockMv(state, mb, mbX, mbY, 0, 0, 8, 8);
+            assertThat("top-left wire row = 0", mvTL[0], is(0));
+            assertThat("top-left wire col = +4", mvTL[1], is(4));
+
+            // Bottom-right 8x8 sub-block: source = ref shifted (0, -1).
+            for (int y = 0; y < 8; y++)
+                for (int x = 0; x < 8; x++)
+                    mb.y[(8 + y) * 16 + (8 + x)] = refY[(mbY * 16 + 8 + y - 1) * W + (mbX * 16 + 8 + x)];
+            int[] mvBR = VP8Encoder.computeBestSubBlockMv(state, mb, mbX, mbY, 8, 8, 8, 8);
+            assertThat("bottom-right wire row = -4", mvBR[0], is(-4));
+            assertThat("bottom-right wire col = 0", mvBR[1], is(0));
+        }
+
+        @Test @DisplayName("computeBestSubBlockMv: 4x4 sub-block search recovers integer shift (SIXTEEN scheme primitive)")
+        void subBlockSearch4x4Shift() {
+            // SIXTEEN scheme has 16 sub-MVs each over a 4x4 sub-block. Validates the
+            // smallest sub-block size compiles down to a usable SAD search.
+            int W = 64, H = 64;
+            short[] refY = makeUniqueLumaPlane(W, H);
+            VP8EncoderSession session = newSessionWithRef(refY, W, H);
+            VP8Encoder.State state = new VP8Encoder.State(W, H, 36, false, session);
+
+            Macroblock mb = new Macroblock();
+            int mbX = 1, mbY = 1, dxShift = 2, dyShift = 1;
+            // Probe 4x4 sub-block at (4, 4) inside the MB.
+            for (int y = 0; y < 4; y++)
+                for (int x = 0; x < 4; x++)
+                    mb.y[(4 + y) * 16 + (4 + x)] =
+                        refY[(mbY * 16 + 4 + y + dyShift) * W + (mbX * 16 + 4 + x + dxShift)];
+
+            int[] mv = VP8Encoder.computeBestSubBlockMv(state, mb, mbX, mbY, 4, 4, 4, 4);
+            assertThat("4x4 wire row = dyShift * 4", mv[0], is(dyShift * 4));
+            assertThat("4x4 wire col = dxShift * 4", mv[1], is(dxShift * 4));
+        }
+
+        /**
+         * Builds a high-entropy luma plane (Murmur-style mix of {@code x} and {@code y})
+         * so the per-MB SAD has a unique global minimum at the true shift, not a degenerate
+         * ridge that a linear gradient would produce.
+         */
+        private static short[] makeUniqueLumaPlane(int w, int h) {
+            short[] p = new short[w * h];
+            for (int y = 0; y < h; y++)
+                for (int x = 0; x < w; x++) {
+                    int mix = x * 0x9E3779B1 ^ y * 0x85EBCA77;
+                    p[y * w + x] = (short) ((mix >>> 24) & 0xFF);
+                }
+            return p;
+        }
+
+        /**
+         * Builds a {@link VP8EncoderSession} with the given Y plane in the {@code LAST}
+         * slot. U/V are filled with neutral 128 because sub-block search is luma-only.
+         */
+        private static VP8EncoderSession newSessionWithRef(short[] refY, int w, int h) {
+            int mbCols = w / 16, mbRows = h / 16;
+            short[] refU = new short[(w / 2) * (h / 2)];
+            short[] refV = new short[(w / 2) * (h / 2)];
+            java.util.Arrays.fill(refU, (short) 128);
+            java.util.Arrays.fill(refV, (short) 128);
+            VP8EncoderSession session = new VP8EncoderSession();
+            session.captureReferenceLast(refY, refU, refV, w, w / 2, mbCols, mbRows, w, h);
+            return session;
+        }
+
     }
 
     // ──── VP8 Decoder (self round-trip + libwebp-produced payload parse) ────

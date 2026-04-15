@@ -77,7 +77,7 @@ public final class VP8Encoder {
     private static final int INTER_PROB_GF = 128;
 
     /** Per-frame encoding state threaded through the MB loop. */
-    private static final class State {
+    static final class State {
         /** {@code true} for a keyframe, {@code false} for a P-frame (inter frame). */
         final boolean isKeyframe;
         /** Backing session for P-frame reference buffers, or {@code null} for a stateless keyframe. */
@@ -2109,6 +2109,167 @@ public final class VP8Encoder {
                 sad += Math.abs(src[srcOff + x] - ref[refOff + x]);
         }
         return sad;
+    }
+
+    /**
+     * Computes the best NEW-MV for a luma sub-block of a SPLITMV MB. The sub-block
+     * is anchored at {@code (mbX*16 + blockX0, mbY*16 + blockY0)} with size
+     * {@code blockW x blockH}, and the source samples are taken from {@code mb.y}
+     * at the corresponding offset. Searches integer SAD within
+     * {@link #MOTION_SEARCH_RADIUS}, then half-pel, then quarter-pel (the quarter-pel
+     * pass runs only when half-pel improved on integer; matches {@link #computeBestMv}'s
+     * RFC 6386 paragraph 17.1 short-circuit).
+     * <p>
+     * Luma-only by construction: SPLITMV decode derives chroma MVs from a 4-way average
+     * of luma sub-MVs (RFC 6386 section 17.4), so per-sub-block chroma SSE is not a
+     * meaningful R-D signal at search time.
+     * <p>
+     * Returns {@code null} when every candidate lies outside the reference frame bounds.
+     *
+     * @param s       encoder state (provides session ref planes)
+     * @param mb      MB-local source samples ({@code mb.y} carries the full 16x16 luma)
+     * @param mbX     MB column
+     * @param mbY     MB row
+     * @param blockX0 sub-block x offset within the MB, in samples ({@code 0}, {@code 4},
+     *                {@code 8}, or {@code 12})
+     * @param blockY0 sub-block y offset within the MB, in samples
+     * @param blockW  sub-block width ({@code 4}, {@code 8}, or {@code 16})
+     * @param blockH  sub-block height ({@code 4}, {@code 8}, or {@code 16})
+     * @return wire MV in {@code [bestWireRow, bestWireCol]} (quarter-pel units), or
+     *         {@code null} if every candidate clipped
+     */
+    static int @org.jetbrains.annotations.Nullable [] computeBestSubBlockMv(
+        @NotNull State s, @NotNull Macroblock mb, int mbX, int mbY,
+        int blockX0, int blockY0, int blockW, int blockH
+    ) {
+        int baseX = mbX * 16 + blockX0;
+        int baseY = mbY * 16 + blockY0;
+        int refStride = s.session.refLumaStride;
+        int refH = s.session.refMbRows * 16;
+
+        // Integer SAD search. Anchor the source extraction at (blockX0, blockY0)
+        // inside mb.y (16-sample stride); compare against ref at (baseX+dx, baseY+dy).
+        // Initial candidate is dx=dy=0 (zero-MV); skip it inside the loop.
+        long bestSad = sadLumaSubBlock(s.session.refY, refStride, baseX, baseY,
+            mb.y, 16, blockX0, blockY0, blockW, blockH);
+        int bestDx = 0, bestDy = 0;
+        boolean anyValid = (baseY >= 0 && baseY + blockH <= refH
+                         && baseX >= 0 && baseX + blockW <= refStride);
+        for (int dy = -MOTION_SEARCH_RADIUS; dy <= MOTION_SEARCH_RADIUS; dy++) {
+            int refY = baseY + dy;
+            if (refY < 0 || refY + blockH > refH) continue;
+            for (int dx = -MOTION_SEARCH_RADIUS; dx <= MOTION_SEARCH_RADIUS; dx++) {
+                if (dx == 0 && dy == 0) continue;
+                int refX = baseX + dx;
+                if (refX < 0 || refX + blockW > refStride) continue;
+                anyValid = true;
+                long sad = sadLumaSubBlock(s.session.refY, refStride, refX, refY,
+                    mb.y, 16, blockX0, blockY0, blockW, blockH);
+                if (sad < bestSad) {
+                    bestSad = sad;
+                    bestDx = dx;
+                    bestDy = dy;
+                }
+            }
+        }
+        if (!anyValid) return null;
+
+        // Half-pel refinement (wire step 2 = 0.5 luma pel).
+        int integerWireRow = bestDy * 4;
+        int integerWireCol = bestDx * 4;
+        int bestWireRow = integerWireRow;
+        int bestWireCol = integerWireCol;
+        long bestSse = sseSubBlockAtWire(s, mb, mbX, mbY,
+            blockX0, blockY0, blockW, blockH, bestWireRow, bestWireCol);
+        for (int dy = -2; dy <= 2; dy += 2) {
+            for (int dx = -2; dx <= 2; dx += 2) {
+                if (dy == 0 && dx == 0) continue;
+                int wireRow = integerWireRow + dy;
+                int wireCol = integerWireCol + dx;
+                long sse = sseSubBlockAtWire(s, mb, mbX, mbY,
+                    blockX0, blockY0, blockW, blockH, wireRow, wireCol);
+                if (sse < bestSse) {
+                    bestSse = sse;
+                    bestWireRow = wireRow;
+                    bestWireCol = wireCol;
+                }
+            }
+        }
+
+        // Quarter-pel refinement (wire step 1 = 0.25 luma pel). Skip when half-pel
+        // didn't improve - matches computeBestMv's short-circuit.
+        if (bestWireRow != integerWireRow || bestWireCol != integerWireCol) {
+            int halfPelBestRow = bestWireRow;
+            int halfPelBestCol = bestWireCol;
+            for (int dy = -1; dy <= 1; dy++) {
+                for (int dx = -1; dx <= 1; dx++) {
+                    if (dy == 0 && dx == 0) continue;
+                    int wireRow = halfPelBestRow + dy;
+                    int wireCol = halfPelBestCol + dx;
+                    long sse = sseSubBlockAtWire(s, mb, mbX, mbY,
+                        blockX0, blockY0, blockW, blockH, wireRow, wireCol);
+                    if (sse < bestSse) {
+                        bestSse = sse;
+                        bestWireRow = wireRow;
+                        bestWireCol = wireCol;
+                    }
+                }
+            }
+        }
+        return new int[] { bestWireRow, bestWireCol };
+    }
+
+    /**
+     * Sum of absolute differences for a {@code blockW x blockH} luma sub-block.
+     * Source samples come from {@code src[(srcY0 + y) * srcStride + (srcX0 + x)]};
+     * reference samples come from {@code ref[(refY + y) * refStride + (refX + x)]}.
+     */
+    private static long sadLumaSubBlock(
+        short @NotNull [] ref, int refStride, int refX, int refY,
+        short @NotNull [] src, int srcStride, int srcX0, int srcY0,
+        int blockW, int blockH
+    ) {
+        long sad = 0;
+        for (int y = 0; y < blockH; y++) {
+            int srcOff = (srcY0 + y) * srcStride + srcX0;
+            int refOff = (refY + y) * refStride + refX;
+            for (int x = 0; x < blockW; x++)
+                sad += Math.abs(src[srcOff + x] - ref[refOff + x]);
+        }
+        return sad;
+    }
+
+    /**
+     * Sum of squared errors for a luma sub-block prediction at the given wire MV.
+     * Uses {@link SubpelPrediction#predict6tap} so sub-pel MVs invoke 6-tap interpolation
+     * and integer MVs resolve to the identity filter. Luma-only by construction (see
+     * {@link #computeBestSubBlockMv}).
+     */
+    private static long sseSubBlockAtWire(
+        @NotNull State s, @NotNull Macroblock mb, int mbX, int mbY,
+        int blockX0, int blockY0, int blockW, int blockH, int wireRow, int wireCol
+    ) {
+        int refStrideY = s.session.refLumaStride;
+        int refH = s.session.refMbRows * 16;
+        int lumaIntRow = wireRow << 1;
+        int lumaIntCol = wireCol << 1;
+        int lumaY = mbY * 16 + blockY0 + (lumaIntRow >> 3);
+        int lumaX = mbX * 16 + blockX0 + (lumaIntCol >> 3);
+        int lumaSubY = lumaIntRow & 7;
+        int lumaSubX = lumaIntCol & 7;
+        short[] pred = new short[blockW * blockH];
+        SubpelPrediction.predict6tap(s.session.refY, refStrideY, refH,
+            lumaX, lumaY, lumaSubX, lumaSubY, pred, blockW, blockW, blockH);
+        long sse = 0;
+        for (int y = 0; y < blockH; y++) {
+            int srcOff = (blockY0 + y) * 16 + blockX0;
+            int predOff = y * blockW;
+            for (int x = 0; x < blockW; x++) {
+                int d = mb.y[srcOff + x] - pred[predOff + x];
+                sse += (long) d * d;
+            }
+        }
+        return sse;
     }
 
     /**
