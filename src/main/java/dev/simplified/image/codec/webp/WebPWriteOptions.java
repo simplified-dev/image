@@ -140,11 +140,20 @@ public class WebPWriteOptions implements ImageWriteOptions {
          * reuse the prior frame's reconstruction (inter-skip), typically cutting file
          * size by 50-60% on text/tooltip animations.
          * <p>
-         * Off by default: the WebP container specification historically restricts the
-         * ANMF VP8 payload to keyframes, so output with P-frames enabled is only
-         * decodable by tools that accept arbitrary VP8 bitstreams (this project's own
-         * reader, libvpx-based decoders). libwebp's reference WebP decoder will not
-         * accept the output.
+         * Off by default: libwebp's reference VP8 decoder unconditionally rejects
+         * non-keyframe bitstreams ({@code src/dec/vp8_dec.c} {@code VP8GetHeaders}
+         * returns {@code VP8_STATUS_UNSUPPORTED_FEATURE} "Not a key frame."), and
+         * {@code WebPAnimDecoder} re-creates the VP8 decoder per ANMF frame with
+         * no cross-frame reference handoff - so even bypassing the check would
+         * fail structurally. The WebP container spec (RFC 9649 / Google WebP
+         * container spec) does not forbid P-frames at the container level, but
+         * the codec decoder gate makes the constraint hard. Output with P-frames
+         * enabled is therefore only decodable by tools that accept arbitrary VP8
+         * bitstreams with synthesised reference state (this project's own reader,
+         * libvpx-based decoders); libwebp-based tools (Chrome, Firefox,
+         * Pillow-via-libwebp, ffmpeg-built-against-libwebp, Android / iOS system
+         * decoders) will not accept the output. See
+         * {@code research/WebP-ANMF-PFrame-Interop.md} for the full investigation.
          *
          * @param usePFrames true to enable P-frames for animated lossy encode
          * @return this builder for chaining
