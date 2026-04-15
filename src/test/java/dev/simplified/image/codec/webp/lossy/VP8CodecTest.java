@@ -1423,6 +1423,95 @@ public class VP8CodecTest {
                     "SPLITMV-roundtrip-with-filter PSNR = %.2f dB (expected >= 35 dB)", psnr));
         }
 
+        @Test @DisplayName("conformance: SPLITMV R-D candidate captures non-uniform per-sub-MB motion (Task 11 phase 3)")
+        void splitMvRdNonUniformMotion() {
+            // 32x32 image (2x2 MBs). Construct a P-frame whose top half within each MB is the
+            // keyframe shifted +1 luma pixel right, and whose bottom half is identical to the
+            // keyframe. A whole-MB MV cannot capture this divergence (NEW (+1, 0) wins for the
+            // top half but loses for the bottom; ZEROMV is the inverse). Only SPLITMV with
+            // scheme TOP_BOTTOM, top slot = NEW (+1 col), bottom slot = ZERO can hit both
+            // halves cleanly. If the R-D enumeration picks SPLITMV correctly, the P-frame
+            // decode is near-pixel-exact (PSNR limited only by keyframe quantization at q=1.0).
+            int W = 32, H = 32;
+            PixelBuffer keyframe = PixelBuffer.create(W, H);
+            for (int y = 0; y < H; y++)
+                for (int x = 0; x < W; x++) {
+                    // High-entropy luma so the MV search has unique SAD minima.
+                    int mix = x * 0x9E3779B1 ^ y * 0x85EBCA77;
+                    int luma = (mix >>> 24) & 0xFF;
+                    keyframe.setPixel(x, y, 0xFF000000 | (luma << 16) | (luma << 8) | luma);
+                }
+
+            PixelBuffer pframe = PixelBuffer.create(W, H);
+            for (int y = 0; y < H; y++) {
+                int yLocal = y & 15;   // position within the MB row
+                for (int x = 0; x < W; x++) {
+                    int sx = (yLocal < 8 && x + 1 < W) ? x + 1 : x;
+                    pframe.setPixel(x, y, keyframe.getPixel(sx, y));
+                }
+            }
+
+            VP8EncoderSession encSess = new VP8EncoderSession();
+            byte[] kf = encSess.encode(keyframe, 1.0f, true);
+            byte[] pf = encSess.encode(pframe, 1.0f, false);
+            assertThat("P-frame tag (inter)", pf[0] & 1, is(1));
+
+            VP8DecoderSession decSess = new VP8DecoderSession();
+            decSess.decode(kf);
+            PixelBuffer pfDecoded = decSess.decode(pf);
+
+            long sumSq = 0;
+            int n = 0;
+            for (int y = 0; y < H; y++)
+                for (int x = 0; x < W; x++) {
+                    int a = pframe.getPixel(x, y);
+                    int b = pfDecoded.getPixel(x, y);
+                    for (int shift : new int[] { 0, 8, 16 }) {
+                        int diff = ((a >> shift) & 0xFF) - ((b >> shift) & 0xFF);
+                        sumSq += (long) diff * diff;
+                        n++;
+                    }
+                }
+            double mse = sumSq / (double) n;
+            double psnr = mse == 0 ? Double.POSITIVE_INFINITY
+                : 10.0 * Math.log10(255.0 * 255.0 / mse);
+            // 30 dB threshold: a whole-MB-only encoder would distort one half per MB and land
+            // far below this; SPLITMV TOP_BOTTOM with the right per-slot refs hits 35+ dB.
+            if (psnr < 30.0)
+                throw new AssertionError(String.format(
+                    "SPLITMV R-D non-uniform-motion PSNR = %.2f dB (expected >= 30 dB) - "
+                    + "encoder failed to pick SPLITMV when whole-MB MV cannot capture motion",
+                    psnr));
+        }
+
+        @Test @DisplayName("conformance: SPLITMV gate suppresses enumeration on smooth content (Task 11 phase 3)")
+        void splitMvGateSuppressesOnSmoothContent() {
+            // Solid-colour MBs have ZeroMV-skip SSE = 0, well below SPLITMV_GATE_SSE.
+            // The encoder must skip SPLITMV enumeration entirely (and pick ZeroMv-skip
+            // / NEAREST-skip), keeping the encoded byte count tiny. A regression where
+            // the gate failed open would explode the per-frame size with unwanted
+            // SPLITMV emissions on every MB.
+            int W = 32, H = 32;
+            PixelBuffer keyframe = PixelBuffer.create(W, H);
+            for (int y = 0; y < H; y++)
+                for (int x = 0; x < W; x++)
+                    keyframe.setPixel(x, y, 0xFF8080A0);   // single solid colour
+
+            VP8EncoderSession encSess = new VP8EncoderSession();
+            byte[] kf = encSess.encode(keyframe, 0.75f, true);
+            byte[] pf = encSess.encode(keyframe, 0.75f, false);   // identical source
+
+            // P-frame for an unchanged source should be tiny (just per-MB header bits).
+            // The forced-SPLITMV hook produced ~80-100 bytes; an inter-skip P-frame on
+            // identical source is typically ~10-30 bytes. SPLITMV per MB would push it
+            // past this threshold even at the cheapest scheme.
+            if (pf.length > 60)
+                throw new AssertionError(String.format(
+                    "P-frame for unchanged source is %d bytes (expected < 60) - "
+                    + "SPLITMV gate may have failed open and emitted SPLITMV on smooth MBs",
+                    pf.length));
+        }
+
         @Test @DisplayName("conformance: subMvRefContext mirrors decoder's 5-way classifier (RFC 6386 section 17.3)")
         void subMvRefContextClassifier() {
             // The encoder's rate-cost estimation for SPLITMV must index the same

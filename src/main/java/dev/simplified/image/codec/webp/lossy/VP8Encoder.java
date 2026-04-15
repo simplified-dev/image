@@ -1490,6 +1490,101 @@ public final class VP8Encoder {
         }
     }
 
+    /**
+     * SPLITMV macroblock with no coded residual ({@code mb_skip = 1}). Reconstruction
+     * is the per-4x4 motion-compensated prediction at each sub-block's chosen MV; the
+     * winning {@link #scheme} ({@link VP8Tables#MBSPLIT_TOP_BOTTOM} /
+     * {@link VP8Tables#MBSPLIT_LEFT_RIGHT} / {@link VP8Tables#MBSPLIT_QUARTERS})
+     * partitions the 16 4x4 luma blocks into {@link VP8Tables#MBSPLIT_COUNT}{@code [scheme]}
+     * groups, each carrying one MV.
+     * <p>
+     * Per-slot {@link #slotRef} categorises each sub-MV as LEFT (inherit left
+     * neighbour), ABOVE (inherit above neighbour), ZERO ({@code (0, 0)}), or NEW
+     * (motion-searched). NEW slots emit MV wire bits at commit; the others infer
+     * their MV from the same neighbour-resolution logic the decoder runs.
+     */
+    private static final class SplitMvCandidate extends InterCandidate {
+        final int scheme;
+        final int slotCount;
+        final int @NotNull [] slotRow16;       // [16] per-4x4-block internal MV (1/8-pel)
+        final int @NotNull [] slotCol16;
+        final int @NotNull [] slotRef;         // [slotCount] SUB_MV_REF_LEFT/ABOVE/ZERO/NEW
+        final int @NotNull [] slotInternalRow; // [slotCount] chosen internal MV per slot
+        final int @NotNull [] slotInternalCol;
+        final int @NotNull [] slotWireRow;     // [slotCount] wire MV (NEW slots only)
+        final int @NotNull [] slotWireCol;
+        final short @NotNull [] predY, predU, predV;
+        final int @NotNull [] mvRefProbs;
+        SplitMvCandidate(long sse, int rate, int lambda, int scheme,
+                         int @NotNull [] slotRow16, int @NotNull [] slotCol16,
+                         int @NotNull [] slotRef,
+                         int @NotNull [] slotInternalRow, int @NotNull [] slotInternalCol,
+                         int @NotNull [] slotWireRow, int @NotNull [] slotWireCol,
+                         short @NotNull [] predY, short @NotNull [] predU, short @NotNull [] predV,
+                         int @NotNull [] mvRefProbs) {
+            super(sse, rate, lambda);
+            this.scheme = scheme;
+            this.slotCount = VP8Tables.MBSPLIT_COUNT[scheme];
+            this.slotRow16 = slotRow16;
+            this.slotCol16 = slotCol16;
+            this.slotRef = slotRef;
+            this.slotInternalRow = slotInternalRow;
+            this.slotInternalCol = slotInternalCol;
+            this.slotWireRow = slotWireRow;
+            this.slotWireCol = slotWireCol;
+            this.predY = predY;
+            this.predU = predU;
+            this.predV = predV;
+            this.mvRefProbs = mvRefProbs;
+        }
+        @Override
+        void commit(@NotNull State s, int mbX, int mbY) {
+            BooleanEncoder h = s.header;
+            h.encodeBit(INTER_SKIP_PROBA, 1);
+            h.encodeBit(INTER_PROB_INTRA, 1);
+            h.encodeBit(INTER_PROB_LAST, 0);
+            emitTreeLeaf(h, VP8Tables.MV_REF_TREE, 4, mvRefProbs);
+            emitTreeLeaf(h, VP8Tables.MBSPLIT_TREE, scheme, VP8Tables.MBSPLIT_PROBS);
+
+            // Per-slot SUB_MV_REF emit + per-NEW MV wire emit. Mirrors decodeSplitMv's
+            // parse order so the decoder consumes the same bits in the same order.
+            // Re-run neighbour resolution with the in-progress slotRow16/slotCol16 the
+            // candidate already populated; the context derivation must match what the
+            // decoder will compute as it parses.
+            int[] scratch = new int[4];
+            for (int j = 0; j < slotCount; j++) {
+                resolveSplitMvNeighbours(s, mbX, mbY, scheme, j, slotRow16, slotCol16, scratch);
+                int ctx = subMvRefContext(scratch[0], scratch[1], scratch[2], scratch[3]);
+                emitTreeLeaf(h, VP8Tables.SUB_MV_REF_TREE, slotRef[j], VP8Tables.SUB_MV_REF_PROB[ctx]);
+                if (slotRef[j] == VP8Tables.SUB_MV_REF_NEW) {
+                    emitMvComponent(h, slotWireRow[j], s.mvProba[0], s.mvBranches[0]);
+                    emitMvComponent(h, slotWireCol[j], s.mvProba[1], s.mvBranches[1]);
+                }
+            }
+
+            int mbIdx = mbY * s.mbCols + mbX;
+            int bmiBase = mbIdx * 16;
+            for (int i = 0; i < 16; i++) {
+                s.bmiRow[bmiBase + i] = slotRow16[i];
+                s.bmiCol[bmiBase + i] = slotCol16[i];
+            }
+            s.mbSplitScheme[mbIdx] = scheme;
+            // Canonical MB-level MV = bmi[15] (libvpx convention; matches decoder).
+            s.mbMvRow[mbIdx] = slotRow16[15];
+            s.mbMvCol[mbIdx] = slotCol16[15];
+            s.mbIsInter[mbIdx] = true;
+            s.mbIsI4x4[mbIdx] = false;
+            s.mbRefFrame[mbIdx] = LoopFilter.REF_LAST;
+            s.mbModeLfIdx[mbIdx] = LoopFilter.MODE_SPLITMV;
+
+            commitLumaToRecon(s, mbX, mbY, predY);
+            commitChromaBufferToRecon(s.reconU, s.chromaStride, mbX, mbY, predU);
+            commitChromaBufferToRecon(s.reconV, s.chromaStride, mbX, mbY, predV);
+
+            clearNzAndIntraContextForInterSkip(s, mbX);
+        }
+    }
+
     /** Returns the lower-R-D of the two candidates, or {@code next} when {@code prev} is null. */
     private static @NotNull InterCandidate chooseBetter(
         @Nullable InterCandidate prev, @NotNull InterCandidate next
@@ -1637,6 +1732,18 @@ public final class VP8Encoder {
             s, mb, mbX, mbY, skipBit0, baseIntraHeader, lambda
         ));
 
+        // --- SPLITMV (skip-only, RFC 6386 section 17.3) ---
+        // Heuristic gate: skip the per-scheme search when the best non-SPLITMV candidate
+        // already has low SSE. Per-sub-block MVs only help when the whole-MB prediction
+        // doesn't fit; smooth content where ZEROMV / NEAREST / NEW already nail it
+        // cannot benefit from the extra MV-tree bits.
+        if (best.sse > SPLITMV_GATE_SSE) {
+            InterCandidate split = buildBestSplitMvCandidate(
+                s, mb, mbX, mbY, mvRefProbs, skipBit1, baseInterHeader, lambda
+            );
+            if (split != null) best = chooseBetter(best, split);
+        }
+
         best.commit(s, mbX, mbY);
     }
 
@@ -1733,6 +1840,357 @@ public final class VP8Encoder {
         if (aez) return 2;
         if (leftRow == aboveRow && leftCol == aboveCol) return 3;
         return 0;
+    }
+
+    /**
+     * SSE threshold below which {@link #encodeInterMacroblock} skips SPLITMV enumeration.
+     * Smooth content where a single MB-level MV already nails the prediction is unlikely
+     * to benefit from per-sub-block MVs; bypassing the per-scheme search saves substantial
+     * encode time on the common case. Tuning candidate for Phase 4.
+     */
+    private static final long SPLITMV_GATE_SSE = 16L * 256L;
+
+    /**
+     * Resolves the LEFT and ABOVE neighbour sub-MVs for slot {@code j} of SPLITMV
+     * scheme {@code scheme} of MB {@code (mbX, mbY)}. Mirrors VP8Decoder.decodeSplitMv
+     * (lines 1008-1049): intra-MB neighbour MVs come from {@code thisMbSlotRow} /
+     * {@code thisMbSlotCol} (already-resolved earlier slots in raster order); cross-MB
+     * lookups read {@link State#bmiRow} / {@link State#bmiCol} when the neighbour MB is
+     * SPLITMV ({@code mbSplitScheme[neighbour] >= 0}), else fall back to the MB-level
+     * MV or zero for intra neighbours.
+     *
+     * @param out packed {@code [leftRow, leftCol, aboveRow, aboveCol]} (length 4)
+     */
+    private static void resolveSplitMvNeighbours(
+        @NotNull State s, int mbX, int mbY, int scheme, int j,
+        int @NotNull [] thisMbSlotRow, int @NotNull [] thisMbSlotCol,
+        int @NotNull [] out
+    ) {
+        int k = VP8Tables.MBSPLIT_OFFSET[scheme][j];
+        int leftRow, leftCol;
+        if ((k & 3) == 0) {
+            if (mbX == 0) {
+                leftRow = leftCol = 0;
+            } else {
+                int leftMbIdx = mbY * s.mbCols + mbX - 1;
+                if (s.mbSplitScheme[leftMbIdx] >= 0) {
+                    leftRow = s.bmiRow[leftMbIdx * 16 + k + 3];
+                    leftCol = s.bmiCol[leftMbIdx * 16 + k + 3];
+                } else if (s.mbIsInter[leftMbIdx]) {
+                    leftRow = s.mbMvRow[leftMbIdx];
+                    leftCol = s.mbMvCol[leftMbIdx];
+                } else {
+                    leftRow = leftCol = 0;
+                }
+            }
+        } else {
+            leftRow = thisMbSlotRow[k - 1];
+            leftCol = thisMbSlotCol[k - 1];
+        }
+        int aboveRow, aboveCol;
+        if ((k >> 2) == 0) {
+            if (mbY == 0) {
+                aboveRow = aboveCol = 0;
+            } else {
+                int aboveMbIdx = (mbY - 1) * s.mbCols + mbX;
+                if (s.mbSplitScheme[aboveMbIdx] >= 0) {
+                    aboveRow = s.bmiRow[aboveMbIdx * 16 + k + 12];
+                    aboveCol = s.bmiCol[aboveMbIdx * 16 + k + 12];
+                } else if (s.mbIsInter[aboveMbIdx]) {
+                    aboveRow = s.mbMvRow[aboveMbIdx];
+                    aboveCol = s.mbMvCol[aboveMbIdx];
+                } else {
+                    aboveRow = aboveCol = 0;
+                }
+            }
+        } else {
+            aboveRow = thisMbSlotRow[k - 4];
+            aboveCol = thisMbSlotCol[k - 4];
+        }
+        out[0] = leftRow;
+        out[1] = leftCol;
+        out[2] = aboveRow;
+        out[3] = aboveCol;
+    }
+
+    /**
+     * Computes luma SSE for a sub-block at the given internal (1/8-pel) MV. Mirror of
+     * {@link #sseSubBlockAtWire} but with internal-units MV instead of wire-units.
+     */
+    private static long sseSubBlockAtInternalMv(
+        @NotNull State s, @NotNull Macroblock mb, int mbX, int mbY,
+        int blockX0, int blockY0, int blockW, int blockH,
+        int internalRow, int internalCol
+    ) {
+        int refStrideY = s.session.refLumaStride;
+        int refH = s.session.refMbRows * 16;
+        int lumaY = mbY * 16 + blockY0 + (internalRow >> 3);
+        int lumaX = mbX * 16 + blockX0 + (internalCol >> 3);
+        int lumaSubY = internalRow & 7;
+        int lumaSubX = internalCol & 7;
+        short[] pred = new short[blockW * blockH];
+        SubpelPrediction.predict6tap(s.session.refY, refStrideY, refH,
+            lumaX, lumaY, lumaSubX, lumaSubY, pred, blockW, blockW, blockH);
+        long sse = 0;
+        for (int y = 0; y < blockH; y++) {
+            int srcOff = (blockY0 + y) * 16 + blockX0;
+            int predOff = y * blockW;
+            for (int x = 0; x < blockW; x++) {
+                int d = mb.y[srcOff + x] - pred[predOff + x];
+                sse += (long) d * d;
+            }
+        }
+        return sse;
+    }
+
+    /**
+     * Builds the SPLITMV MB prediction for the encoder: per-4x4 luma prediction using
+     * each sub-block's MV + per-4x4 chroma prediction using the 4-way average of the
+     * corresponding luma sub-MVs (RFC 6386 section 17.4 round-half-away-from-zero
+     * divide by 8). Mirror of {@code VP8Decoder.buildSplitMvPrediction}.
+     */
+    private static void buildSplitMvPredictionEncoder(
+        @NotNull State s, int mbX, int mbY,
+        int @NotNull [] slotRow, int @NotNull [] slotCol,
+        short @NotNull [] predY, short @NotNull [] predU, short @NotNull [] predV
+    ) {
+        int refStrideY = s.session.refLumaStride;
+        int refH = s.session.refMbRows * 16;
+        int refStrideC = s.session.refChromaStride;
+        int refHC = s.session.refMbRows * 8;
+
+        short[] tmp = new short[16];
+        for (int by = 0; by < 4; by++) {
+            for (int bx = 0; bx < 4; bx++) {
+                int k = by * 4 + bx;
+                int mvRow = slotRow[k];
+                int mvCol = slotCol[k];
+                int refX = mbX * 16 + bx * 4 + (mvCol >> 3);
+                int refYPos = mbY * 16 + by * 4 + (mvRow >> 3);
+                int subX = mvCol & 7;
+                int subY = mvRow & 7;
+                SubpelPrediction.predict6tap(s.session.refY, refStrideY, refH,
+                    refX, refYPos, subX, subY, tmp, 4, 4, 4);
+                for (int y = 0; y < 4; y++)
+                    for (int x = 0; x < 4; x++)
+                        predY[(by * 4 + y) * 16 + (bx * 4 + x)] = tmp[y * 4 + x];
+            }
+        }
+
+        int[][] chromaLumaMap = {
+            { 0, 1, 4, 5 }, { 2, 3, 6, 7 }, { 8, 9, 12, 13 }, { 10, 11, 14, 15 }
+        };
+        short[] tmpU = new short[16];
+        short[] tmpV = new short[16];
+        for (int c = 0; c < 4; c++) {
+            int[] lumaBlocks = chromaLumaMap[c];
+            int sumRow = 0, sumCol = 0;
+            for (int lk : lumaBlocks) {
+                sumRow += slotRow[lk];
+                sumCol += slotCol[lk];
+            }
+            int chromaMvRow = (sumRow + (sumRow >= 0 ? 4 : -4)) / 8;
+            int chromaMvCol = (sumCol + (sumCol >= 0 ? 4 : -4)) / 8;
+            int cbX = c & 1;
+            int cbY = c >> 1;
+            int refXC = mbX * 8 + cbX * 4 + (chromaMvCol >> 3);
+            int refYC = mbY * 8 + cbY * 4 + (chromaMvRow >> 3);
+            int subX = chromaMvCol & 7;
+            int subY = chromaMvRow & 7;
+            SubpelPrediction.predict6tap(s.session.refU, refStrideC, refHC,
+                refXC, refYC, subX, subY, tmpU, 4, 4, 4);
+            SubpelPrediction.predict6tap(s.session.refV, refStrideC, refHC,
+                refXC, refYC, subX, subY, tmpV, 4, 4, 4);
+            for (int y = 0; y < 4; y++) {
+                for (int x = 0; x < 4; x++) {
+                    predU[(cbY * 4 + y) * 8 + cbX * 4 + x] = tmpU[y * 4 + x];
+                    predV[(cbY * 4 + y) * 8 + cbX * 4 + x] = tmpV[y * 4 + x];
+                }
+            }
+        }
+    }
+
+    /**
+     * Returns the per-slot block geometry {@code (blockX0, blockY0, blockW, blockH)}
+     * for slot {@code j} of {@code scheme}. Packs the four small ints into a single
+     * {@code int} (8 bits each) to avoid per-call allocation; unpack with bit shifts.
+     */
+    private static int slotGeometry(int scheme, int j) {
+        int firstK = VP8Tables.MBSPLIT_OFFSET[scheme][j];
+        int blockX0 = (firstK & 3) * 4;
+        int blockY0 = (firstK >> 2) * 4;
+        int blockW, blockH;
+        switch (scheme) {
+            case VP8Tables.MBSPLIT_TOP_BOTTOM: blockW = 16; blockH = 8; break;
+            case VP8Tables.MBSPLIT_LEFT_RIGHT: blockW = 8;  blockH = 16; break;
+            case VP8Tables.MBSPLIT_QUARTERS:   blockW = 8;  blockH = 8;  break;
+            case VP8Tables.MBSPLIT_EIGHTS:     blockW = 4;  blockH = 4;  break;
+            default: throw new IllegalStateException("invalid SPLITMV scheme: " + scheme);
+        }
+        return (blockX0 & 0xFF) | ((blockY0 & 0xFF) << 8)
+            | ((blockW & 0xFF) << 16) | ((blockH & 0xFF) << 24);
+    }
+
+    /**
+     * Per-scheme greedy R-D over {@link VP8Tables#MBSPLIT_TOP_BOTTOM} /
+     * {@link VP8Tables#MBSPLIT_LEFT_RIGHT} / {@link VP8Tables#MBSPLIT_QUARTERS} for
+     * the SPLITMV-skip candidate. {@link VP8Tables#MBSPLIT_EIGHTS} (16 sub-MVs, 16
+     * NEW searches) is intentionally skipped for cost; can be revisited in Phase 4.
+     * <p>
+     * For each scheme, walks slots in raster order and greedily picks the per-slot
+     * sub-MV-ref category in {@code {LEFT, ABOVE, ZERO, NEW}} that minimises
+     * {@code sub_block_sse * RD_DISTO_MULT + sub_rate * lambda}. Then builds the full
+     * per-4x4 MC prediction (luma + chroma via RFC 6386 section 17.4 averaging) and
+     * returns the candidate with the lowest whole-MB R-D score.
+     * <p>
+     * Returns {@code null} when none of the considered schemes produced a usable
+     * prediction (e.g., all NEW searches clipped).
+     */
+    private static @org.jetbrains.annotations.Nullable InterCandidate buildBestSplitMvCandidate(
+        @NotNull State s, @NotNull Macroblock mb, int mbX, int mbY,
+        int @NotNull [] mvRefProbs, int skipBit1, int baseInterHeader, int lambda
+    ) {
+        InterCandidate best = null;
+        int splitmvHeaderRate = skipBit1 + baseInterHeader
+                              + VP8Costs.treeLeafBitCost(VP8Tables.MV_REF_TREE, 4, mvRefProbs);
+        int[] neighbourScratch = new int[4];
+
+        for (int scheme : new int[] {
+            VP8Tables.MBSPLIT_TOP_BOTTOM,
+            VP8Tables.MBSPLIT_LEFT_RIGHT,
+            VP8Tables.MBSPLIT_QUARTERS
+        }) {
+            int slotCount = VP8Tables.MBSPLIT_COUNT[scheme];
+            int fillCount = VP8Tables.MBSPLIT_FILL_COUNT[scheme];
+            int[] slotRow16 = new int[16];
+            int[] slotCol16 = new int[16];
+            int[] slotRef = new int[slotCount];
+            int[] slotInternalRow = new int[slotCount];
+            int[] slotInternalCol = new int[slotCount];
+            int[] slotWireRow = new int[slotCount];
+            int[] slotWireCol = new int[slotCount];
+
+            int schemeRate = splitmvHeaderRate
+                + VP8Costs.treeLeafBitCost(VP8Tables.MBSPLIT_TREE, scheme, VP8Tables.MBSPLIT_PROBS);
+
+            for (int j = 0; j < slotCount; j++) {
+                resolveSplitMvNeighbours(s, mbX, mbY, scheme, j, slotRow16, slotCol16, neighbourScratch);
+                int leftRow = neighbourScratch[0], leftCol = neighbourScratch[1];
+                int aboveRow = neighbourScratch[2], aboveCol = neighbourScratch[3];
+                int ctx = subMvRefContext(leftRow, leftCol, aboveRow, aboveCol);
+                int[] subMvRefProbs = VP8Tables.SUB_MV_REF_PROB[ctx];
+
+                int geom = slotGeometry(scheme, j);
+                int blockX0 = geom & 0xFF;
+                int blockY0 = (geom >> 8) & 0xFF;
+                int blockW = (geom >> 16) & 0xFF;
+                int blockH = (geom >> 24) & 0xFF;
+
+                long bestScore = Long.MAX_VALUE;
+                int bestRef = -1;
+                long bestSse = 0;
+                int bestRate = 0;
+                int bestInternalRow = 0, bestInternalCol = 0;
+                int bestWireRow = 0, bestWireCol = 0;
+
+                // LEFT
+                {
+                    long sse = sseSubBlockAtInternalMv(s, mb, mbX, mbY,
+                        blockX0, blockY0, blockW, blockH, leftRow, leftCol);
+                    int rate = VP8Costs.treeLeafBitCost(
+                        VP8Tables.SUB_MV_REF_TREE, VP8Tables.SUB_MV_REF_LEFT, subMvRefProbs);
+                    long score = sse * VP8Costs.RD_DISTO_MULT + (long) rate * lambda;
+                    if (score < bestScore) {
+                        bestScore = score; bestRef = VP8Tables.SUB_MV_REF_LEFT;
+                        bestSse = sse; bestRate = rate;
+                        bestInternalRow = leftRow; bestInternalCol = leftCol;
+                    }
+                }
+                // ABOVE
+                {
+                    long sse = sseSubBlockAtInternalMv(s, mb, mbX, mbY,
+                        blockX0, blockY0, blockW, blockH, aboveRow, aboveCol);
+                    int rate = VP8Costs.treeLeafBitCost(
+                        VP8Tables.SUB_MV_REF_TREE, VP8Tables.SUB_MV_REF_ABOVE, subMvRefProbs);
+                    long score = sse * VP8Costs.RD_DISTO_MULT + (long) rate * lambda;
+                    if (score < bestScore) {
+                        bestScore = score; bestRef = VP8Tables.SUB_MV_REF_ABOVE;
+                        bestSse = sse; bestRate = rate;
+                        bestInternalRow = aboveRow; bestInternalCol = aboveCol;
+                    }
+                }
+                // ZERO
+                {
+                    long sse = sseSubBlockAtInternalMv(s, mb, mbX, mbY,
+                        blockX0, blockY0, blockW, blockH, 0, 0);
+                    int rate = VP8Costs.treeLeafBitCost(
+                        VP8Tables.SUB_MV_REF_TREE, VP8Tables.SUB_MV_REF_ZERO, subMvRefProbs);
+                    long score = sse * VP8Costs.RD_DISTO_MULT + (long) rate * lambda;
+                    if (score < bestScore) {
+                        bestScore = score; bestRef = VP8Tables.SUB_MV_REF_ZERO;
+                        bestSse = sse; bestRate = rate;
+                        bestInternalRow = 0; bestInternalCol = 0;
+                    }
+                }
+                // NEW (motion-searched)
+                int[] newWire = computeBestSubBlockMv(s, mb, mbX, mbY,
+                    blockX0, blockY0, blockW, blockH);
+                if (newWire != null) {
+                    int newWireRow = newWire[0];
+                    int newWireCol = newWire[1];
+                    int newInternalRow = newWireRow << 1;
+                    int newInternalCol = newWireCol << 1;
+                    long sse = sseSubBlockAtInternalMv(s, mb, mbX, mbY,
+                        blockX0, blockY0, blockW, blockH, newInternalRow, newInternalCol);
+                    int rate = VP8Costs.treeLeafBitCost(
+                        VP8Tables.SUB_MV_REF_TREE, VP8Tables.SUB_MV_REF_NEW, subMvRefProbs)
+                        + VP8Costs.mvWireBitCost(newWireRow, newWireCol);
+                    long score = sse * VP8Costs.RD_DISTO_MULT + (long) rate * lambda;
+                    if (score < bestScore) {
+                        bestScore = score; bestRef = VP8Tables.SUB_MV_REF_NEW;
+                        bestSse = sse; bestRate = rate;
+                        bestInternalRow = newInternalRow; bestInternalCol = newInternalCol;
+                        bestWireRow = newWireRow; bestWireCol = newWireCol;
+                    }
+                }
+
+                if (bestRef < 0) return best;   // every candidate clipped; abort scheme
+
+                slotRef[j] = bestRef;
+                slotInternalRow[j] = bestInternalRow;
+                slotInternalCol[j] = bestInternalCol;
+                slotWireRow[j] = bestWireRow;
+                slotWireCol[j] = bestWireCol;
+                schemeRate += bestRate;
+
+                // Fill the covered 4x4 slots with this slot's MV.
+                for (int i = 0; i < fillCount; i++) {
+                    int kFill = VP8Tables.MBSPLIT_FILL_OFFSET[scheme][j * fillCount + i];
+                    slotRow16[kFill] = bestInternalRow;
+                    slotCol16[kFill] = bestInternalCol;
+                }
+                // Discard per-slot bestSse - the candidate's final SSE comes from the
+                // full-MB prediction (luma + chroma) below, so partial sums don't matter.
+                @SuppressWarnings("unused") long _drop = bestSse;
+            }
+
+            short[] predY = new short[256];
+            short[] predU = new short[64];
+            short[] predV = new short[64];
+            buildSplitMvPredictionEncoder(s, mbX, mbY, slotRow16, slotCol16, predY, predU, predV);
+            long sse = sumSquaredError(mb.y, predY)
+                     + sumSquaredError(mb.cb, predU)
+                     + sumSquaredError(mb.cr, predV);
+
+            InterCandidate cand = new SplitMvCandidate(
+                sse, schemeRate, lambda, scheme,
+                slotRow16, slotCol16, slotRef,
+                slotInternalRow, slotInternalCol, slotWireRow, slotWireCol,
+                predY, predU, predV, mvRefProbs
+            );
+            best = chooseBetter(best, cand);
+        }
+        return best;
     }
 
     /**
