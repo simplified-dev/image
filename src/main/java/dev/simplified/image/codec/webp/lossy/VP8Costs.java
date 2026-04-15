@@ -9,9 +9,10 @@ import org.jetbrains.annotations.NotNull;
  * Costs are in {@code 1/256} bit units: coding a single bit at probability {@code 128}
  * (50/50) costs {@code 256}, which represents exactly one bit.
  * <p>
- * Our encoder always uses {@link VP8Tables#COEFFS_PROBA_0} with no per-frame proba updates,
- * so the {@link #REMAPPED_COSTS} variable-level-cost tables are precomputed once at class
- * init and reused for every macroblock.
+ * Token costs depend on the active per-frame coefficient probabilities, which the header
+ * may mutate via the RFC 6386 paragraph 13 update path. Callers build a {@link TokenCosts}
+ * bundle from the post-update {@code tokenProba} after the frame header has been emitted,
+ * then thread it through {@link #residualCost} and {@link TrellisQuantizer#quantize}.
  *
  * @see <a href="https://datatracker.ietf.org/doc/html/rfc6386#section-13">RFC 6386 section 13</a>
  */
@@ -389,44 +390,56 @@ final class VP8Costs {
     // @formatter:on
 
     /**
-     * Precomputed variable-level cost table for our fixed {@link VP8Tables#COEFFS_PROBA_0}
-     * probabilities, remapped from {@code (type, band, ctx)} to {@code (type, n, ctx)} where
-     * {@code band = COEF_BANDS[n]}.
+     * Bundle of the active coefficient probabilities and their derived per-position
+     * variable-level cost table for a single frame.
      * <p>
-     * Entry {@code [type][n][ctx][0]} is the cost of a "block-empty / EOB at n" flag at
-     * probability {@code p[1]} plus (when {@code ctx > 0}) a "non-EOB at start" flag at
-     * {@code p[0]}; entries {@code [type][n][ctx][v]} for {@code v in 1..67} give the
-     * cost of coding a coefficient of level {@code v} at that position.
+     * {@link #proba} is indexed {@code [type][band][ctx][prob]} and matches the layout of
+     * {@link VP8Tables#COEFFS_PROBA_0}. {@link #remapped} is indexed {@code [type][n][ctx]}
+     * where {@code n} is the zig-zag coefficient position; each row is an
+     * {@code int[MAX_VARIABLE_LEVEL + 1]} whose entry {@code [v]} for {@code v > 0} is the
+     * cost of coding a coefficient of level {@code v} at that position and whose entry
+     * {@code [0]} is the cost of terminating the block (EOB) at position {@code n}.
      * <p>
-     * Mirrors libwebp's {@code enc->proba.remapped_costs[ctype][n][ctx]}, which is
-     * rebuilt every frame via {@code VP8CalculateLevelCosts}. Since we never update
-     * the proba state, we precompute once at class init.
+     * Mirrors libwebp's {@code enc->proba.remapped_costs[ctype][n][ctx]}, rebuilt every
+     * frame via {@code VP8CalculateLevelCosts}.
      */
-    static final int[][][][] REMAPPED_COSTS =
-        new int[VP8Tables.NUM_TYPES][16][VP8Tables.NUM_CTX][MAX_VARIABLE_LEVEL + 1];
+    static final class TokenCosts {
 
-    static {
-        int[][][][] levelCost =
-            new int[VP8Tables.NUM_TYPES][VP8Tables.NUM_BANDS][VP8Tables.NUM_CTX][MAX_VARIABLE_LEVEL + 1];
-        for (int type = 0; type < VP8Tables.NUM_TYPES; type++) {
-            for (int band = 0; band < VP8Tables.NUM_BANDS; band++) {
-                for (int ctx = 0; ctx < VP8Tables.NUM_CTX; ctx++) {
-                    int[] p = VP8Tables.COEFFS_PROBA_0[type][band][ctx];
-                    int cost0 = (ctx > 0) ? bitCost(1, p[0]) : 0;
-                    int costBase = bitCost(1, p[1]) + cost0;
-                    int[] table = levelCost[type][band][ctx];
-                    table[0] = bitCost(0, p[1]) + cost0;
-                    for (int v = 1; v <= MAX_VARIABLE_LEVEL; v++)
-                        table[v] = costBase + variableLevelCost(v, p);
+        /** Active coefficient probabilities, indexed {@code [type][band][ctx][prob]}. */
+        final int[][][][] proba;
+        /** Per-position variable-level cost table, indexed {@code [type][n][ctx][level]}. */
+        final int[][][][] remapped;
+
+        TokenCosts(int @NotNull [][][][] proba) {
+            this.proba = proba;
+            this.remapped = buildRemapped(proba);
+        }
+
+        private static int[][][][] buildRemapped(int[][][][] proba) {
+            int[][][][] levelCost =
+                new int[VP8Tables.NUM_TYPES][VP8Tables.NUM_BANDS][VP8Tables.NUM_CTX][MAX_VARIABLE_LEVEL + 1];
+            for (int type = 0; type < VP8Tables.NUM_TYPES; type++) {
+                for (int band = 0; band < VP8Tables.NUM_BANDS; band++) {
+                    for (int ctx = 0; ctx < VP8Tables.NUM_CTX; ctx++) {
+                        int[] p = proba[type][band][ctx];
+                        int cost0 = (ctx > 0) ? bitCost(1, p[0]) : 0;
+                        int costBase = bitCost(1, p[1]) + cost0;
+                        int[] table = levelCost[type][band][ctx];
+                        table[0] = bitCost(0, p[1]) + cost0;
+                        for (int v = 1; v <= MAX_VARIABLE_LEVEL; v++)
+                            table[v] = costBase + variableLevelCost(v, p);
+                    }
                 }
             }
-        }
-        for (int type = 0; type < VP8Tables.NUM_TYPES; type++) {
-            for (int n = 0; n < 16; n++) {
-                int band = VP8Tables.COEF_BANDS[n];
-                for (int ctx = 0; ctx < VP8Tables.NUM_CTX; ctx++)
-                    REMAPPED_COSTS[type][n][ctx] = levelCost[type][band][ctx];
+            int[][][][] out = new int[VP8Tables.NUM_TYPES][16][VP8Tables.NUM_CTX][];
+            for (int type = 0; type < VP8Tables.NUM_TYPES; type++) {
+                for (int n = 0; n < 16; n++) {
+                    int band = VP8Tables.COEF_BANDS[n];
+                    for (int ctx = 0; ctx < VP8Tables.NUM_CTX; ctx++)
+                        out[type][n][ctx] = levelCost[type][band][ctx];
+                }
             }
+            return out;
         }
     }
 
@@ -440,7 +453,7 @@ final class VP8Costs {
 
     /**
      * Cost in {@code 1/256} bits of coding {@code level} using precomputed table {@code table}
-     * (which is a row of {@link #REMAPPED_COSTS}). Mirrors libwebp's {@code VP8LevelCost}.
+     * (which is a row of {@link TokenCosts#remapped}). Mirrors libwebp's {@code VP8LevelCost}.
      */
     static int levelCost(int @NotNull [] table, int level) {
         return LEVEL_FIXED_COSTS[level] + table[Math.min(level, MAX_VARIABLE_LEVEL)];
@@ -541,6 +554,7 @@ final class VP8Costs {
      * that has already been quantized into zig-zag order. Line-for-line port of libwebp's
      * {@code GetResidualCost_C} ({@code src/enc/cost.c}).
      *
+     * @param costs per-frame token proba + derived remapped cost table
      * @param ctx0 initial surrounding-nonzero context ({@code top + left}, 0..2)
      * @param coeffType one of {@code TYPE_I16_AC}, {@code TYPE_I16_DC}, {@code TYPE_CHROMA_A},
      *                  {@code TYPE_I4_AC}
@@ -548,23 +562,26 @@ final class VP8Costs {
      * @param zigZagCoeffs 16 quantized coefficients in zig-zag order
      * @return bit cost in {@code 1/256} bits
      */
-    static int residualCost(int ctx0, int coeffType, int first, short @NotNull [] zigZagCoeffs) {
+    static int residualCost(
+        @NotNull TokenCosts costs, int ctx0, int coeffType, int first, short @NotNull [] zigZagCoeffs
+    ) {
         int last = -1;
         for (int i = 15; i >= first; i--) {
             if (zigZagCoeffs[i] != 0) { last = i; break; }
         }
-        int p0 = VP8Tables.COEFFS_PROBA_0[coeffType][first][ctx0][0];
+        int p0 = costs.proba[coeffType][first][ctx0][0];
         if (last < 0)
             return bitCost(0, p0);
 
-        int[] t = REMAPPED_COSTS[coeffType][first][ctx0];
+        int[][][][] remapped = costs.remapped;
+        int[] t = remapped[coeffType][first][ctx0];
         int cost = (ctx0 == 0) ? bitCost(1, p0) : 0;
         int n;
         for (n = first; n < last; n++) {
             int v = Math.abs(zigZagCoeffs[n]);
             int ctx = (v >= 2) ? 2 : v;
             cost += levelCost(t, v);
-            t = REMAPPED_COSTS[coeffType][n + 1][ctx];
+            t = remapped[coeffType][n + 1][ctx];
         }
         // Last coefficient is always non-zero.
         int v = Math.abs(zigZagCoeffs[n]);
@@ -572,7 +589,7 @@ final class VP8Costs {
         if (n < 15) {
             int band = VP8Tables.COEF_BANDS[n + 1];
             int ctx = (v == 1) ? 1 : 2;
-            int lastP0 = VP8Tables.COEFFS_PROBA_0[coeffType][band][ctx][0];
+            int lastP0 = costs.proba[coeffType][band][ctx][0];
             cost += bitCost(0, lastP0);
         }
         return cost;

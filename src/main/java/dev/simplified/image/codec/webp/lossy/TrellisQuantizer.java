@@ -10,8 +10,9 @@ import org.jetbrains.annotations.NotNull;
  * levels (the plain-quant result and {@code +1}) and picks the path through the trellis
  * whose rate-distortion score {@code rate * lambda + 256 * distortion} is minimum.
  * <p>
- * Rate is computed using {@link VP8Costs#REMAPPED_COSTS}; distortion is the weighted
- * squared error between the dequantized level and the original coefficient.
+ * Rate is computed from the per-frame {@link VP8Costs.TokenCosts} bundle (post proba
+ * update); distortion is the weighted squared error between the dequantized level and
+ * the original coefficient.
  */
 final class TrellisQuantizer {
 
@@ -59,6 +60,7 @@ final class TrellisQuantizer {
      * and dequantized coefficients (raster order) back into {@code in}, matching libwebp's
      * convention so the caller can feed {@code in} directly to the inverse DCT.
      *
+     * @param costs per-frame token proba + derived remapped cost table
      * @param in raster-order DCT coefficients; on return, contains dequantized values
      * @param out zig-zag-order quantized levels (output); {@code out[0]} is preserved for
      *            {@code TYPE_I16_AC} (DC is carried by Y2)
@@ -69,6 +71,7 @@ final class TrellisQuantizer {
      * @return {@code 1} if at least one non-zero coefficient remains after trellis, else {@code 0}
      */
     static int quantize(
+        @NotNull VP8Costs.TokenCosts costs,
         short @NotNull [] in, short @NotNull [] out, int ctx0, int coeffType,
         @NotNull QuantMatrix mtx, int lambda
     ) {
@@ -85,7 +88,7 @@ final class TrellisQuantizer {
         int curPhase = 0;
 
         int[] bestPath = { -1, -1, -1 }; // {last, nodeIdx, prevIdx}
-        int[][][] remapped = VP8Costs.REMAPPED_COSTS[coeffType];
+        int[][][] remapped = costs.remapped[coeffType];
 
         // Position of the "last interesting coefficient" - libwebp widens by +1 to give the
         // trellis room to turn zero coefficients into non-zero ones when it reduces total cost.
@@ -101,7 +104,7 @@ final class TrellisQuantizer {
             if (last < 15) last++;
         }
 
-        int lastProba = VP8Tables.COEFFS_PROBA_0[coeffType][VP8Tables.COEF_BANDS[first]][ctx0][0];
+        int lastProba = costs.proba[coeffType][VP8Tables.COEF_BANDS[first]][ctx0][0];
 
         // Skip-block (all-zero) score is the max achievable without any non-zero levels.
         long bestScore = rdScore(lambda, VP8Costs.bitCost(0, lastProba), 0);
@@ -174,7 +177,7 @@ final class TrellisQuantizer {
                 // Record best terminal node - "stop here, EOB or end-of-block-at-15".
                 if (level != 0 && bestCur < bestScore) {
                     long lastPosCost = (n < 15)
-                        ? VP8Costs.bitCost(0, VP8Tables.COEFFS_PROBA_0[coeffType][band][ctx][0])
+                        ? VP8Costs.bitCost(0, costs.proba[coeffType][band][ctx][0])
                         : 0;
                     long lastPosScore = rdScore(lambda, (int) lastPosCost, 0);
                     long score = bestCur + lastPosScore;

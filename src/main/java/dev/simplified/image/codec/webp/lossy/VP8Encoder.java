@@ -190,6 +190,12 @@ public final class VP8Encoder {
         final int[][][][][] tokenBranches =
             new int[VP8Tables.NUM_TYPES][VP8Tables.NUM_BANDS][VP8Tables.NUM_CTX][VP8Tables.NUM_PROBAS][2];
 
+        // Derived per-frame residual-cost bundle, built from tokenProba after writeFrameHeader
+        // finalises the updates. Threaded through residual-cost estimation and trellis
+        // quantization so R-D decisions use post-update probs instead of COEFFS_PROBA_0
+        // defaults.
+        VP8Costs.TokenCosts tokenCosts;
+
         State(int width, int height, int qi, boolean isKeyframe, @Nullable VP8EncoderSession session) {
             this.isKeyframe = isKeyframe;
             this.session = session;
@@ -396,6 +402,11 @@ public final class VP8Encoder {
         System.arraycopy(modeLfDelta, 0, s.modeLfDelta, 0, 4);
 
         writeFrameHeader(s, qi);
+
+        // Freeze the post-update coefficient probs into a derived cost bundle for the
+        // R-D pass. refresh_entropy_probs=0 means tokenProba is stable for the rest of
+        // the frame, so a single build suffices.
+        s.tokenCosts = new VP8Costs.TokenCosts(s.tokenProba);
 
         // Per-MB encoding loop.
         int[] argb = pixels.pixels();
@@ -1505,7 +1516,7 @@ public final class VP8Encoder {
             for (int bx = 0; bx < 4; bx++) {
                 int ctx = topLocal[bx] + leftLocal[by];
                 short[] zz = yAcZigZag[by * 4 + bx];
-                rate += VP8Costs.residualCost(ctx, VP8Tables.TYPE_I4_AC, 0, zz);
+                rate += VP8Costs.residualCost(s.tokenCosts, ctx, VP8Tables.TYPE_I4_AC, 0, zz);
                 int nz = 0;
                 for (int i = 0; i < 16; i++) if (zz[i] != 0) { nz = 1; break; }
                 topLocal[bx] = nz;
@@ -1886,7 +1897,7 @@ public final class VP8Encoder {
         short[] y2Dct = new short[16];
         DCT.forwardWHT(y2Raw, y2Dct);
         short[] y2ZigZag = plainQuantZigZag(y2Dct, s.y2Dc, s.y2Ac);
-        int rate = VP8Costs.residualCost(topNzY2 + leftNzY2, VP8Tables.TYPE_I16_DC, 0, y2ZigZag);
+        int rate = VP8Costs.residualCost(s.tokenCosts, topNzY2 + leftNzY2, VP8Tables.TYPE_I16_DC, 0, y2ZigZag);
 
         // y2Dct has been overwritten with raster-order dequantized values by plainQuantZigZag.
         // Inverse WHT to recover per-sub-block DC values for reconstruction.
@@ -1901,9 +1912,9 @@ public final class VP8Encoder {
                 short[] dct = yDctRaster[by * 4 + bx]; // DC was already zeroed
                 short[] zz = new short[16];
                 int nz = TrellisQuantizer.quantize(
-                    dct, zz, ctx, VP8Tables.TYPE_I16_AC, s.y1Mtx, s.lambdaTrellisI16);
+                    s.tokenCosts, dct, zz, ctx, VP8Tables.TYPE_I16_AC, s.y1Mtx, s.lambdaTrellisI16);
                 yAcZigZag[by * 4 + bx] = zz;
-                rate += VP8Costs.residualCost(ctx, VP8Tables.TYPE_I16_AC, 1, zz);
+                rate += VP8Costs.residualCost(s.tokenCosts, ctx, VP8Tables.TYPE_I16_AC, 1, zz);
                 topNz[bx] = nz;
                 leftNz[by] = nz;
             }
@@ -1982,11 +1993,11 @@ public final class VP8Encoder {
                 int ctx = localTop[bx] + localLeft[by];
                 short[] zz = new short[16];
                 int nz = TrellisQuantizer.quantize(
-                    dct, zz, ctx, VP8Tables.TYPE_CHROMA_A, s.uvMtx, s.lambdaTrellisUv);
+                    s.tokenCosts, dct, zz, ctx, VP8Tables.TYPE_CHROMA_A, s.uvMtx, s.lambdaTrellisUv);
                 dequant[by * 2 + bx] = dct;
                 zzBlocks[by * 2 + bx] = zz;
                 nzFlags[by * 2 + bx] = nz;
-                rate += VP8Costs.residualCost(ctx, VP8Tables.TYPE_CHROMA_A, 0, zz);
+                rate += VP8Costs.residualCost(s.tokenCosts, ctx, VP8Tables.TYPE_CHROMA_A, 0, zz);
                 localTop[bx] = nz;
                 localLeft[by] = nz;
             }
@@ -2142,7 +2153,7 @@ public final class VP8Encoder {
                     // zig-zag-order quantized levels).
                     java.util.Arrays.fill(candZigZag, (short) 0);
                     int nz = TrellisQuantizer.quantize(
-                        candDeq, candZigZag, ctxNz, VP8Tables.TYPE_I4_AC, s.y1Mtx, s.lambdaTrellisI4);
+                        s.tokenCosts, candDeq, candZigZag, ctxNz, VP8Tables.TYPE_I4_AC, s.y1Mtx, s.lambdaTrellisI4);
 
                     DCT.inverseDCT(candDeq, candResidual);
                     for (int i = 0; i < 16; i++)
