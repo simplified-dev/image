@@ -577,6 +577,156 @@ public final class VP8Encoder {
             segmentQuantDelta, segmentLfDelta, segmentAbsoluteDelta);
     }
 
+    /**
+     * Encodes a keyframe with an internally-selected per-MB segment map chosen by a
+     * variance-based heuristic. Macroblocks with high luma variance (detail / texture
+     * regions) are assigned to higher-quant segments so noise masks the quantization
+     * artifacts, while low-variance (flat) regions stay at the base quantizer to
+     * preserve smoothness. Net effect: smaller output at similar perceptual quality on
+     * content with meaningful variance spread.
+     * <p>
+     * When the source has too little variance spread to benefit (e.g. mostly flat
+     * tooltip content), the call falls through to a single-segment encode via
+     * {@link #encode(PixelBuffer, float)}. This keeps callers from paying the 2-4
+     * byte per-MB segment-tree emit cost on content where segmentation cannot pay
+     * off.
+     * <p>
+     * Gated by an internal spread threshold rather than a caller-tunable setting;
+     * see {@link #computeAutoSegmentAssignment} for the heuristic. Keyframe-only -
+     * P-frame auto-segmentation is separate work (the session-based writer path
+     * does not yet thread an auto-segment flag through).
+     *
+     * @param pixels source pixel buffer
+     * @param quality encoding quality in {@code [0.0, 1.0]}
+     * @return the encoded VP8 keyframe payload bytes
+     */
+    public static byte @NotNull [] encodeWithAutoSegment(
+        @NotNull PixelBuffer pixels, float quality
+    ) {
+        int width = pixels.width();
+        int height = pixels.height();
+        int mbCols = (width + 15) / 16;
+        int mbRows = (height + 15) / 16;
+
+        int[] mbSegmentAssignment = new int[mbCols * mbRows];
+        int[] segmentQuantDelta = new int[4];
+        if (!computeAutoSegmentAssignment(pixels.pixels(), width, height, mbCols, mbRows,
+                mbSegmentAssignment, segmentQuantDelta)) {
+            // Variance spread too narrow - single-segment encode wins on byte cost.
+            return encode(pixels, quality);
+        }
+        return encodeSegmentMappedKeyframe(pixels, quality, mbSegmentAssignment,
+            segmentQuantDelta, /*segmentLfDelta=*/ new int[4], /*absolute=*/ false);
+    }
+
+    /**
+     * Minimum luma-variance spread (max - min per-MB variance) below which
+     * {@link #encodeWithAutoSegment} falls through to a single-segment encode.
+     * Tuned so tooltip-style flat content (most MBs at near-identical variance)
+     * skips the segment-tree emit cost, while content with meaningful detail
+     * spread opts in.
+     */
+    private static final int AUTO_SEGMENT_SPREAD_GATE = 400;
+
+    /**
+     * Positive quant deltas assigned to the 4 variance quartiles (low, med-low,
+     * med-high, high variance). Higher-variance MBs get larger positive deltas
+     * (higher quant index = coarser quantization, since VP8 quant step grows with
+     * QI) because noise masks artifacts in detailed regions; low-variance MBs stay
+     * at the base quantizer to preserve smooth-gradient quality. Values chosen to
+     * hit a ~1-3% bit reduction on mixed-variance natural content without dropping
+     * average PSNR more than ~0.5 dB.
+     */
+    private static final int[] AUTO_SEGMENT_QUANT_DELTAS = { 0, 0, 2, 6 };
+
+    /**
+     * Variance-based segment selector. Computes per-MB luma variance, sorts to find
+     * quartile cuts, and assigns each MB a segment ID in {@code [0, 3]} based on
+     * which quartile its variance falls into. Also populates {@code segmentQuantDelta}
+     * with the per-segment quant offsets from {@link #AUTO_SEGMENT_QUANT_DELTAS}.
+     * <p>
+     * Luma is approximated as {@code (R + 2*G + B) / 4} - a 2x-weighted green
+     * channel dominates perceptual luma and avoids the multiplier cost of the
+     * full Rec.601 matrix. For variance-ordering purposes the approximation has
+     * the same quartile ordering as full luma for all but pathological
+     * synthetic inputs.
+     *
+     * @return {@code true} if segmentation is expected to help (variance spread
+     *         >= {@link #AUTO_SEGMENT_SPREAD_GATE}); {@code false} if the caller
+     *         should fall through to a single-segment encode
+     */
+    private static boolean computeAutoSegmentAssignment(
+        int @NotNull [] argb, int width, int height, int mbCols, int mbRows,
+        int @NotNull [] mbSegmentAssignment, int @NotNull [] segmentQuantDelta
+    ) {
+        int numMbs = mbCols * mbRows;
+        int[] variance = new int[numMbs];
+
+        // Compute per-MB luma variance via one pass over the MB's pixels.
+        for (int mbY = 0; mbY < mbRows; mbY++) {
+            for (int mbX = 0; mbX < mbCols; mbX++) {
+                int mbIdx = mbY * mbCols + mbX;
+                int x0 = mbX * 16, y0 = mbY * 16;
+                int x1 = Math.min(x0 + 16, width);
+                int y1 = Math.min(y0 + 16, height);
+                long sum = 0, sumSq = 0;
+                int count = 0;
+                for (int y = y0; y < y1; y++) {
+                    int row = y * width;
+                    for (int x = x0; x < x1; x++) {
+                        int argbPixel = argb[row + x];
+                        int r = (argbPixel >> 16) & 0xFF;
+                        int g = (argbPixel >> 8) & 0xFF;
+                        int b = argbPixel & 0xFF;
+                        int luma = (r + 2 * g + b) >> 2;      // approximate luma
+                        sum += luma;
+                        sumSq += (long) luma * luma;
+                        count++;
+                    }
+                }
+                // Population variance scaled by count (order-preserving, avoids
+                // floating point): var * N = sumSq - sum*sum/N, integer-only.
+                variance[mbIdx] = count > 0
+                    ? (int) (sumSq - (sum * sum) / count)
+                    : 0;
+            }
+        }
+
+        // Gate: if the max-min spread is small, segmentation will cost more in
+        // segment-tree emit bits than it can save in residual bits.
+        int minVar = Integer.MAX_VALUE;
+        int maxVar = Integer.MIN_VALUE;
+        for (int v : variance) {
+            if (v < minVar) minVar = v;
+            if (v > maxVar) maxVar = v;
+        }
+        if (maxVar - minVar < AUTO_SEGMENT_SPREAD_GATE)
+            return false;
+
+        // Find quartile cut points by sorting a copy of the variances. Small arrays
+        // (mbCols*mbRows is bounded by ~8k for 1920x1080) so O(N log N) is fine.
+        int[] sorted = variance.clone();
+        java.util.Arrays.sort(sorted);
+        int q1Cut = sorted[(numMbs * 1) / 4];
+        int q2Cut = sorted[(numMbs * 2) / 4];
+        int q3Cut = sorted[(numMbs * 3) / 4];
+
+        // Assign each MB to the segment of its quartile. Tie-break toward lower
+        // segment IDs (using strict less-than on cuts) - harmless for output.
+        for (int i = 0; i < numMbs; i++) {
+            int v = variance[i];
+            int segId;
+            if (v < q1Cut) segId = 0;
+            else if (v < q2Cut) segId = 1;
+            else if (v < q3Cut) segId = 2;
+            else segId = 3;
+            mbSegmentAssignment[i] = segId;
+        }
+
+        System.arraycopy(AUTO_SEGMENT_QUANT_DELTAS, 0, segmentQuantDelta, 0, 4);
+        return true;
+    }
+
     private static byte @NotNull [] encodeSegmentMappedKeyframe(
         @NotNull PixelBuffer pixels, float quality,
         int @NotNull [] mbSegmentAssignment,

@@ -1792,6 +1792,101 @@ public class VP8CodecTest {
                     baseStream.length, lowerQualityStream.length));
         }
 
+        @Test @DisplayName("conformance: auto-segment keyframe reduces bytes on high-variance content while keeping PSNR healthy")
+        void autoSegmentKeyframeImprovesCompression() {
+            // 64x64 source: left half is a smooth low-variance gradient, right half
+            // carries structured alternating horizontal stripes that give each right-
+            // half MB large per-MB luma variance while still being a highly-compressible
+            // signal (a DC-plus-basis-function pattern). The auto-segment heuristic
+            // should bucket left-half MBs into low-variance segments (kept at base
+            // quant) and right-half MBs into high-variance segments (bumped to higher
+            // quant where the eye's noise masking absorbs the extra quantization
+            // error). Net byte output must drop vs the single-segment baseline, and
+            // decoded PSNR must stay healthy - this is a realistic-variance source
+            // not a chaotic-noise worst case.
+            int w = 64, h = 64;
+            PixelBuffer src = PixelBuffer.create(w, h);
+            for (int y = 0; y < h; y++) {
+                for (int x = 0; x < w; x++) {
+                    int argb;
+                    if (x < w / 2) {
+                        // Smooth luma gradient, low per-MB variance.
+                        int v = (x + y) * 2;
+                        argb = 0xFF000000 | (v << 16) | (v << 8) | v;
+                    } else {
+                        // 2-row-tall alternating bright/dark stripes. High per-MB
+                        // variance (~8000) but structured, compresses well.
+                        int v = ((y >> 1) & 1) != 0 ? 200 : 40;
+                        argb = 0xFF000000 | (v << 16) | (v << 8) | v;
+                    }
+                    src.setPixel(x, y, argb);
+                }
+            }
+
+            float quality = 0.5f;
+            byte[] baseline = VP8Encoder.encode(src, quality);
+            byte[] autoSeg = VP8Encoder.encodeWithAutoSegment(src, quality);
+
+            // Auto-segment must not accidentally grow the bitstream on content that
+            // triggered it (the spread gate passed, so segmentation was enabled).
+            if (autoSeg.length >= baseline.length)
+                throw new AssertionError(String.format(
+                    "auto-segment did not reduce bytes on high-variance content: "
+                    + "baseline=%d auto=%d (expected strictly smaller)",
+                    baseline.length, autoSeg.length));
+
+            // Decoded PSNR must stay reasonable - auto-segment trades a small PSNR
+            // drop in high-variance regions for bit savings, but shouldn't collapse
+            // overall quality on structured content.
+            PixelBuffer decoded = VP8Decoder.decode(autoSeg);
+            long sse = 0;
+            long pixelCount = (long) w * h * 3;
+            for (int y = 0; y < h; y++)
+                for (int x = 0; x < w; x++) {
+                    int a = src.getPixel(x, y);
+                    int b = decoded.getPixel(x, y);
+                    for (int shift : new int[] { 0, 8, 16 }) {
+                        int d = ((a >> shift) & 0xFF) - ((b >> shift) & 0xFF);
+                        sse += (long) d * d;
+                    }
+                }
+            double mse = (double) sse / pixelCount;
+            double psnr = mse > 0 ? 10.0 * Math.log10((255.0 * 255.0) / mse) : 99.0;
+            if (psnr < 25.0)
+                throw new AssertionError(String.format(
+                    "auto-segment PSNR regressed too far: psnr=%.2f dB "
+                    + "(expected >= 25 dB at q=0.5 on structured high-variance source)",
+                    psnr));
+        }
+
+        @Test @DisplayName("conformance: auto-segment falls through to single-segment encode on flat content")
+        void autoSegmentFallsThroughOnFlatContent() {
+            // Solid-color source has zero per-MB variance everywhere. The heuristic's
+            // spread-gate should reject segmentation entirely and fall through to the
+            // normal single-segment VP8Encoder.encode path, producing byte-identical
+            // output (no wasted segment-tree emit bits on content that can't benefit).
+            int w = 32, h = 32;
+            PixelBuffer src = PixelBuffer.create(w, h);
+            for (int y = 0; y < h; y++)
+                for (int x = 0; x < w; x++)
+                    src.setPixel(x, y, 0xFF808080);
+
+            byte[] baseline = VP8Encoder.encode(src, 0.5f);
+            byte[] autoSeg = VP8Encoder.encodeWithAutoSegment(src, 0.5f);
+
+            if (baseline.length != autoSeg.length)
+                throw new AssertionError(String.format(
+                    "auto-segment did not fall through on flat content: "
+                    + "baseline=%d auto=%d (expected equal - spread gate should reject)",
+                    baseline.length, autoSeg.length));
+            for (int i = 0; i < baseline.length; i++)
+                if (baseline[i] != autoSeg[i])
+                    throw new AssertionError(String.format(
+                        "auto-segment byte %d differs on flat content: "
+                        + "baseline=0x%02X auto=0x%02X (fall-through must be bit-exact)",
+                        i, baseline[i] & 0xFF, autoSeg[i] & 0xFF));
+        }
+
         @Test @DisplayName("conformance: parallel motion-search prepass produces byte-identical P-frame bitstream")
         void motionSearchThreadingIsBitExact() {
             // 48x48 translating P-frame sequence. Motion search fires for every inter
