@@ -885,6 +885,54 @@ public class VP8CodecTest {
                     throw new AssertionError("ALTREF mutated by default P-frame at index " + i);
         }
 
+        @Test @DisplayName("conformance: Y-mode + UV-mode proba updates round-trip through intra-in-P fallback chain (RFC 6386 section 19.2)")
+        void yModeUvModeProbaUpdatesRoundTripThroughIntraInP() {
+            // Multi-frame sequence where each P-frame is a completely different solid
+            // colour. Motion compensation produces useless predictions, so every MB
+            // falls back to intra-in-P coding - which means every frame accumulates
+            // Y-mode and UV-mode tree branch observations. By the 3rd P-frame the
+            // encoder has prev-frame stats to potentially emit a proba update; the
+            // decoder (already correct for these updates) must roundtrip regardless
+            // of whether an update fires.
+            int w = 32, h = 32;
+            int[] colors = { 0xFF203040, 0xFFE0A030, 0xFF30C0E0, 0xFF9030F0 };
+            PixelBuffer[] frames = new PixelBuffer[colors.length];
+            for (int i = 0; i < colors.length; i++) {
+                PixelBuffer f = PixelBuffer.create(w, h);
+                f.fill(colors[i]);
+                frames[i] = f;
+            }
+
+            VP8EncoderSession enc = new VP8EncoderSession();
+            VP8DecoderSession dec = new VP8DecoderSession();
+            PixelBuffer[] decoded = new PixelBuffer[colors.length];
+            for (int i = 0; i < colors.length; i++) {
+                byte[] bytes = enc.encode(frames[i], 0.75f, i == 0);
+                decoded[i] = dec.decode(bytes);
+            }
+
+            // Every decoded frame must be close to its source (bright solid colour) -
+            // any Y-mode / UV-mode proba divergence between enc/dec would corrupt the
+            // intra tree decode and send pixels to random modes.
+            for (int i = 0; i < colors.length; i++) {
+                int expectedR = (colors[i] >> 16) & 0xFF;
+                int expectedG = (colors[i] >> 8) & 0xFF;
+                int expectedB = colors[i] & 0xFF;
+                for (int y = 8; y < h - 8; y++) {
+                    for (int x = 8; x < w - 8; x++) {
+                        int p = decoded[i].getPixel(x, y);
+                        int dr = Math.abs(((p >> 16) & 0xFF) - expectedR);
+                        int dg = Math.abs(((p >> 8) & 0xFF) - expectedG);
+                        int db = Math.abs((p & 0xFF) - expectedB);
+                        if (dr > 20 || dg > 20 || db > 20)
+                            throw new AssertionError(String.format(
+                                "frame %d pixel (%d,%d) decoded %06X, expected ~%06X",
+                                i, x, y, p & 0xFFFFFF, colors[i] & 0xFFFFFF));
+                    }
+                }
+            }
+        }
+
         @Test @DisplayName("conformance: MV component proba updates round-trip across a 3-frame session (RFC 6386 section 19.2)")
         void mvProbaUpdatesRoundTripAcrossChain() {
             // A 3-frame translating sequence (keyframe + 2 P-frames) builds enough NEWMV

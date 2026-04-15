@@ -169,6 +169,18 @@ public final class VP8Encoder {
         // with one-frame lag (libvpx's approach - avoids a two-pass encode).
         final int[][][] mvBranches = new int[2][VP8Tables.NUM_MV_PROBAS][2];
 
+        // Per-frame Y-mode / UV-mode probabilities (RFC 6386 section 16.2). For P-frames
+        // the header may emit an all-or-nothing update block overriding the default
+        // INTER table; for keyframes these remain at the defaults.
+        final int[] yModeProba;
+        final int[] uvModeProba;
+
+        // Per-frame Y-mode / UV-mode tree branch observations, accumulated across every
+        // intra-in-P MB's tree emit. Stashed on the session at end-of-frame for the next
+        // frame's header emit to compute whether a proba update is worth emitting.
+        final int[][] yModeBranches = new int[VP8Tables.YMODE_PROBA_INTER.length][2];
+        final int[][] uvModeBranches = new int[VP8Tables.UV_MODE_PROBA_INTER.length][2];
+
         State(int width, int height, int qi, boolean isKeyframe, @Nullable VP8EncoderSession session) {
             this.isKeyframe = isKeyframe;
             this.session = session;
@@ -229,6 +241,11 @@ public final class VP8Encoder {
                     System.arraycopy(session.mvProba[c], 0, this.mvProba[c], 0,
                         VP8Tables.NUM_MV_PROBAS);
             }
+            // Y-mode / UV-mode probs start at the inter-frame defaults every frame.
+            // The decoder re-initialises the same way. Writing an update block in the
+            // header mutates these for the rest of the frame only.
+            this.yModeProba = VP8Tables.YMODE_PROBA_INTER.clone();
+            this.uvModeProba = VP8Tables.UV_MODE_PROBA_INTER.clone();
         }
     }
 
@@ -356,6 +373,8 @@ public final class VP8Encoder {
             for (int c = 0; c < 2; c++)
                 System.arraycopy(s.mvProba[c], 0, session.mvProba[c], 0, VP8Tables.NUM_MV_PROBAS);
             session.prevMvBranches = s.mvBranches;
+            session.prevYModeBranches = s.yModeBranches;
+            session.prevUvModeBranches = s.uvModeBranches;
 
             // Keyframe refreshes all three reference slots (RFC 6386 section 9.7 -
             // keyframes implicitly overwrite LAST, GOLDEN, and ALTREF). P-frames
@@ -508,10 +527,10 @@ public final class VP8Encoder {
             e.encodeUint(INTER_PROB_LAST, 8);    // prob_last
             e.encodeUint(INTER_PROB_GF, 8);      // prob_gf
 
-            // y_mode_probs: update-flag (0 = keep defaults, 4 more bits suppressed).
-            e.encodeBool(0);
-            // uv_mode_probs: update-flag (0 = keep defaults, 3 more bits suppressed).
-            e.encodeBool(0);
+            // y_mode_probs / uv_mode_probs: 1-bit all-or-nothing gate. When set, 4 or 3
+            // full 8-bit probs follow. Uses one-frame-lag stats on the session to decide.
+            emitIntraModeProbaUpdate(e, s.yModeProba, s.session != null ? s.session.prevYModeBranches : null);
+            emitIntraModeProbaUpdate(e, s.uvModeProba, s.session != null ? s.session.prevUvModeBranches : null);
 
             // mv_prob_update: 2 components * 19 probs. Uses one-frame-lag branch counts
             // from the prior frame (via session.prevMvBranches) to pick optimal probs
@@ -584,6 +603,78 @@ public final class VP8Encoder {
                     e.encodeBit(updateFlagProb, 0);
                 }
             }
+        }
+    }
+
+    /**
+     * Emits the all-or-nothing proba-update block for the inter-frame Y-mode (4 slots)
+     * or UV-mode (3 slots) tree (RFC 6386 section 16.2). A single {@code encodeBool}
+     * gate at 50/50 prob controls whether the full {@code slots * 8} bits of new probs
+     * follow. When the update is cost-beneficial the passed {@code probs} array is
+     * mutated to the new values so subsequent MB emits use the updated probs.
+     * <p>
+     * No-op (emits just the 0-gate bit) when {@code prevBranches} is {@code null} or
+     * carries zero observations - matches the first-inter-frame fast path.
+     *
+     * @param e header encoder
+     * @param probs the mutable per-frame proba array (Y-mode or UV-mode)
+     * @param prevBranches prior-frame observations (null when no data yet)
+     */
+    private static void emitIntraModeProbaUpdate(
+        @NotNull BooleanEncoder e, int @NotNull [] probs, int[] @Nullable [] prevBranches
+    ) {
+        if (prevBranches == null) {
+            e.encodeBool(0);
+            return;
+        }
+
+        // Compute optimal prob per slot from observations.
+        int slots = probs.length;
+        int[] optimal = new int[slots];
+        int totalObservations = 0;
+        for (int i = 0; i < slots; i++) {
+            int ct0 = prevBranches[i][0];
+            int ct1 = prevBranches[i][1];
+            int total = ct0 + ct1;
+            totalObservations += total;
+            if (total == 0) {
+                optimal[i] = probs[i];                   // no data: keep current
+                continue;
+            }
+            int rawProb = (ct0 * 256 + total / 2) / total;
+            if (rawProb < 1) rawProb = 1;
+            if (rawProb > 255) rawProb = 255;
+            optimal[i] = rawProb;
+        }
+        // If zero observations anywhere, skip the update entirely.
+        if (totalObservations == 0) {
+            e.encodeBool(0);
+            return;
+        }
+
+        // Cost comparison in 1/256-bit units. Both paths include the 50/50 gate bit
+        // (bitCost = 256 regardless of outcome at prob=128). Update path adds slots * 8
+        // bits of probs payload.
+        long keepCost = 0;
+        long updateCost = 0;
+        for (int i = 0; i < slots; i++) {
+            int ct0 = prevBranches[i][0];
+            int ct1 = prevBranches[i][1];
+            keepCost   += (long) ct0 * VP8Costs.bitCost(0, probs[i])
+                        + (long) ct1 * VP8Costs.bitCost(1, probs[i]);
+            updateCost += (long) ct0 * VP8Costs.bitCost(0, optimal[i])
+                        + (long) ct1 * VP8Costs.bitCost(1, optimal[i]);
+        }
+        updateCost += (long) slots * 8 * 256;            // new probs payload
+
+        if (updateCost < keepCost) {
+            e.encodeBool(1);
+            for (int i = 0; i < slots; i++) {
+                e.encodeUint(optimal[i], 8);
+                probs[i] = optimal[i];
+            }
+        } else {
+            e.encodeBool(0);
         }
     }
 
@@ -877,8 +968,8 @@ public final class VP8Encoder {
             BooleanEncoder h = s.header;
             h.encodeBit(INTER_SKIP_PROBA, 0);
             h.encodeBit(INTER_PROB_INTRA, 0);
-            emitTreeLeaf(h, VP8Tables.YMODE_TREE, yMode16, VP8Tables.YMODE_PROBA_INTER);
-            emitTreeLeaf(h, VP8Tables.UV_MODE_TREE, uvMode, VP8Tables.UV_MODE_PROBA_INTER);
+            emitTreeLeafCounted(h, VP8Tables.YMODE_TREE, yMode16, s.yModeProba, s.yModeBranches);
+            emitTreeLeafCounted(h, VP8Tables.UV_MODE_TREE, uvMode, s.uvModeProba, s.uvModeBranches);
 
             int mbIdx = mbY * s.mbCols + mbX;
             s.mbIsI4x4[mbIdx] = false;
@@ -932,9 +1023,9 @@ public final class VP8Encoder {
             BooleanEncoder h = s.header;
             h.encodeBit(INTER_SKIP_PROBA, 0);
             h.encodeBit(INTER_PROB_INTRA, 0);
-            emitTreeLeaf(h, VP8Tables.YMODE_TREE, IntraPrediction.B_PRED, VP8Tables.YMODE_PROBA_INTER);
+            emitTreeLeafCounted(h, VP8Tables.YMODE_TREE, IntraPrediction.B_PRED, s.yModeProba, s.yModeBranches);
             emitBPredModesInter(s, h, mbX, bpred.modes);
-            emitTreeLeaf(h, VP8Tables.UV_MODE_TREE, uvMode, VP8Tables.UV_MODE_PROBA_INTER);
+            emitTreeLeafCounted(h, VP8Tables.UV_MODE_TREE, uvMode, s.uvModeProba, s.uvModeBranches);
 
             int mbIdx = mbY * s.mbCols + mbX;
             s.mbIsI4x4[mbIdx] = true;
@@ -1206,8 +1297,8 @@ public final class VP8Encoder {
                  + sumSquaredError(mb.cb, reconU)
                  + sumSquaredError(mb.cr, reconV);
 
-        int yModeRate = VP8Costs.treeLeafBitCost(VP8Tables.YMODE_TREE, yMode16, VP8Tables.YMODE_PROBA_INTER);
-        int uvModeRate = VP8Costs.treeLeafBitCost(VP8Tables.UV_MODE_TREE, uvMode, VP8Tables.UV_MODE_PROBA_INTER);
+        int yModeRate = VP8Costs.treeLeafBitCost(VP8Tables.YMODE_TREE, yMode16, s.yModeProba);
+        int uvModeRate = VP8Costs.treeLeafBitCost(VP8Tables.UV_MODE_TREE, uvMode, s.uvModeProba);
         int rate = skipBit0 + baseIntraHeader + yModeRate + uvModeRate
                  + i16.rate + u.rate + v.rate;
         return new IntraInPCandidate(sse, rate, lambda, yMode16, uvMode,
@@ -1254,13 +1345,13 @@ public final class VP8Encoder {
                  + sumSquaredError(mb.cr, reconV);
 
         int yModeRate = VP8Costs.treeLeafBitCost(
-            VP8Tables.YMODE_TREE, IntraPrediction.B_PRED, VP8Tables.YMODE_PROBA_INTER);
+            VP8Tables.YMODE_TREE, IntraPrediction.B_PRED, s.yModeProba);
         int subModesRate = 0;
         for (int i = 0; i < 16; i++)
             subModesRate += VP8Costs.treeLeafBitCost(
                 VP8Tables.BMODE_TREE, bpred.modes[i], VP8Tables.BMODE_PROBA_INTER);
         int uvModeRate = VP8Costs.treeLeafBitCost(
-            VP8Tables.UV_MODE_TREE, uvMode, VP8Tables.UV_MODE_PROBA_INTER);
+            VP8Tables.UV_MODE_TREE, uvMode, s.uvModeProba);
         int bpredLumaTokenRate = bpredLumaTokenRate(s, mbX, bpred.yAc);
         int rate = skipBit0 + baseIntraHeader
                  + yModeRate + subModesRate + uvModeRate
@@ -1590,6 +1681,25 @@ public final class VP8Encoder {
     /** Increments {@code branches[slot][outcome]} when {@code branches} is non-null. */
     private static void countBranch(int[] @Nullable [] branches, int slot, int outcome) {
         if (branches != null) branches[slot][outcome]++;
+    }
+
+    /**
+     * Variant of {@link #emitTreeLeaf} that also records the branch decisions into
+     * {@code branches[slot][outcome]}. Used for the inter-frame Y-mode / UV-mode trees
+     * so the next frame's header emit can compute optimal proba updates.
+     */
+    private static void emitTreeLeafCounted(
+        @NotNull BooleanEncoder h, int @NotNull [] tree, int mode,
+        int @NotNull [] probs, int[] @Nullable [] branches
+    ) {
+        int[] pathBranches = new int[16];
+        int[] pathNodes = new int[16];
+        int depth = findTreePath(tree, 0, -mode, pathBranches, pathNodes, 0);
+        for (int i = 0; i < depth; i++) {
+            int slot = pathNodes[i] >> 1;
+            h.encodeBit(probs[slot], pathBranches[i]);
+            countBranch(branches, slot, pathBranches[i]);
+        }
     }
 
     /** Output of the per-MB 16x16 luma encode: zig-zag coefficients for emit + reconstruction. */

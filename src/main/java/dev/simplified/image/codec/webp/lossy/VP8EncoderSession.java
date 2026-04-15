@@ -72,6 +72,18 @@ public final class VP8EncoderSession {
      */
     int[][] @org.jetbrains.annotations.Nullable [] prevMvBranches;
 
+    /**
+     * Previous frame's Y-mode tree branch counts. Layout {@code [slot][outcome]} with
+     * 4 slots matching {@link VP8Tables#YMODE_PROBA_INTER}. {@code null} until the
+     * first inter-frame with any intra-in-P MBs completes. Used by the header emit to
+     * optionally replace the per-frame Y-mode probabilities (all-or-nothing update,
+     * RFC 6386 section 19.2).
+     */
+    int @org.jetbrains.annotations.Nullable [][] prevYModeBranches;
+
+    /** Previous frame's UV-mode tree branch counts. 3 slots. See {@link #prevYModeBranches}. */
+    int @org.jetbrains.annotations.Nullable [][] prevUvModeBranches;
+
     /** Constructs a new {@code VP8EncoderSession} with no cached references. */
     public VP8EncoderSession() { }
 
@@ -131,6 +143,8 @@ public final class VP8EncoderSession {
         refWidth = refHeight = 0;
         mvProba = VP8DecoderSession.cloneMvProba();
         prevMvBranches = null;
+        prevYModeBranches = null;
+        prevUvModeBranches = null;
     }
 
     /**
