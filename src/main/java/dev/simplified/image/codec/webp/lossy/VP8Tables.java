@@ -484,6 +484,98 @@ final class VP8Tables {
           128, 130, 130,  74, 148, 180, 203, 236, 254, 254 }
     };
 
+    // ── SPLITMV tables (RFC 6386 section 17.3) ──────────────────────────────
+
+    /** SPLITMV partitioning scheme: 16x8 horizontal halves. */
+    static final int MBSPLIT_TOP_BOTTOM = 0;
+    /** SPLITMV partitioning scheme: 8x16 vertical halves. */
+    static final int MBSPLIT_LEFT_RIGHT = 1;
+    /** SPLITMV partitioning scheme: 4 x 8x8 quadrants. */
+    static final int MBSPLIT_QUARTERS = 2;
+    /** SPLITMV partitioning scheme: 16 x 4x4 sub-blocks (all independent). */
+    static final int MBSPLIT_EIGHTS = 3;
+
+    /** Sub-MV reference leaf: inherit LEFT neighbour's MV. */
+    static final int SUB_MV_REF_LEFT = 0;
+    /** Sub-MV reference leaf: inherit ABOVE neighbour's MV. */
+    static final int SUB_MV_REF_ABOVE = 1;
+    /** Sub-MV reference leaf: (0, 0). */
+    static final int SUB_MV_REF_ZERO = 2;
+    /** Sub-MV reference leaf: wire-decoded MV component pair. */
+    static final int SUB_MV_REF_NEW = 3;
+
+    /**
+     * SPLITMV starting-4x4-index-per-slot table (libvpx {@code vp8_mbsplit_offset}
+     * in {@code vp8/common/findnearmv.c}). Indexed {@code [scheme][slot]}. Entries
+     * beyond {@link #MBSPLIT_COUNT}{@code [scheme]} are unused.
+     */
+    static final int[][] MBSPLIT_OFFSET = {
+        { 0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        { 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        { 0, 2, 8, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15 }
+    };
+
+    /** Number of distinct sub-MVs per SPLITMV scheme (libvpx {@code vp8_mbsplit_count}). */
+    static final int[] MBSPLIT_COUNT = { 2, 2, 4, 16 };
+
+    /**
+     * Number of luma-4x4 blocks each sub-MV fills for its scheme. Indexed by scheme.
+     * Matches libvpx's {@code mbsplit_fill_count} in {@code vp8/decoder/decodemv.c}.
+     */
+    static final int[] MBSPLIT_FILL_COUNT = { 8, 8, 4, 1 };
+
+    /**
+     * Fill offsets per SPLITMV scheme: {@code MBSPLIT_FILL_OFFSET[scheme][slot*fillCount + i]}
+     * gives the 4x4 luma-block index that sub-MV {@code slot} populates at position {@code i}.
+     * Matches libvpx's {@code mbsplit_fill_offset} in {@code vp8/decoder/decodemv.c}.
+     */
+    static final int[][] MBSPLIT_FILL_OFFSET = {
+        { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15 },    // TOP_BOTTOM
+        { 0, 1, 4, 5, 8, 9, 12, 13, 2, 3, 6, 7, 10, 11, 14, 15 },    // LEFT_RIGHT
+        { 0, 1, 4, 5, 2, 3, 6, 7, 8, 9, 12, 13, 10, 11, 14, 15 },    // QUARTERS
+        { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15 }     // EIGHTS
+    };
+
+    /**
+     * Scheme-selection tree (libvpx {@code vp8_mbsplit_tree}). 4 leaves:
+     * {@link #MBSPLIT_EIGHTS}, {@link #MBSPLIT_QUARTERS}, {@link #MBSPLIT_TOP_BOTTOM},
+     * {@link #MBSPLIT_LEFT_RIGHT}.
+     */
+    static final int[] MBSPLIT_TREE = {
+        -MBSPLIT_EIGHTS,    2,
+        -MBSPLIT_QUARTERS,  4,
+        -MBSPLIT_TOP_BOTTOM, -MBSPLIT_LEFT_RIGHT
+    };
+
+    /** Default probabilities for {@link #MBSPLIT_TREE} (libvpx {@code vp8_mbsplit_probs}). */
+    static final int[] MBSPLIT_PROBS = { 110, 111, 150 };
+
+    /**
+     * Sub-MV reference tree (libvpx {@code vp8_sub_mv_ref_tree}). 4 leaves:
+     * {@link #SUB_MV_REF_LEFT}, {@link #SUB_MV_REF_ABOVE}, {@link #SUB_MV_REF_ZERO},
+     * {@link #SUB_MV_REF_NEW}.
+     */
+    static final int[] SUB_MV_REF_TREE = {
+        -SUB_MV_REF_LEFT,  2,
+        -SUB_MV_REF_ABOVE, 4,
+        -SUB_MV_REF_ZERO,  -SUB_MV_REF_NEW
+    };
+
+    /**
+     * Context-dependent sub-MV reference probabilities (libvpx {@code vp8_sub_mv_ref_prob2}).
+     * Five 3-entry rows indexed by a context derived from the left and above sub-MV
+     * equality / zero-ness: NORMAL, LEFT_ZERO, ABOVE_ZERO, LEFT_ABOVE_SAME_NONZERO,
+     * LEFT_ABOVE_BOTH_ZERO.
+     */
+    static final int[][] SUB_MV_REF_PROB = {
+        { 147, 136, 18 },   // NORMAL
+        { 106, 145,  1 },   // LEFT_ZERO
+        { 179, 121,  1 },   // ABOVE_ZERO
+        { 223,   1, 34 },   // LEFT_ABOVE_SAME_NONZERO
+        { 208,   1,  1 }    // LEFT_ABOVE_BOTH_ZERO
+    };
+
     /**
      * Probabilities used for the "update this MV probability?" flag per MV-probability
      * slot in the inter-frame header. Matches libwebp's {@code kMVUpdateProba} in
