@@ -442,7 +442,11 @@ public class WebPImageWriter implements ImageWriter {
                     .toArray(),
                 pixels.width(), pixels.height()
             );
-            byte[] vp8lPayload = VP8LEncoder.encode(alphaBuf);
+            // libwebp's ALPH decoder (src/dec/alpha_dec.c's VP8LDecodeAlphaHeader)
+            // disallows the predictor / cross-color / subtract-green transforms; it only
+            // accepts the color-indexing (palette) transform per WebP spec section
+            // "ALPH Chunk". Emit without predictor to keep cross-decode parity.
+            byte[] vp8lPayload = encodeAlphaPlane(alphaBuf);
             // Strip the 5-byte VP8L header. The remainder is byte-aligned because the
             // header is exactly 40 bits.
             int headerBytes = 5;
@@ -457,6 +461,25 @@ public class WebPImageWriter implements ImageWriter {
         result[0] = 0; // filtering=0, compression=0
         System.arraycopy(rawAlpha, 0, result, 1, rawAlpha.length);
         return result;
+    }
+
+    /**
+     * VP8L-encodes an alpha-plane PixelBuffer without the predictor / cross-color /
+     * subtract-green transforms that libwebp's ALPH decoder rejects (see
+     * {@code VP8LDecodeAlphaHeader} in libwebp's {@code src/dec/vp8l_dec.c}). Still
+     * tries palette vs literal x cache off/on and keeps the smallest output, matching
+     * the general {@link VP8LEncoder#encode(PixelBuffer)} heuristic minus the three
+     * disallowed transforms.
+     */
+    private static byte @NotNull [] encodeAlphaPlane(@NotNull PixelBuffer alphaBuf) {
+        byte[] best = null;
+        for (int cacheBits : new int[] { 0, 10 }) {
+            byte[] cand = VP8LEncoder.encode(alphaBuf, VP8LEncoder.TransformMode.NONE, cacheBits);
+            if (best == null || cand.length < best.length) best = cand;
+            cand = VP8LEncoder.encode(alphaBuf, VP8LEncoder.TransformMode.PALETTE, cacheBits);
+            if (cand.length < best.length) best = cand;
+        }
+        return best;
     }
 
 }

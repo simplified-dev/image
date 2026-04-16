@@ -9,6 +9,7 @@ import dev.simplified.image.data.AnimatedImageData;
 import dev.simplified.image.data.FrameBlend;
 import dev.simplified.image.data.FrameDisposal;
 import dev.simplified.image.data.ImageFrame;
+import dev.simplified.image.codec.webp.lossless.VP8LEncoder;
 import dev.simplified.image.pixel.PixelBuffer;
 import org.jetbrains.annotations.NotNull;
 import org.junit.jupiter.api.DisplayName;
@@ -1297,6 +1298,167 @@ class WebPRoundTripTest {
                 "frame count " + frameCount + " != expected " + expectedFrames
                 + "\nfull stdout:\n" + stdout);
         return frames;
+    }
+
+    @Test
+    @DisplayName("diagnostic: re-encode real weapon_ss4 tooltip via current encoder + report size delta")
+    void diagnosticReencodeWeaponSs4() throws Exception {
+        java.nio.file.Path src = java.nio.file.Path.of(
+            "W:/Workspace/Java/SkyBlock-Simplified/asset-renderer/cache/test-lore/weapon_ss4.webp");
+        if (!java.nio.file.Files.exists(src))
+            throw new org.opentest4j.TestAbortedException(
+                "weapon_ss4.webp not present - diagnostic only");
+
+        ImageFactory factory = new ImageFactory();
+        ImageData src_decoded = factory.fromFile(src.toFile());
+        if (!(src_decoded instanceof AnimatedImageData anim))
+            throw new AssertionError("expected AnimatedImageData, got " + src_decoded.getClass());
+
+        int W = anim.getWidth();
+        int H = anim.getHeight();
+        int frameCount = anim.getFrames().size();
+        long srcSize = java.nio.file.Files.size(src);
+
+        File out = outputDir.resolve("weapon_ss4_reencoded.webp").toFile();
+        factory.toFile(anim, ImageFormat.WEBP, out,
+            WebPWriteOptions.builder().isLossless().build());
+
+        long outSize = out.length();
+        System.err.printf("[ss4-reencode] %dx%d %d-frame tooltip | source=%d B | ours=%d B "
+            + "| libwebp-ref=11688 B | ratio-vs-source=%.3f%n",
+            W, H, frameCount, srcSize, outSize, outSize / (double) srcSize);
+
+        // Per-frame unique-color histogram on the PARTIAL (diff-rectangle) frames that
+        // the writer actually feeds to VP8LEncoder, not the full canvas. The writer
+        // extracts bounding-box sub-buffers via FrameDiffUtil before encoding, so any
+        // frame whose partial rect is tiny will both (a) have very few unique colors
+        // and (b) see palette transform overhead exceed the savings.
+        int paletteTotal = 0, literalTotal = 0;
+        PixelBuffer prev = anim.getFrames().get(0).pixels();
+        for (int f = 0; f < frameCount; f++) {
+            PixelBuffer curr = anim.getFrames().get(f).pixels();
+            int[] partial;
+            int partialW, partialH;
+            if (f == 0) {
+                partial = curr.pixels();
+                partialW = W; partialH = H;
+            } else {
+                int[] bbox = dev.simplified.image.codec.webp.FrameDiffUtil.computeBoundingBox(prev, curr);
+                if (bbox == null) { partialW = 1; partialH = 1; partial = new int[]{ curr.pixels()[0] }; }
+                else {
+                    partialW = bbox[2]; partialH = bbox[3];
+                    partial = new int[partialW * partialH];
+                    for (int yy = 0; yy < partialH; yy++)
+                        for (int xx = 0; xx < partialW; xx++)
+                            partial[yy * partialW + xx] = curr.getPixel(bbox[0] + xx, bbox[1] + yy);
+                }
+            }
+            PixelBuffer fb = PixelBuffer.of(partial, partialW, partialH);
+            int lit  = VP8LEncoder.encode(fb, VP8LEncoder.TransformMode.NONE, 0).length;
+            int pal  = VP8LEncoder.encode(fb, VP8LEncoder.TransformMode.PALETTE, 0).length;
+            int pred = VP8LEncoder.encode(fb, VP8LEncoder.TransformMode.PREDICTOR, 0).length;
+            int sg   = VP8LEncoder.encode(fb, VP8LEncoder.TransformMode.SUBTRACT_GREEN, 0).length;
+            int xc   = VP8LEncoder.encode(fb, VP8LEncoder.TransformMode.CROSS_COLOR, 0).length;
+            int cac  = VP8LEncoder.encode(fb, VP8LEncoder.TransformMode.NONE, 10).length;
+            int mh8c  = VP8LEncoder.encode(fb, VP8LEncoder.TransformMode.NONE, 10, 8).length;
+            int mh8   = VP8LEncoder.encode(fb, VP8LEncoder.TransformMode.NONE, 0, 8).length;
+            int mh8sg = VP8LEncoder.encode(fb, VP8LEncoder.TransformMode.SUBTRACT_GREEN, 0, 8).length;
+            int best = Math.min(Math.min(Math.min(lit, pal), Math.min(pred, sg)),
+                Math.min(Math.min(xc, cac), Math.min(Math.min(mh8c, mh8), mh8sg)));
+            paletteTotal += pal;
+            literalTotal += lit;
+            System.err.printf("[ss4-reencode]   frame %2d: %4dx%-4d (%6d px) "
+                + "lit=%4d sg=%4d cache=%4d mh8c=%4d mh8=%4d mh8sg=%4d  best=%4d%n",
+                f, partialW, partialH, partial.length, lit, sg, cac, mh8c, mh8, mh8sg, best);
+            prev = curr;
+        }
+        System.err.printf("[ss4-reencode] TOTAL per-frame VP8L (cache-off A/B): "
+            + "palette=%d B, literal=%d B, delta=%+d B%n",
+            paletteTotal, literalTotal, paletteTotal - literalTotal);
+
+        // Round-trip sanity: our re-encoded output must decode back to the same pixels
+        // as the reference input on every frame.
+        ImageData roundTripped = factory.fromFile(out);
+        if (!(roundTripped instanceof AnimatedImageData rtAnim))
+            throw new AssertionError("round-trip expected AnimatedImageData");
+        if (rtAnim.getFrames().size() != frameCount)
+            throw new AssertionError("frame count mismatch: " + rtAnim.getFrames().size()
+                + " != " + frameCount);
+        for (int f = 0; f < frameCount; f++) {
+            PixelBuffer a = anim.getFrames().get(f).pixels();
+            PixelBuffer b = rtAnim.getFrames().get(f).pixels();
+            for (int y = 0; y < H; y++)
+                for (int x = 0; x < W; x++) {
+                    int pa = a.getPixel(x, y);
+                    int pb = b.getPixel(x, y);
+                    if (pa != pb)
+                        throw new AssertionError(String.format(
+                            "frame %d px (%d,%d) lossless re-encode differs: src=0x%08X got=0x%08X",
+                            f, x, y, pa, pb));
+                }
+        }
+    }
+
+    @Test
+    @DisplayName("diagnostic: tooltip-like 454x260 palette-path output size")
+    void diagnosticTooltipPalettePathSize() throws IOException {
+        // Realistic tooltip: dark background, gold text pixels, grey mid-tones, border.
+        // Has about 4 unique colors - well inside the 1bpp palette envelope (paletteSize=2),
+        // so the output body should be tiny (a packed-index stream + 15-code palette
+        // sub-image). Reports the byte count for tracking vs libwebp's 11,688-byte
+        // reference on the real tooltip animation.
+        PixelBuffer buf = PixelBuffer.create(454, 260);
+        for (int y = 0; y < 260; y++)
+            for (int x = 0; x < 454; x++) {
+                int argb;
+                if (x < 4 || x > 449 || y < 4 || y > 255) argb = 0x505000FF;
+                else if ((x + y) % 37 == 0)              argb = 0xFFFFAA00;
+                else if ((x + y) % 53 == 0)              argb = 0xFFAAAAAA;
+                else                                     argb = 0xF0100010;
+                buf.setPixel(x, y, argb);
+            }
+        byte[] payload = VP8LEncoder.encode(buf);
+        System.err.println("[palette-diag] 454x260 tooltip-like palette VP8L: "
+            + payload.length + " bytes (pre-palette literal-path baseline was ~60 KB)");
+        if (payload.length > 5_000)
+            throw new AssertionError("tooltip-like 4-color palette-path output = "
+                + payload.length + " B, expected <= 5000 B (palette may not be firing)");
+    }
+
+    @Test
+    @DisplayName("palette VP8L cross-decodes through libwebp (alpha-varying content exercises palette deltas)")
+    void paletteLosslessLibwebpRoundTrip() throws Exception {
+        // 4-color palette (2 bpp) with three different alphas forces the palette sub-image
+        // to carry non-zero deltas on every channel, so a broken delta-encode or sub-image
+        // emit would surface as libwebp rejecting the file or decoding wrong pixels.
+        // Odd width (29) exercises the partial-tail-cell branch of the packing loop.
+        int W = 29, H = 17;
+        int[] colors = { 0x80112233, 0xFF445566, 0x40778899, 0xFFAABBCC };
+        PixelBuffer buf = PixelBuffer.create(W, H);
+        for (int y = 0; y < H; y++)
+            for (int x = 0; x < W; x++)
+                buf.setPixel(x, y, colors[(x + 3 * y) & 3]);
+
+        var image = new StaticImageData(ImageFrame.of(buf));
+        File out = outputDir.resolve("palette_lossless_libwebp.webp").toFile();
+        new ImageFactory().toFile(image, ImageFormat.WEBP, out,
+            WebPWriteOptions.builder().isLossless().build());
+
+        int[] decoded;
+        try {
+            decoded = decodeAlphaWithLibwebp(out, W, H);
+        } catch (org.opentest4j.TestAbortedException abort) {
+            throw abort;   // self-skip when python/webp unavailable
+        }
+        for (int y = 0; y < H; y++)
+            for (int x = 0; x < W; x++) {
+                int expectedAlpha = (colors[(x + 3 * y) & 3] >>> 24) & 0xFF;
+                int gotAlpha = decoded[y * W + x];
+                if (gotAlpha != expectedAlpha)
+                    throw new AssertionError(String.format(
+                        "libwebp palette alpha mismatch at (%d,%d): expected %d got %d",
+                        x, y, expectedAlpha, gotAlpha));
+            }
     }
 
     @Test

@@ -128,7 +128,7 @@ sealed interface VP8LTransform {
         static final int NUM_FILTERS = 14;
 
         /** Opaque black - the implicit predictor value for the top-left pixel (mode 0). */
-        private static final int ARGB_BLACK = 0xFF000000;
+        static final int ARGB_BLACK = 0xFF000000;
 
         @Override
         public void inverseTransform(int @NotNull [] pixels, int width, int height) {
@@ -183,7 +183,12 @@ sealed interface VP8LTransform {
             pixels[0] = subPixels(pixels[0], ARGB_BLACK);
         }
 
-        private static int predict(int mode, int[] pixels, int x, int y, int width) {
+        /**
+         * Predicts the ARGB value at {@code (x, y)} from its already-decoded top/left
+         * neighbours under the given mode. Shared between the inverse-transform
+         * reconstruction pass and the encoder's mode-selection scorer.
+         */
+        static int predict(int mode, int @NotNull [] pixels, int x, int y, int width) {
             int idx = y * width + x;
             int left = pixels[idx - 1];
             int top = pixels[idx - width];
@@ -232,19 +237,24 @@ sealed interface VP8LTransform {
                     int blockX = x >> blockBits;
                     int transform = transformData[blockY * blockWidth + blockX];
 
-                    int greenToRed = (byte) ((transform >> 0) & 0xFF);
+                    int greenToRed = (byte) (transform & 0xFF);
                     int greenToBlue = (byte) ((transform >> 8) & 0xFF);
                     int redToBlue = (byte) ((transform >> 16) & 0xFF);
 
                     int idx = y * width + x;
                     int argb = pixels[idx];
-                    int green = (argb >> 8) & 0xFF;
-                    int red = ((argb >> 16) & 0xFF) + colorTransformDelta(greenToRed, green);
-                    int blue = (argb & 0xFF)
+                    // Per libwebp ColorSpaceInverseTransform: green is treated as signed
+                    // int8 and the red-to-blue delta uses the NEWLY-RECONSTRUCTED red
+                    // (also signed). Earlier code passed these as unsigned, which round-
+                    // tripped internally but diverged from libwebp on byte values >= 128.
+                    int green = (byte) ((argb >> 8) & 0xFF);
+                    int newRed = (((argb >> 16) & 0xFF) + colorTransformDelta(greenToRed, green)) & 0xFF;
+                    int newBlue = (argb & 0xFF)
                         + colorTransformDelta(greenToBlue, green)
-                        + colorTransformDelta(redToBlue, red & 0xFF);
+                        + colorTransformDelta(redToBlue, (byte) newRed);
+                    newBlue &= 0xFF;
 
-                    pixels[idx] = (argb & 0xFF00FF00) | ((red & 0xFF) << 16) | (blue & 0xFF);
+                    pixels[idx] = (argb & 0xFF00FF00) | (newRed << 16) | newBlue;
                 }
             }
         }
@@ -258,24 +268,34 @@ sealed interface VP8LTransform {
                     int blockX = x >> blockBits;
                     int transform = transformData[blockY * blockWidth + blockX];
 
-                    int greenToRed = (byte) ((transform >> 0) & 0xFF);
+                    int greenToRed = (byte) (transform & 0xFF);
                     int greenToBlue = (byte) ((transform >> 8) & 0xFF);
                     int redToBlue = (byte) ((transform >> 16) & 0xFF);
 
                     int idx = y * width + x;
                     int argb = pixels[idx];
-                    int green = (argb >> 8) & 0xFF;
-                    int red = ((argb >> 16) & 0xFF) - colorTransformDelta(greenToRed, green);
-                    int blue = (argb & 0xFF)
+                    // Per libwebp TransformColor: green signed, red-to-blue delta uses
+                    // ORIGINAL signed red (not the residual). Decoder's inverse uses the
+                    // reconstructed red - and after round-trip the reconstructed red
+                    // equals the original red, so the delta arguments match.
+                    int green = (byte) ((argb >> 8) & 0xFF);
+                    int origRed = (byte) ((argb >> 16) & 0xFF);
+                    int newRed = (((argb >> 16) & 0xFF) - colorTransformDelta(greenToRed, green)) & 0xFF;
+                    int newBlue = (argb & 0xFF)
                         - colorTransformDelta(greenToBlue, green)
-                        - colorTransformDelta(redToBlue, red & 0xFF);
+                        - colorTransformDelta(redToBlue, origRed);
+                    newBlue &= 0xFF;
 
-                    pixels[idx] = (argb & 0xFF00FF00) | ((red & 0xFF) << 16) | (blue & 0xFF);
+                    pixels[idx] = (argb & 0xFF00FF00) | (newRed << 16) | newBlue;
                 }
             }
         }
 
-        private static int colorTransformDelta(int t, int c) {
+        /**
+         * Computes {@code (t * c) >> 5}. Callers must pass both operands as signed
+         * bytes (sign-extended to {@code int}) to match libwebp's semantics.
+         */
+        static int colorTransformDelta(int t, int c) {
             return (t * c) >> 5;
         }
 
