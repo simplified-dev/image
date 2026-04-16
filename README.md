@@ -2,10 +2,6 @@
 
 Pure-Java multi-format image codec library with full VP8/VP8L WebP encoding and decoding, animated image support, and parallel processing. Reads and writes BMP, GIF, JPEG, PNG, and WebP with per-frame timing, loop control, disposal and blend modes, frame normalization, and frame interpolation - no native dependencies or JNI bindings required.
 
-> [!IMPORTANT]
-> This library is under active development. APIs may change between releases
-> until a stable `1.0.0` release is published.
-
 ## Table of Contents
 
 - [Features](#features)
@@ -28,9 +24,9 @@ Pure-Java multi-format image codec library with full VP8/VP8L WebP encoding and 
 
 ## Features
 
-- **Pure-Java VP8 and VP8L** - Lossy (VP8) and lossless (VP8L) WebP encoding and decoding with no native libraries, including the VP8 boolean range coder, VP8L Huffman + LZ77 compression with ColorCache, DCT/WHT transforms, and SSE-based 16x16 intra-prediction mode selection (DC/V/H/TM). The VP8 encoder emits keyframes libwebp accepts; the VP8 decoder supports the full intra-4x4 B_PRED sub-mode tree
+- **Pure-Java VP8 and VP8L** - Lossy (VP8) and lossless (VP8L) WebP encoding and decoding with no native libraries, including the VP8 boolean range coder, VP8L Huffman + LZ77 compression with ColorCache, DCT/WHT transforms, trellis quantization, near-lossless preprocessing, and SSE-based 16x16 intra-prediction mode selection (DC/V/H/TM). The VP8 encoder emits keyframes libwebp accepts; the VP8 decoder supports the full intra-4x4 B_PRED sub-mode tree
 - **Five image formats** - Read and write BMP, GIF, JPEG, PNG, and WebP with format-specific options for quality, compression level, and lossless/lossy mode
-- **Animated image support** - Multi-frame GIF and WebP with per-frame timing, loop count, background color, disposal methods (none, do not dispose, restore to background, restore to previous), and blend modes (source replace, alpha-over)
+- **Animated image support** - Multi-frame GIF and WebP with per-frame timing, loop count, background color, disposal methods (none, do not dispose, restore to background, restore to previous), blend modes (source replace, alpha-over), and partial-frame ANMF encoding that diffs consecutive frames to emit minimal sub-rectangles
 - **Parallel frame encoding** - Animated WebP encodes frames concurrently using virtual threads for significantly faster output
 - **Batch processing** - `ImageFactory` bulk operations (`fromFiles`, `toFiles`, `fromByteArrays`, `toByteArrays`) process multiple images in parallel with virtual threads
 - **Zero-copy pixel access** - `PixelBuffer` wraps `TYPE_INT_ARGB` arrays directly without copying, providing per-pixel read/write access
@@ -47,7 +43,7 @@ Pure-Java multi-format image codec library with full VP8/VP8L WebP encoding and 
 ### Prerequisites
 
 | Requirement | Version | Notes |
-|-------------|---------|-------|
+|---|---|---|
 | [Java](https://adoptium.net/) | **21+** | Required (LTS recommended) |
 | [Gradle](https://gradle.org/) | **9.4+** | Or use the included `./gradlew` wrapper |
 | [Git](https://git-scm.com/) | **2.x+** | For cloning the repository |
@@ -102,8 +98,7 @@ dependencies {
 </details>
 
 > [!NOTE]
-> This library depends on other Simplified-Dev modules (`collections`, `utils`,
-> `reflection`) which are also resolved from JitPack automatically.
+> This library depends on other Simplified-Dev modules (`collections`, `utils`) which are also resolved from JitPack automatically.
 
 ## Usage
 
@@ -209,7 +204,7 @@ buffer.applyFxaa();
 ## Supported Formats
 
 | Format | Read | Write | Animated | Options |
-|--------|------|-------|----------|---------|
+|---|---|---|---|---|
 | BMP | `BmpImageReader` | `BmpImageWriter` | No | None (lossless) |
 | GIF | `GifImageReader` | `GifImageWriter` | Yes | Loop count, transparency, disposal |
 | JPEG | `JpegImageReader` | `JpegImageWriter` | No | Quality (0.0-1.0, default 0.75) |
@@ -240,13 +235,15 @@ src/main/java/dev/simplified/image/
         ├── WebPImageReader.java
         ├── WebPImageWriter.java
         ├── WebPWriteOptions.java
-        ├── RiffContainer.java  # RIFF parse/write + WebPChunk + WebPChunk.Type
-        ├── lossless/           # VP8LEncoder, VP8LDecoder + BitReader/Writer, HuffmanTree, ColorCache, LZ77, VP8LTransform
-        └── lossy/              # VP8Encoder, VP8Decoder + BooleanCoder, DCT, IntraPrediction, Quantizer, Macroblock, VP8Tables, VP8TokenCoder, LoopFilter, RateDistortion
+        ├── RiffContainer.java  # RIFF parse/write
+        ├── WebPChunk.java      # chunk model + Type enum for FourCC
+        ├── FrameDiffUtil.java  # partial-frame ANMF bounding-box diffing
+        ├── lossless/           # VP8LEncoder, VP8LDecoder + BitReader/Writer, HuffmanTree, ColorCache, LZ77, VP8LTransform, NearLosslessPreprocess
+        └── lossy/              # VP8Encoder, VP8Decoder + BooleanEncoder/Decoder, DCT, IntraPrediction, Quantizer, TrellisQuantizer, Macroblock, VP8Tables, VP8TokenEncoder/Decoder, LoopFilter, RateDistortion, VP8Costs, ChromaUpsampler
 ```
 
 | Package | Description |
-|---------|-------------|
+|---|---|
 | `dev.simplified.image` | Core data container (`ImageData`), auto-detect facade (`ImageFactory`), and format enum |
 | `dev.simplified.image.data` | Frame-level types: `StaticImageData`, `AnimatedImageData`, `ImageFrame`, and disposal/blend enums |
 | `dev.simplified.image.pixel` | Zero-copy `PixelBuffer`, `PixelGraphics`, color math, blend modes, and resampling |
@@ -264,13 +261,12 @@ src/main/java/dev/simplified/image/
 ## Dependencies
 
 | Dependency | Version | Scope |
-|------------|---------|-------|
+|---|---|---|
 | [Log4j2](https://logging.apache.org/log4j/) | 2.25.3 | API |
 | [JetBrains Annotations](https://github.com/JetBrains/java-annotations) | 26.0.2 | API |
 | [Lombok](https://projectlombok.org/) | 1.18.36 | Compile-only |
 | [collections](https://github.com/Simplified-Dev/collections) | master-SNAPSHOT | API (Simplified-Dev) |
 | [utils](https://github.com/Simplified-Dev/utils) | master-SNAPSHOT | API (Simplified-Dev) |
-| [reflection](https://github.com/Simplified-Dev/reflection) | master-SNAPSHOT | API (Simplified-Dev) |
 
 ## Contributing
 
