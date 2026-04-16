@@ -4,7 +4,6 @@ import dev.simplified.collection.Concurrent;
 import dev.simplified.collection.ConcurrentList;
 import dev.simplified.image.ImageData;
 import dev.simplified.image.pixel.PixelBuffer;
-import dev.simplified.reflection.builder.BuildFlag;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
@@ -106,7 +105,6 @@ public class AnimatedImageData implements ImageData {
      */
     public static class Builder {
 
-        @BuildFlag(nonNull = true, notEmpty = true)
         private ConcurrentList<ImageFrame> frames = Concurrent.newList();
         private int width = -1;
         private int height = -1;

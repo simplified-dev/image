@@ -20,7 +20,6 @@ dependencies {
     // Simplified Libraries
     api("com.github.simplified-dev:collections:master-SNAPSHOT")
     api("com.github.simplified-dev:utils:master-SNAPSHOT")
-    api("com.github.simplified-dev:reflection:master-SNAPSHOT")
 
     // JetBrains Annotations
     api(libs.annotations)
