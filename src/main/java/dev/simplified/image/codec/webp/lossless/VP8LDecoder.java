@@ -22,6 +22,8 @@ public final class VP8LDecoder {
     private static final int NUM_LENGTH_CODES = 24;
     private static final int MAX_COLOR_CACHE_BITS = 11;
     private static final int CODE_LENGTH_CODES = 19;
+    /** Upper bound on distinct meta-Huffman groups per image; matches libwebp. */
+    private static final int MAX_NUM_META_HUFF_CODES = 1 << 16;
 
     /** Code length code order per VP8L spec. */
     private static final int[] CODE_LENGTH_ORDER = {
@@ -78,17 +80,38 @@ public final class VP8LDecoder {
                 throw new ImageDecodeException("Invalid color cache bits: %d", colorCacheBits);
         }
 
-        // Meta-prefix flag. VP8L places this between color-cache-info and the entropy
-        // header for spatially-coded images. The encoder currently never emits a meta
-        // prefix image, so the flag is always 0 and we reject non-zero values here.
-        if (reader.readBit() == 1)
-            throw new ImageDecodeException("VP8L meta-prefix images are not supported");
+        // Meta-prefix (multi-Huffman) flag. When set, the image is split into square
+        // tiles of {@code 1 << metaPrefixBits} pixels and each tile selects one of
+        // {@code numMetaHuffCodes} Huffman code groups via a meta-prefix sub-image.
+        // This lets regions with different statistics get their own tightly-tuned
+        // prefix codes at the cost of one extra sub-image + multiple code declarations.
+        int metaPrefixBits = 0;
+        int metaPrefixXsize = 0;
+        int[] metaPrefixImage = null;
+        int numMetaHuffCodes = 1;
+        if (reader.readBit() == 1) {
+            metaPrefixBits = reader.readBits(3) + 2;
+            int tileSize = 1 << metaPrefixBits;
+            metaPrefixXsize = (effectiveWidth + tileSize - 1) >> metaPrefixBits;
+            int metaPrefixYsize = (height + tileSize - 1) >> metaPrefixBits;
+            metaPrefixImage = decodeSubImage(reader, metaPrefixXsize, metaPrefixYsize);
+            int maxCode = 0;
+            for (int p : metaPrefixImage) {
+                int idx = (p >> 8) & 0xFFFF;
+                if (idx > maxCode) maxCode = idx;
+            }
+            numMetaHuffCodes = maxCode + 1;
+            if (numMetaHuffCodes > MAX_NUM_META_HUFF_CODES)
+                throw new ImageDecodeException("VP8L num_meta_huff_codes %d exceeds cap %d",
+                    numMetaHuffCodes, MAX_NUM_META_HUFF_CODES);
+        }
 
-        // Read Huffman codes. Distance alphabet is 40 symbols per VP8L spec - each
-        // Huffman symbol expands through base+extra-bits into a plane code, which is
-        // then mapped to a linear pixel distance during LZ77 decoding.
+        // Read {@code numMetaHuffCodes} x 5 Huffman-code groups. Each group is a full
+        // G+length / R / B / A / distance set, indexed via the meta-prefix image.
         int numDistanceCodes = 40;
-        HuffmanTree[] trees = readHuffmanCodes(reader, colorCacheBits, numDistanceCodes);
+        HuffmanTree[][] treeGroups = new HuffmanTree[numMetaHuffCodes][];
+        for (int g = 0; g < numMetaHuffCodes; g++)
+            treeGroups[g] = readHuffmanCodes(reader, colorCacheBits, numDistanceCodes);
 
         // Decode pixels. The buffer is oversized to the full-image dimensions when any
         // sub-bit-packed ColorIndexing transform will expand pixels in place from the
@@ -97,7 +120,8 @@ public final class VP8LDecoder {
         int fullSize = width * height;
         int[] pixels = new int[Math.max(packedSize, fullSize)];
         ColorCache cache = new ColorCache(colorCacheBits);
-        decodePixels(reader, trees, pixels, effectiveWidth, height, cache);
+        decodePixels(reader, treeGroups, pixels, effectiveWidth, height, cache,
+            metaPrefixImage, metaPrefixXsize, metaPrefixBits);
 
         // Apply inverse transforms in reverse order
         for (int i = transforms.size() - 1; i >= 0; i--)
@@ -127,7 +151,8 @@ public final class VP8LDecoder {
         HuffmanTree[] trees = readHuffmanCodes(reader, colorCacheBits, 40);
         int[] pixels = new int[width * height];
         ColorCache cache = new ColorCache(colorCacheBits);
-        decodePixels(reader, trees, pixels, width, height, cache);
+        decodePixels(reader, new HuffmanTree[][] { trees }, pixels, width, height, cache,
+            null, 0, 0);
         return pixels;
     }
 
@@ -269,18 +294,43 @@ public final class VP8LDecoder {
         return codeLengths;
     }
 
+    /**
+     * Decodes the entropy-coded pixel body. Supports meta-Huffman tile groups: when
+     * {@code metaPrefixImage} is non-null, the Huffman-code group used for each pixel
+     * is looked up via {@code (pixel's tile >> 8) & 0xFFFF} of the meta-prefix sub-image;
+     * when null, all pixels use {@code treeGroups[0]}.
+     * <p>
+     * Length + distance symbols for an LZ77 backward reference are read from the tree
+     * group of the pixel where the copy STARTS - the copied run itself may span tiles
+     * but no more Huffman reads happen inside the copy.
+     */
     private static void decodePixels(
         @NotNull BitReader reader,
-        @NotNull HuffmanTree @NotNull [] trees,
+        @NotNull HuffmanTree @NotNull [] @NotNull [] treeGroups,
         int @NotNull [] pixels,
         int width,
         int height,
-        @NotNull ColorCache cache
+        @NotNull ColorCache cache,
+        int @org.jetbrains.annotations.Nullable [] metaPrefixImage,
+        int metaPrefixXsize,
+        int metaPrefixBits
     ) {
         int totalPixels = width * height;
         int pos = 0;
+        int x = 0;
+        int y = 0;
 
         while (pos < totalPixels) {
+            HuffmanTree[] trees;
+            if (metaPrefixImage == null) {
+                trees = treeGroups[0];
+            } else {
+                int tileX = x >> metaPrefixBits;
+                int tileY = y >> metaPrefixBits;
+                int codeIdx = (metaPrefixImage[tileY * metaPrefixXsize + tileX] >> 8) & 0xFFFF;
+                trees = treeGroups[codeIdx];
+            }
+
             int green = trees[0].readSymbol(reader);
 
             if (green < NUM_LITERAL_CODES) {
@@ -291,6 +341,7 @@ public final class VP8LDecoder {
                 int argb = (alpha << 24) | (red << 16) | (green << 8) | blue;
                 pixels[pos++] = argb;
                 cache.insert(argb);
+                if (++x == width) { x = 0; y++; }
             } else if (green < NUM_LITERAL_CODES + NUM_LENGTH_CODES) {
                 // LZ77 backward reference
                 int lengthCode = green - NUM_LITERAL_CODES;
@@ -308,12 +359,14 @@ public final class VP8LDecoder {
                     pixels[pos] = pixels[srcPos];
                     cache.insert(pixels[pos]);
                     pos++;
+                    if (++x == width) { x = 0; y++; }
                 }
             } else {
                 // Color cache lookup
                 int cacheIndex = green - NUM_LITERAL_CODES - NUM_LENGTH_CODES;
                 int argb = cache.lookup(cacheIndex);
                 pixels[pos++] = argb;
+                if (++x == width) { x = 0; y++; }
             }
         }
     }
