@@ -19,18 +19,24 @@ import javax.imageio.ImageWriteParam;
 import javax.imageio.metadata.IIOMetadata;
 import javax.imageio.metadata.IIOMetadataNode;
 import javax.imageio.stream.ImageOutputStream;
-import java.awt.Graphics2D;
-import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
 import java.awt.image.IndexColorModel;
-import java.util.LinkedHashSet;
-import java.util.Set;
+import java.awt.image.WritableRaster;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 
 /**
  * Writes GIF images (static and animated) via {@link ImageIO}, configuring
  * per-frame disposal, delay, and loop count metadata.
  */
 public class GifImageWriter implements ImageWriter {
+
+    /** Maximum palette entries in a GIF local or global color table. */
+    private static final int MAX_PALETTE_SIZE = 256;
 
     @Override
     public @NotNull ImageFormat getFormat() {
@@ -97,8 +103,11 @@ public class GifImageWriter implements ImageWriter {
                     firstFrame = false;
                 }
 
-                BufferedImage flatFrame = buildFrameImage(flattenedPixels, frameIdx * frameStride, frame.pixels().width(), frame.pixels().height());
-                writer.writeToSequence(new IIOImage(toIndexed(flatFrame, palette), null, metadata), param);
+                BufferedImage indexedFrame = buildIndexedFrame(
+                    flattenedPixels, frameIdx * frameStride,
+                    frame.pixels().width(), frame.pixels().height(),
+                    palette, transparent, transparentColorIndex);
+                writer.writeToSequence(new IIOImage(indexedFrame, null, metadata), param);
                 frameIdx++;
             }
 
@@ -107,8 +116,10 @@ public class GifImageWriter implements ImageWriter {
             ImageFrame frame = data.getFrames().getFirst();
             IIOMetadata metadata = writer.getDefaultImageMetadata(specifier, param);
             configureFrameMetadata(metadata, frame, transparent, transparentColorIndex);
-            BufferedImage flatFrame = buildFrameImage(flattenedPixels, 0, frame.pixels().width(), frame.pixels().height());
-            writer.write(new IIOImage(toIndexed(flatFrame, palette), null, metadata));
+            BufferedImage indexedFrame = buildIndexedFrame(
+                flattenedPixels, 0, frame.pixels().width(), frame.pixels().height(),
+                palette, transparent, transparentColorIndex);
+            writer.write(new IIOImage(indexedFrame, null, metadata));
         }
 
         writer.dispose();
@@ -164,25 +175,16 @@ public class GifImageWriter implements ImageWriter {
     }
 
     /**
-     * Wraps a slice of the flattened pixel array as an ARGB {@link BufferedImage}.
-     * Shares the int array - no per-frame copy.
-     */
-    @NotNull
-    private static BufferedImage buildFrameImage(int @NotNull [] flatPixels, int offset, int width, int height) {
-        BufferedImage img = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
-        img.setRGB(0, 0, width, height, flatPixels, offset, width);
-        return img;
-    }
-
-    /**
      * Builds a single {@link IndexColorModel} shared across every frame from the already
      * alpha-flattened pixel array.
      * <p>
      * When the combined pixel set fits in 256 (or 255 when a transparent slot is reserved)
      * an exact palette is returned - useful for UI renders like tooltips which typically
      * stay well under the cap and deserve pixel-accurate color preservation. When there
-     * are too many unique colors a simple uniform 6×6×6 RGB cube plus grayscale palette is
-     * used; this is a minimal fallback, not a perceptual quantizer.
+     * are too many unique colors a frequency-weighted median-cut quantizer picks 256 image
+     * -adaptive colors; this produces far better results than the default Java GIF writer's
+     * hardcoded web-safe cube, which snaps every non-web-safe pixel to one of 216 coarse
+     * colors and destroys smooth gradients (the old "lost border gradient" bug).
      */
     @NotNull
     private static IndexColorModel buildSharedPalette(
@@ -190,29 +192,30 @@ public class GifImageWriter implements ImageWriter {
         boolean transparent,
         int transparentColorIndex
     ) {
-        int capacity = transparent ? 255 : 256;
-        Set<Integer> uniqueRgb = new LinkedHashSet<>();
+        int capacity = transparent ? MAX_PALETTE_SIZE - 1 : MAX_PALETTE_SIZE;
+        Map<Integer, Integer> histogram = new LinkedHashMap<>();
         for (int argb : flattenedPixels) {
             // Skip the transparent marker (ARGB 0x00000000) - the reserved transparent
             // palette slot handles it, it shouldn't consume a color slot.
             if (transparent && (argb >>> 24) == 0) continue;
-            uniqueRgb.add(argb & 0xFFFFFF);
-            if (uniqueRgb.size() > capacity) break;
+            histogram.merge(argb & 0xFFFFFF, 1, Integer::sum);
         }
 
-        if (uniqueRgb.size() <= capacity)
-            return exactPalette(uniqueRgb, transparent, transparentColorIndex);
+        if (histogram.size() <= capacity)
+            return exactPalette(histogram.keySet(), transparent, transparentColorIndex);
 
-        return webSafeFallbackPalette(transparent, transparentColorIndex);
+        return medianCutPalette(histogram, capacity, transparent, transparentColorIndex);
     }
 
     @NotNull
     private static IndexColorModel exactPalette(
-        @NotNull Set<Integer> uniqueRgb,
+        @NotNull Iterable<Integer> uniqueRgb,
         boolean transparent,
         int transparentColorIndex
     ) {
-        int n = uniqueRgb.size() + (transparent ? 1 : 0);
+        int count = 0;
+        for (Integer ignored : uniqueRgb) count++;
+        int n = count + (transparent ? 1 : 0);
         byte[] r = new byte[n];
         byte[] g = new byte[n];
         byte[] b = new byte[n];
@@ -232,56 +235,241 @@ public class GifImageWriter implements ImageWriter {
         return new IndexColorModel(8, n, r, g, b);
     }
 
+    /**
+     * Runs a frequency-weighted median-cut quantizer against the pixel histogram to produce
+     * an image-adaptive palette of at most {@code capacity} colors.
+     * <p>
+     * Algorithm:
+     * <ol>
+     * <li>Start with one bucket containing every unique RGB.</li>
+     * <li>Repeatedly find the bucket with the widest single-channel spread and split it at
+     * the frequency-weighted median of that channel. A bucket with only one unique color
+     * (or zero channel spread) cannot split.</li>
+     * <li>Stop when the bucket count reaches the capacity or no bucket can split further.</li>
+     * <li>Emit one palette entry per bucket, weighted by pixel count so high-frequency
+     * colors (solid backgrounds, text fills) dominate their bucket's representative.</li>
+     * </ol>
+     * This is the standard "modified median cut" approach used by most quality GIF encoders
+     * (Leptonica, GIFLIB's helpers, etc.). It's not perceptually weighted (no YUV transform,
+     * no CIE Lab color space) but is massively better than snapping to a hardcoded cube.
+     */
     @NotNull
-    private static IndexColorModel webSafeFallbackPalette(boolean transparent, int transparentColorIndex) {
-        byte[] r = new byte[256];
-        byte[] g = new byte[256];
-        byte[] b = new byte[256];
-        int i = 0;
-        // 6*6*6 = 216 web-safe colors
-        for (int rs = 0; rs < 6; rs++)
-            for (int gs = 0; gs < 6; gs++)
-                for (int bs = 0; bs < 6; bs++) {
-                    r[i] = (byte) (rs * 51);
-                    g[i] = (byte) (gs * 51);
-                    b[i] = (byte) (bs * 51);
-                    i++;
+    private static IndexColorModel medianCutPalette(
+        @NotNull Map<Integer, Integer> histogram,
+        int capacity,
+        boolean transparent,
+        int transparentColorIndex
+    ) {
+        List<int[]> colors = new ArrayList<>(histogram.size());
+        for (Map.Entry<Integer, Integer> entry : histogram.entrySet()) {
+            int rgb = entry.getKey();
+            colors.add(new int[] {
+                (rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF, entry.getValue()
+            });
+        }
+
+        List<Bucket> buckets = new ArrayList<>();
+        buckets.add(new Bucket(colors));
+
+        while (buckets.size() < capacity) {
+            Bucket toSplit = null;
+            int bestSpread = 0;
+            for (Bucket bucket : buckets) {
+                int spread = bucket.maxChannelSpread();
+                if (spread > bestSpread) {
+                    bestSpread = spread;
+                    toSplit = bucket;
                 }
-        // Fill remaining 40 slots with grayscale ramp for shadow/antialias tones.
-        for (int step = 0; i < 256; i++, step++) {
-            int v = Math.min(255, step * 7);
-            r[i] = (byte) v;
-            g[i] = (byte) v;
-            b[i] = (byte) v;
+            }
+            if (toSplit == null) break;
+
+            Bucket[] halves = toSplit.split();
+            buckets.remove(toSplit);
+            buckets.add(halves[0]);
+            buckets.add(halves[1]);
+        }
+
+        int n = buckets.size() + (transparent ? 1 : 0);
+        byte[] r = new byte[n];
+        byte[] g = new byte[n];
+        byte[] b = new byte[n];
+        int i = 0;
+        for (Bucket bucket : buckets) {
+            if (transparent && i == transparentColorIndex) i++;
+            int[] avg = bucket.weightedAverage();
+            r[i] = (byte) avg[0];
+            g[i] = (byte) avg[1];
+            b[i] = (byte) avg[2];
+            i++;
         }
 
         if (transparent)
-            return new IndexColorModel(8, 256, r, g, b, transparentColorIndex);
+            return new IndexColorModel(8, n, r, g, b, transparentColorIndex);
 
-        return new IndexColorModel(8, 256, r, g, b);
+        return new IndexColorModel(8, n, r, g, b);
     }
 
     /**
-     * Renders {@code source} onto a {@link BufferedImage#TYPE_BYTE_INDEXED} image backed by
-     * {@code palette}. Java's {@link Graphics2D#drawImage} performs the ARGB→indexed color
-     * mapping, dithering partial-alpha glyph edges onto the nearest palette color.
+     * A median-cut bucket holding a list of {@code [r, g, b, count]} rows for every unique
+     * color in the bucket. Splits are performed on the channel with the widest value range
+     * at the frequency-weighted median so large flat regions collapse into single palette
+     * slots instead of being merged with nearby detail.
+     */
+    private static final class Bucket {
+
+        private final @NotNull List<int @NotNull []> rows;
+
+        Bucket(@NotNull List<int @NotNull []> rows) {
+            this.rows = rows;
+        }
+
+        int maxChannelSpread() {
+            if (this.rows.size() <= 1) return 0;
+            int minR = 255, minG = 255, minB = 255;
+            int maxR = 0, maxG = 0, maxB = 0;
+            for (int[] row : this.rows) {
+                if (row[0] < minR) minR = row[0];
+                if (row[0] > maxR) maxR = row[0];
+                if (row[1] < minG) minG = row[1];
+                if (row[1] > maxG) maxG = row[1];
+                if (row[2] < minB) minB = row[2];
+                if (row[2] > maxB) maxB = row[2];
+            }
+            return Math.max(Math.max(maxR - minR, maxG - minG), maxB - minB);
+        }
+
+        @NotNull Bucket @NotNull [] split() {
+            int minR = 255, minG = 255, minB = 255;
+            int maxR = 0, maxG = 0, maxB = 0;
+            for (int[] row : this.rows) {
+                if (row[0] < minR) minR = row[0];
+                if (row[0] > maxR) maxR = row[0];
+                if (row[1] < minG) minG = row[1];
+                if (row[1] > maxG) maxG = row[1];
+                if (row[2] < minB) minB = row[2];
+                if (row[2] > maxB) maxB = row[2];
+            }
+            int rangeR = maxR - minR;
+            int rangeG = maxG - minG;
+            int rangeB = maxB - minB;
+
+            int axis;
+            if (rangeR >= rangeG && rangeR >= rangeB) axis = 0;
+            else if (rangeG >= rangeB) axis = 1;
+            else axis = 2;
+
+            int sortAxis = axis;
+            this.rows.sort(Comparator.comparingInt(row -> row[sortAxis]));
+
+            long totalCount = 0;
+            for (int[] row : this.rows) totalCount += row[3];
+            long midpoint = totalCount / 2;
+
+            long cumulative = 0;
+            int splitIndex = 1;
+            for (int i = 0; i < this.rows.size(); i++) {
+                cumulative += this.rows.get(i)[3];
+                if (cumulative >= midpoint) {
+                    splitIndex = Math.max(1, Math.min(this.rows.size() - 1, i + 1));
+                    break;
+                }
+            }
+
+            List<int[]> left = new ArrayList<>(this.rows.subList(0, splitIndex));
+            List<int[]> right = new ArrayList<>(this.rows.subList(splitIndex, this.rows.size()));
+            return new Bucket[] { new Bucket(left), new Bucket(right) };
+        }
+
+        int @NotNull [] weightedAverage() {
+            long sumR = 0, sumG = 0, sumB = 0, sumCount = 0;
+            for (int[] row : this.rows) {
+                long c = row[3];
+                sumR += (long) row[0] * c;
+                sumG += (long) row[1] * c;
+                sumB += (long) row[2] * c;
+                sumCount += c;
+            }
+            if (sumCount == 0) return new int[] { 0, 0, 0 };
+            return new int[] {
+                (int) (sumR / sumCount),
+                (int) (sumG / sumCount),
+                (int) (sumB / sumCount)
+            };
+        }
+
+    }
+
+    /**
+     * Maps a slice of the flattened ARGB pixel array to a {@link BufferedImage#TYPE_BYTE_INDEXED}
+     * image using direct nearest-neighbor lookup against the shared palette. No dithering -
+     * flat regions stay flat. Caches {@code rgb -> palette index} for repeat pixels so a
+     * typical UI render with mostly solid colors resolves the whole frame with one palette
+     * search per unique color.
      */
     @NotNull
-    private static BufferedImage toIndexed(@NotNull BufferedImage source, @NotNull IndexColorModel palette) {
-        BufferedImage indexed = new BufferedImage(
-            source.getWidth(),
-            source.getHeight(),
-            BufferedImage.TYPE_BYTE_INDEXED,
-            palette
-        );
-        Graphics2D g = indexed.createGraphics();
-        try {
-            g.setRenderingHint(RenderingHints.KEY_DITHERING, RenderingHints.VALUE_DITHER_ENABLE);
-            g.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
-            g.drawImage(source, 0, 0, null);
-        } finally {
-            g.dispose();
+    private static BufferedImage buildIndexedFrame(
+        int @NotNull [] flatPixels,
+        int offset,
+        int width,
+        int height,
+        @NotNull IndexColorModel palette,
+        boolean transparent,
+        int transparentColorIndex
+    ) {
+        BufferedImage indexed = new BufferedImage(width, height, BufferedImage.TYPE_BYTE_INDEXED, palette);
+
+        int paletteSize = palette.getMapSize();
+        int[] pr = new int[paletteSize];
+        int[] pg = new int[paletteSize];
+        int[] pb = new int[paletteSize];
+        for (int i = 0; i < paletteSize; i++) {
+            pr[i] = palette.getRed(i);
+            pg[i] = palette.getGreen(i);
+            pb[i] = palette.getBlue(i);
         }
+
+        Map<Integer, Byte> indexCache = new HashMap<>();
+        byte[] indices = new byte[width * height];
+        int total = width * height;
+
+        for (int i = 0; i < total; i++) {
+            int argb = flatPixels[offset + i];
+            if (transparent && (argb >>> 24) == 0) {
+                indices[i] = (byte) transparentColorIndex;
+                continue;
+            }
+
+            int rgb = argb & 0xFFFFFF;
+            Byte cached = indexCache.get(rgb);
+            if (cached != null) {
+                indices[i] = cached;
+                continue;
+            }
+
+            int r = (rgb >> 16) & 0xFF;
+            int g = (rgb >> 8) & 0xFF;
+            int b = rgb & 0xFF;
+            int bestIdx = 0;
+            int bestDist = Integer.MAX_VALUE;
+            for (int j = 0; j < paletteSize; j++) {
+                if (transparent && j == transparentColorIndex) continue;
+                int dr = r - pr[j];
+                int dg = g - pg[j];
+                int db = b - pb[j];
+                int dist = dr * dr + dg * dg + db * db;
+                if (dist < bestDist) {
+                    bestDist = dist;
+                    bestIdx = j;
+                    if (dist == 0) break;
+                }
+            }
+            byte idxByte = (byte) bestIdx;
+            indexCache.put(rgb, idxByte);
+            indices[i] = idxByte;
+        }
+
+        WritableRaster raster = indexed.getRaster();
+        raster.setDataElements(0, 0, width, height, indices);
         return indexed;
     }
 
