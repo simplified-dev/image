@@ -14,6 +14,7 @@ import java.awt.image.ImageObserver;
 import java.awt.image.Raster;
 import java.awt.image.SinglePixelPackedSampleModel;
 import java.util.Arrays;
+import java.util.function.IntConsumer;
 import java.util.stream.IntStream;
 
 /**
@@ -26,6 +27,12 @@ import java.util.stream.IntStream;
 @Getter
 @Accessors(fluent = true)
 public class PixelBuffer {
+
+    /**
+     * Minimum row count before row-parallel loops dispatch to the common fork-join pool.
+     * Below this, the fork-join overhead dominates the per-row work.
+     */
+    private static final int MIN_PARALLEL_ROWS = 64;
 
     private final int @NotNull [] pixels;
     private final int width;
@@ -274,7 +281,7 @@ public class PixelBuffer {
      * Mirrors the buffer in place along the vertical axis, swapping columns left-to-right.
      */
     public void flipHorizontal() {
-        for (int y = 0; y < this.height; y++) {
+        forEachRow(0, this.height, y -> {
             int row = y * this.width;
             int left = 0;
             int right = this.width - 1;
@@ -285,25 +292,23 @@ public class PixelBuffer {
                 left++;
                 right--;
             }
-        }
+        });
     }
 
     /**
      * Mirrors the buffer in place along the horizontal axis, swapping rows top-to-bottom.
      */
     public void flipVertical() {
-        int[] tmp = new int[this.width];
-        int top = 0;
-        int bottom = this.height - 1;
-        while (top < bottom) {
+        int pairs = this.height / 2;
+        forEachRow(0, pairs, top -> {
+            int bottom = this.height - 1 - top;
             int topOff = top * this.width;
             int botOff = bottom * this.width;
+            int[] tmp = new int[this.width];
             System.arraycopy(this.pixels, topOff, tmp, 0, this.width);
             System.arraycopy(this.pixels, botOff, this.pixels, topOff, this.width);
             System.arraycopy(tmp, 0, this.pixels, botOff, this.width);
-            top++;
-            bottom--;
-        }
+        });
     }
 
     /**
@@ -339,9 +344,10 @@ public class PixelBuffer {
         }
 
         int[] result = new int[w * h];
-        for (int y = 0; y < h; y++) {
+        boolean nearest = filter == Resample.NEAREST;
+        forEachRow(0, h, y -> {
             int outRow = y * w;
-            if (filter == Resample.NEAREST) {
+            if (nearest) {
                 int sy = (y * this.height) / h;
                 for (int x = 0; x < w; x++) {
                     int sx = (x * this.width) / w;
@@ -354,7 +360,7 @@ public class PixelBuffer {
                     result[outRow + x] = sampleBilinear(this.pixels, srcX, srcY);
                 }
             }
-        }
+        });
 
         return new PixelBuffer(result, w, h, this.hasAlpha);
     }
@@ -365,13 +371,18 @@ public class PixelBuffer {
      * @return a rotated copy with the same dimensions
      */
     public @NotNull PixelBuffer rotate180() {
-        int n = this.pixels.length;
-        int[] result = new int[n];
+        int w = this.width;
+        int h = this.height;
+        int[] result = new int[w * h];
 
-        for (int i = 0; i < n; i++)
-            result[i] = this.pixels[n - 1 - i];
+        forEachRow(0, h, y -> {
+            int srcRow = y * w;
+            int dstRow = (h - 1 - y) * w;
+            for (int x = 0; x < w; x++)
+                result[dstRow + (w - 1 - x)] = this.pixels[srcRow + x];
+        });
 
-        return new PixelBuffer(result, this.width, this.height, this.hasAlpha);
+        return new PixelBuffer(result, w, h, this.hasAlpha);
     }
 
     /**
@@ -384,11 +395,11 @@ public class PixelBuffer {
         int h = this.height;
         int[] result = new int[w * h];
 
-        for (int y = 0; y < h; y++) {
+        forEachRow(0, h, y -> {
             int row = y * w;
             for (int x = 0; x < w; x++)
                 result[(w - 1 - x) * h + y] = this.pixels[row + x];
-        }
+        });
 
         return new PixelBuffer(result, h, w, this.hasAlpha);
     }
@@ -403,12 +414,11 @@ public class PixelBuffer {
         int h = this.height;
         int[] result = new int[w * h];
 
-        for (int y = 0; y < h; y++) {
+        forEachRow(0, h, y -> {
             int row = y * w;
-
             for (int x = 0; x < w; x++)
                 result[x * h + (h - 1 - y)] = this.pixels[row + x];
-        }
+        });
 
         return new PixelBuffer(result, h, w, this.hasAlpha);
     }
@@ -454,30 +464,40 @@ public class PixelBuffer {
         int x1 = Math.min(this.width, x + w);
         int y1 = Math.min(this.height, y + h);
 
-        for (int row = y0; row < y1; row++) {
+        if (x0 >= x1 || y0 >= y1) return;
+
+        forEachRow(y0, y1, row -> {
             int offset = row * this.width;
             Arrays.fill(this.pixels, offset + x0, offset + x1, argb);
-        }
+        });
     }
 
     /**
      * Converts every pixel to its luma-weighted grayscale equivalent in place, preserving alpha.
      */
     public void grayscale() {
-        for (int i = 0; i < this.pixels.length; i++) {
-            int p = this.pixels[i];
-            int a = (p >>> 24) & 0xFF;
-            int y = Math.clamp((int) ColorMath.luma(p | 0xFF000000), 0, 255);
-            this.pixels[i] = (a << 24) | (y << 16) | (y << 8) | y;
-        }
+        forEachRow(0, this.height, y -> {
+            int rowOff = y * this.width;
+            int rowEnd = rowOff + this.width;
+            for (int i = rowOff; i < rowEnd; i++) {
+                int p = this.pixels[i];
+                int a = (p >>> 24) & 0xFF;
+                int luma = Math.clamp((int) ColorMath.luma(p | 0xFF000000), 0, 255);
+                this.pixels[i] = (a << 24) | (luma << 16) | (luma << 8) | luma;
+            }
+        });
     }
 
     /**
      * Inverts the RGB channels of every pixel in place, preserving alpha.
      */
     public void invert() {
-        for (int i = 0; i < this.pixels.length; i++)
-            this.pixels[i] ^= 0x00FFFFFF;
+        forEachRow(0, this.height, y -> {
+            int rowOff = y * this.width;
+            int rowEnd = rowOff + this.width;
+            for (int i = rowOff; i < rowEnd; i++)
+                this.pixels[i] ^= 0x00FFFFFF;
+        });
     }
 
     /**
@@ -491,14 +511,18 @@ public class PixelBuffer {
      * @param factor the alpha multiplier, clamped to {@code [0, 1]}
      */
     public void multiplyAlpha(float factor) {
-        factor = Math.clamp(factor, 0f, 1f);
-        if (factor == 1f) return;
-        for (int i = 0; i < this.pixels.length; i++) {
-            int p = this.pixels[i];
-            int a = (p >>> 24) & 0xFF;
-            int newA = Math.round(a * factor);
-            this.pixels[i] = (newA << 24) | (p & 0x00FFFFFF);
-        }
+        float clamped = Math.clamp(factor, 0f, 1f);
+        if (clamped == 1f) return;
+        forEachRow(0, this.height, y -> {
+            int rowOff = y * this.width;
+            int rowEnd = rowOff + this.width;
+            for (int i = rowOff; i < rowEnd; i++) {
+                int p = this.pixels[i];
+                int a = (p >>> 24) & 0xFF;
+                int newA = Math.round(a * clamped);
+                this.pixels[i] = (newA << 24) | (p & 0x00FFFFFF);
+            }
+        });
     }
 
     /**
@@ -508,19 +532,23 @@ public class PixelBuffer {
      * premultiplied inputs.
      */
     public void premultiplyAlpha() {
-        for (int i = 0; i < this.pixels.length; i++) {
-            int p = this.pixels[i];
-            int a = (p >>> 24) & 0xFF;
-            if (a == 0xFF) continue;
-            if (a == 0) {
-                this.pixels[i] = 0;
-                continue;
+        forEachRow(0, this.height, y -> {
+            int rowOff = y * this.width;
+            int rowEnd = rowOff + this.width;
+            for (int i = rowOff; i < rowEnd; i++) {
+                int p = this.pixels[i];
+                int a = (p >>> 24) & 0xFF;
+                if (a == 0xFF) continue;
+                if (a == 0) {
+                    this.pixels[i] = 0;
+                    continue;
+                }
+                int r = (((p >>> 16) & 0xFF) * a) / 255;
+                int g = (((p >>> 8) & 0xFF) * a) / 255;
+                int b = ((p & 0xFF) * a) / 255;
+                this.pixels[i] = (a << 24) | (r << 16) | (g << 8) | b;
             }
-            int r = (((p >>> 16) & 0xFF) * a) / 255;
-            int g = (((p >>> 8) & 0xFF) * a) / 255;
-            int b = ((p & 0xFF) * a) / 255;
-            this.pixels[i] = (a << 24) | (r << 16) | (g << 8) | b;
-        }
+        });
     }
 
     /**
@@ -530,15 +558,19 @@ public class PixelBuffer {
      * against accumulated floating-point drift.
      */
     public void unpremultiplyAlpha() {
-        for (int i = 0; i < this.pixels.length; i++) {
-            int p = this.pixels[i];
-            int a = (p >>> 24) & 0xFF;
-            if (a == 0xFF || a == 0) continue;
-            int r = Math.min(255, (((p >>> 16) & 0xFF) * 255) / a);
-            int g = Math.min(255, (((p >>> 8) & 0xFF) * 255) / a);
-            int b = Math.min(255, ((p & 0xFF) * 255) / a);
-            this.pixels[i] = (a << 24) | (r << 16) | (g << 8) | b;
-        }
+        forEachRow(0, this.height, y -> {
+            int rowOff = y * this.width;
+            int rowEnd = rowOff + this.width;
+            for (int i = rowOff; i < rowEnd; i++) {
+                int p = this.pixels[i];
+                int a = (p >>> 24) & 0xFF;
+                if (a == 0xFF || a == 0) continue;
+                int r = Math.min(255, (((p >>> 16) & 0xFF) * 255) / a);
+                int g = Math.min(255, (((p >>> 8) & 0xFF) * 255) / a);
+                int b = Math.min(255, ((p & 0xFF) * 255) / a);
+                this.pixels[i] = (a << 24) | (r << 16) | (g << 8) | b;
+            }
+        });
     }
 
     // --- compositing ---
@@ -578,16 +610,16 @@ public class PixelBuffer {
 
         if (mode == BlendMode.NORMAL && !source.hasAlpha) {
             int rowWidth = srcX1 - srcX0;
-            for (int y = srcY0; y < srcY1; y++) {
+            forEachRow(srcY0, srcY1, y -> {
                 int srcOff = y * source.width + srcX0;
                 int dstOff = (dy + y) * this.width + dx + srcX0;
                 System.arraycopy(source.pixels, srcOff, this.pixels, dstOff, rowWidth);
-            }
+            });
             return;
         }
 
         if (mode == BlendMode.NORMAL) {
-            for (int y = srcY0; y < srcY1; y++) {
+            forEachRow(srcY0, srcY1, y -> {
                 int srcRow = y * source.width;
                 int dstRow = (dy + y) * this.width + dx;
                 for (int x = srcX0; x < srcX1; x++) {
@@ -601,11 +633,11 @@ public class PixelBuffer {
                     int dstIdx = dstRow + x;
                     this.pixels[dstIdx] = ColorMath.blend(src, this.pixels[dstIdx], BlendMode.NORMAL);
                 }
-            }
+            });
             return;
         }
 
-        for (int y = srcY0; y < srcY1; y++) {
+        forEachRow(srcY0, srcY1, y -> {
             int srcRow = y * source.width;
             int dstRow = (dy + y) * this.width + dx;
             for (int x = srcX0; x < srcX1; x++) {
@@ -614,7 +646,7 @@ public class PixelBuffer {
                 int dstIdx = dstRow + x;
                 this.pixels[dstIdx] = ColorMath.blend(src, this.pixels[dstIdx], mode);
             }
-        }
+        });
     }
 
     /**
@@ -633,7 +665,9 @@ public class PixelBuffer {
         int x1 = Math.min(dw, this.width - dx);
         int y1 = Math.min(dh, this.height - dy);
 
-        for (int y = y0; y < y1; y++) {
+        if (x0 >= x1 || y0 >= y1) return;
+
+        forEachRow(y0, y1, y -> {
             int dstRow = (dy + y) * this.width;
             int sy = (y * source.height) / dh;
 
@@ -644,7 +678,7 @@ public class PixelBuffer {
                 int dstIdx = dstRow + dx + x;
                 this.pixels[dstIdx] = ColorMath.blend(src, this.pixels[dstIdx], BlendMode.NORMAL);
             }
-        }
+        });
     }
 
     /**
@@ -673,25 +707,28 @@ public class PixelBuffer {
      * @return a new pixel buffer containing the blended result
      */
     public static @NotNull PixelBuffer lerp(@NotNull PixelBuffer a, @NotNull PixelBuffer b, float alpha) {
-        alpha = Math.clamp(alpha, 0f, 1f);
-        float inverse = 1f - alpha;
+        float blend = Math.clamp(alpha, 0f, 1f);
+        float inverse = 1f - blend;
         int width = Math.min(a.width, b.width);
         int height = Math.min(a.height, b.height);
         int[] result = new int[width * height];
 
-        for (int y = 0; y < height; y++) {
+        forEachRow(0, height, y -> {
+            int aRow = y * a.width;
+            int bRow = y * b.width;
+            int outRow = y * width;
             for (int x = 0; x < width; x++) {
-                int s = a.pixels[y * a.width + x];
-                int d = b.pixels[y * b.width + x];
+                int s = a.pixels[aRow + x];
+                int d = b.pixels[bRow + x];
 
-                int ra = clampByte(((s >> 24) & 0xFF) * inverse + ((d >> 24) & 0xFF) * alpha);
-                int rr = clampByte(((s >> 16) & 0xFF) * inverse + ((d >> 16) & 0xFF) * alpha);
-                int rg = clampByte(((s >> 8) & 0xFF) * inverse + ((d >> 8) & 0xFF) * alpha);
-                int rb = clampByte((s & 0xFF) * inverse + (d & 0xFF) * alpha);
+                int ra = clampByte(((s >> 24) & 0xFF) * inverse + ((d >> 24) & 0xFF) * blend);
+                int rr = clampByte(((s >> 16) & 0xFF) * inverse + ((d >> 16) & 0xFF) * blend);
+                int rg = clampByte(((s >> 8) & 0xFF) * inverse + ((d >> 8) & 0xFF) * blend);
+                int rb = clampByte((s & 0xFF) * inverse + (d & 0xFF) * blend);
 
-                result[y * width + x] = (ra << 24) | (rr << 16) | (rg << 8) | rb;
+                result[outRow + x] = (ra << 24) | (rr << 16) | (rg << 8) | rb;
             }
-        }
+        });
 
         return PixelBuffer.of(result, width, height, a.hasAlpha || b.hasAlpha);
     }
@@ -848,6 +885,27 @@ public class PixelBuffer {
     }
 
     // --- private helpers ---
+
+    /**
+     * Iterates rows in {@code [start, end)}, dispatching to the common fork-join pool when the range
+     * covers at least {@link #MIN_PARALLEL_ROWS} rows and running sequentially otherwise.
+     *
+     * @param start the first row index, inclusive
+     * @param end the last row index, exclusive
+     * @param body the per-row action
+     */
+    private static void forEachRow(int start, int end, @NotNull IntConsumer body) {
+        int count = end - start;
+
+        if (count >= MIN_PARALLEL_ROWS) {
+            IntStream.range(start, end)
+                .parallel()
+                .forEach(body);
+        } else {
+            for (int y = start; y < end; y++)
+                body.accept(y);
+        }
+    }
 
     private static int clampByte(float value) {
         return (int) Math.clamp(value, 0f, 255f);
