@@ -30,7 +30,7 @@ import java.util.stream.IntStream;
  * {@link #lerp}, and {@link ColorMath#tint}) transparently use the JDK Vector API when the
  * incubator module is resolvable at runtime. To opt in, pass the following flag to the consuming
  * JVM:
- * <pre>--add-modules jdk.incubator.vector</pre>
+ * <pre><code>--add-modules jdk.incubator.vector</code></pre>
  * Without the flag, those methods fall back to a bit-equivalent scalar path - no other action is
  * required to use this library.
  */
