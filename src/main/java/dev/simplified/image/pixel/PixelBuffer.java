@@ -23,6 +23,16 @@ import java.util.stream.IntStream;
  * For {@link BufferedImage#TYPE_INT_ARGB} images, the backing array is referenced directly without
  * copying. For other image types, pixel data is extracted once into a new array, then accessed
  * without further copies.
+ *
+ * <h2>SIMD acceleration</h2>
+ * <p>
+ * Selected per-pixel methods ({@link #grayscale}, {@link #multiplyAlpha}, {@link #premultiplyAlpha},
+ * {@link #lerp}, and {@link ColorMath#tint}) transparently use the JDK Vector API when the
+ * incubator module is resolvable at runtime. To opt in, pass the following flag to the consuming
+ * JVM:
+ * <pre>--add-modules jdk.incubator.vector</pre>
+ * Without the flag, those methods fall back to a bit-equivalent scalar path - no other action is
+ * required to use this library.
  */
 @Getter
 @Accessors(fluent = true)
@@ -476,16 +486,7 @@ public class PixelBuffer {
      * Converts every pixel to its luma-weighted grayscale equivalent in place, preserving alpha.
      */
     public void grayscale() {
-        forEachRow(0, this.height, y -> {
-            int rowOff = y * this.width;
-            int rowEnd = rowOff + this.width;
-            for (int i = rowOff; i < rowEnd; i++) {
-                int p = this.pixels[i];
-                int a = (p >>> 24) & 0xFF;
-                int luma = Math.clamp((int) ColorMath.luma(p | 0xFF000000), 0, 255);
-                this.pixels[i] = (a << 24) | (luma << 16) | (luma << 8) | luma;
-            }
-        });
+        forEachRow(0, this.height, y -> PixelVector.grayscale(this.pixels, y * this.width, this.width));
     }
 
     /**
@@ -513,16 +514,7 @@ public class PixelBuffer {
     public void multiplyAlpha(float factor) {
         float clamped = Math.clamp(factor, 0f, 1f);
         if (clamped == 1f) return;
-        forEachRow(0, this.height, y -> {
-            int rowOff = y * this.width;
-            int rowEnd = rowOff + this.width;
-            for (int i = rowOff; i < rowEnd; i++) {
-                int p = this.pixels[i];
-                int a = (p >>> 24) & 0xFF;
-                int newA = Math.round(a * clamped);
-                this.pixels[i] = (newA << 24) | (p & 0x00FFFFFF);
-            }
-        });
+        forEachRow(0, this.height, y -> PixelVector.multiplyAlpha(this.pixels, y * this.width, this.width, clamped));
     }
 
     /**
@@ -532,23 +524,7 @@ public class PixelBuffer {
      * premultiplied inputs.
      */
     public void premultiplyAlpha() {
-        forEachRow(0, this.height, y -> {
-            int rowOff = y * this.width;
-            int rowEnd = rowOff + this.width;
-            for (int i = rowOff; i < rowEnd; i++) {
-                int p = this.pixels[i];
-                int a = (p >>> 24) & 0xFF;
-                if (a == 0xFF) continue;
-                if (a == 0) {
-                    this.pixels[i] = 0;
-                    continue;
-                }
-                int r = (((p >>> 16) & 0xFF) * a) / 255;
-                int g = (((p >>> 8) & 0xFF) * a) / 255;
-                int b = ((p & 0xFF) * a) / 255;
-                this.pixels[i] = (a << 24) | (r << 16) | (g << 8) | b;
-            }
-        });
+        forEachRow(0, this.height, y -> PixelVector.premultiply(this.pixels, y * this.width, this.width));
     }
 
     /**
@@ -713,22 +689,8 @@ public class PixelBuffer {
         int height = Math.min(a.height, b.height);
         int[] result = new int[width * height];
 
-        forEachRow(0, height, y -> {
-            int aRow = y * a.width;
-            int bRow = y * b.width;
-            int outRow = y * width;
-            for (int x = 0; x < width; x++) {
-                int s = a.pixels[aRow + x];
-                int d = b.pixels[bRow + x];
-
-                int ra = clampByte(((s >> 24) & 0xFF) * inverse + ((d >> 24) & 0xFF) * blend);
-                int rr = clampByte(((s >> 16) & 0xFF) * inverse + ((d >> 16) & 0xFF) * blend);
-                int rg = clampByte(((s >> 8) & 0xFF) * inverse + ((d >> 8) & 0xFF) * blend);
-                int rb = clampByte((s & 0xFF) * inverse + (d & 0xFF) * blend);
-
-                result[outRow + x] = (ra << 24) | (rr << 16) | (rg << 8) | rb;
-            }
-        });
+        forEachRow(0, height, y ->
+            PixelVector.lerp(a.pixels, y * a.width, b.pixels, y * b.width, result, y * width, width, blend, inverse));
 
         return PixelBuffer.of(result, width, height, a.hasAlpha || b.hasAlpha);
     }
@@ -894,7 +856,7 @@ public class PixelBuffer {
      * @param end the last row index, exclusive
      * @param body the per-row action
      */
-    private static void forEachRow(int start, int end, @NotNull IntConsumer body) {
+    static void forEachRow(int start, int end, @NotNull IntConsumer body) {
         int count = end - start;
 
         if (count >= MIN_PARALLEL_ROWS) {
@@ -905,10 +867,6 @@ public class PixelBuffer {
             for (int y = start; y < end; y++)
                 body.accept(y);
         }
-    }
-
-    private static int clampByte(float value) {
-        return (int) Math.clamp(value, 0f, 255f);
     }
 
     private int sampleBilinear(int @NotNull [] source, float x, float y) {

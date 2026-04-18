@@ -40,8 +40,20 @@ dependencies {
     testImplementation(libs.junit.platform.launcher)
 }
 
+// The Vector API lives in the jdk.incubator.vector module. It is referenced only from the
+// package-private VectorOps class, which is loaded lazily by PixelVector when the module is
+// resolvable at runtime. Consumers who don't pass --add-modules jdk.incubator.vector to their
+// JVM transparently get the scalar path - see PixelBuffer class javadoc.
+val vectorModuleArgs = listOf("--add-modules", "jdk.incubator.vector")
+
+tasks.withType<JavaCompile> {
+    options.compilerArgs.addAll(vectorModuleArgs)
+    options.compilerArgs.add("-Xlint:-options")
+}
+
 tasks.test {
     useJUnitPlatform()
+    jvmArgs(vectorModuleArgs)
     // Forward the libwebp-parity harness's Python-interpreter override to the
     // test JVM so golden-reference tests can locate a Python install with the
     // `webp` package when the default one on PATH doesn't have it. See

@@ -192,18 +192,7 @@ public class ColorMath {
         int tg = green(argbTint);
         int tb = blue(argbTint);
 
-        for (int i = 0; i < src.length; i++) {
-            int pixel = src[i];
-            int a = alpha(pixel);
-            if (a == 0) {
-                result[i] = pixel;
-                continue;
-            }
-            int r = (red(pixel) * tr) / 255;
-            int g = (green(pixel) * tg) / 255;
-            int b = (blue(pixel) * tb) / 255;
-            result[i] = pack(a, r, g, b);
-        }
+        PixelBuffer.forEachRow(0, h, y -> PixelVector.tint(src, result, y * w, w, tr, tg, tb));
 
         return PixelBuffer.of(result, w, h);
     }
