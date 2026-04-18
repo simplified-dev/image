@@ -82,8 +82,16 @@ public class PixelBuffer {
      * Wraps the pixel data of a {@link BufferedImage}.
      * <p>
      * If the image is {@link BufferedImage#TYPE_INT_ARGB}, the underlying data buffer is referenced
-     * directly (zero copy). Otherwise, pixel data is extracted via
-     * {@link BufferedImage#getRGB(int, int, int, int, int[], int, int)}.
+     * directly (zero copy). Otherwise, the image is redrawn into a {@code TYPE_INT_ARGB} buffer
+     * through {@link Graphics2D#drawImage(Image, int, int, ImageObserver)} so the pixel bytes
+     * land in sRGB space without any ICC gamma stretch.
+     * <p>
+     * {@link BufferedImage#getRGB(int, int)} is deliberately avoided: on calibrated-gray (like
+     * {@code TYPE_BYTE_GRAY}) or otherwise non-sRGB colour-space inputs, {@code getRGB} runs a
+     * colour-space conversion that inflates dark-byte values ({@code 2.86} linear grey becomes
+     * {@code 7.99} sRGB on the end-portal noise texture). Drawing through {@code Graphics2D}
+     * preserves the raw byte values for sRGB sources and performs the colour space transform
+     * Java's compositor uses for rendering, which matches what GL samplers see in practice.
      *
      * @param image the source image
      * @return a pixel buffer wrapping the image data
@@ -98,8 +106,15 @@ public class PixelBuffer {
             return new PixelBuffer(data, w, h, alpha);
         }
 
-        int[] pixels = image.getRGB(0, 0, w, h, null, 0, w);
-        return new PixelBuffer(pixels, w, h, alpha);
+        BufferedImage argb = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g = argb.createGraphics();
+        try {
+            g.drawImage(image, 0, 0, null);
+        } finally {
+            g.dispose();
+        }
+        int[] data = ((DataBufferInt) argb.getRaster().getDataBuffer()).getData();
+        return new PixelBuffer(data, w, h, alpha);
     }
 
     // --- bounds queries ---
