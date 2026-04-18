@@ -10,6 +10,7 @@ import java.awt.image.BufferedImage;
 import java.awt.image.ColorModel;
 import java.awt.image.DataBuffer;
 import java.awt.image.DataBufferInt;
+import java.awt.image.ImageObserver;
 import java.awt.image.Raster;
 import java.awt.image.SinglePixelPackedSampleModel;
 import java.util.Arrays;
@@ -88,10 +89,10 @@ public class PixelBuffer {
      * <p>
      * {@link BufferedImage#getRGB(int, int)} is deliberately avoided: on calibrated-gray (like
      * {@code TYPE_BYTE_GRAY}) or otherwise non-sRGB colour-space inputs, {@code getRGB} runs a
-     * colour-space conversion that inflates dark-byte values ({@code 2.86} linear grey becomes
-     * {@code 7.99} sRGB on the end-portal noise texture). Drawing through {@code Graphics2D}
-     * preserves the raw byte values for sRGB sources and performs the colour space transform
-     * Java's compositor uses for rendering, which matches what GL samplers see in practice.
+     * colour-space conversion that inflates dark-byte values (ex. {@code 2.86} linear grey
+     * becomes {@code 7.99} sRGB). Drawing through {@code Graphics2D} preserves the raw byte
+     * values for sRGB sources and performs the colour space transform Java's compositor uses
+     * for rendering, which matches what GL samplers see in practice.
      *
      * @param image the source image
      * @return a pixel buffer wrapping the image data
