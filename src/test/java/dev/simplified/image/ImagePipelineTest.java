@@ -15,8 +15,21 @@ import dev.simplified.image.codec.gif.GifWriteOptions;
 import dev.simplified.image.codec.jpeg.JpegImageReader;
 import dev.simplified.image.codec.jpeg.JpegImageWriter;
 import dev.simplified.image.codec.jpeg.JpegWriteOptions;
+import dev.simplified.image.codec.ico.IcoImageReader;
+import dev.simplified.image.codec.ico.IcoImageWriter;
 import dev.simplified.image.codec.png.PngImageReader;
 import dev.simplified.image.codec.png.PngImageWriter;
+import dev.simplified.image.codec.pnm.PnmImageReader;
+import dev.simplified.image.codec.pnm.PnmImageWriter;
+import dev.simplified.image.codec.pnm.PnmWriteOptions;
+import dev.simplified.image.codec.qoi.QoiImageReader;
+import dev.simplified.image.codec.qoi.QoiImageWriter;
+import dev.simplified.image.codec.tga.TgaImageReader;
+import dev.simplified.image.codec.tga.TgaImageWriter;
+import dev.simplified.image.codec.tga.TgaWriteOptions;
+import dev.simplified.image.codec.tiff.TiffImageReader;
+import dev.simplified.image.codec.tiff.TiffImageWriter;
+import dev.simplified.image.codec.tiff.TiffWriteOptions;
 import dev.simplified.image.exception.UnsupportedFormatException;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -553,6 +566,340 @@ public class ImagePipelineTest {
             assertThat(decoded.getHeight(), is(4));
         }
 
+    }
+
+    // ──── QOI ────
+
+    @Nested
+    class QoiTests {
+
+        @Test
+        void roundTripPreservesPixels() {
+            BufferedImage original = createArgbGradient(32, 32);
+            byte[] encoded = new QoiImageWriter().write(StaticImageData.of(original));
+
+            assertThat("qoif magic", new String(encoded, 0, 4), is("qoif"));
+
+            ImageData decoded = new QoiImageReader().read(encoded);
+
+            assertThat(decoded.getWidth(), is(32));
+            assertThat(decoded.getHeight(), is(32));
+            assertThat(decoded.isAnimated(), is(false));
+
+            PixelBuffer got = decoded.getFrames().getFirst().pixels();
+            for (int y = 0; y < 32; y++)
+                for (int x = 0; x < 32; x++)
+                    assertThat("pixel @ " + x + "," + y, got.getPixel(x, y), is(original.getRGB(x, y)));
+        }
+
+        @Test
+        void rgbVariantHasNoAlpha() {
+            BufferedImage original = createRgbTestImage(8, 8, Color.ORANGE);
+            byte[] encoded = new QoiImageWriter().write(StaticImageData.of(original));
+
+            assertThat(encoded[12], is((byte) 3));
+
+            ImageData decoded = new QoiImageReader().read(encoded);
+            assertThat(decoded.hasAlpha(), is(false));
+        }
+
+        @Test
+        void factoryDetectsQoiByMagic() {
+            ImageFactory factory = new ImageFactory();
+            byte[] encoded = new QoiImageWriter().write(StaticImageData.of(createRgbTestImage(4, 4, Color.CYAN)));
+            assertThat(factory.detectFormat(encoded), is(ImageFormat.QOI));
+        }
+
+    }
+
+    // ──── PNM ────
+
+    @Nested
+    class PnmTests {
+
+        @Test
+        void ppmBinaryRoundTrip() {
+            BufferedImage original = createRgbTestImage(16, 16, Color.RED);
+            byte[] encoded = new PnmImageWriter().write(
+                StaticImageData.of(original),
+                PnmWriteOptions.builder().withVariant(PnmWriteOptions.Variant.PPM).build()
+            );
+
+            assertThat("P6 magic", new String(encoded, 0, 2), is("P6"));
+
+            ImageData decoded = new PnmImageReader().read(encoded);
+            assertThat(decoded.getWidth(), is(16));
+            assertThat(decoded.getHeight(), is(16));
+
+            PixelBuffer got = decoded.getFrames().getFirst().pixels();
+            for (int y = 0; y < 16; y++)
+                for (int x = 0; x < 16; x++)
+                    assertThat(got.getPixel(x, y), is(0xFFFF0000));
+        }
+
+        @Test
+        void ppmAsciiRoundTrip() {
+            BufferedImage original = createRgbTestImage(4, 4, Color.GREEN);
+            byte[] encoded = new PnmImageWriter().write(
+                StaticImageData.of(original),
+                PnmWriteOptions.builder().withVariant(PnmWriteOptions.Variant.PPM).isAscii().build()
+            );
+
+            assertThat("P3 magic", new String(encoded, 0, 2), is("P3"));
+
+            ImageData decoded = new PnmImageReader().read(encoded);
+            PixelBuffer got = decoded.getFrames().getFirst().pixels();
+            for (int y = 0; y < 4; y++)
+                for (int x = 0; x < 4; x++)
+                    assertThat(got.getPixel(x, y), is(0xFF00FF00));
+        }
+
+        @Test
+        void pgmBinaryCollapsesToLuma() {
+            BufferedImage original = createRgbTestImage(8, 8, Color.WHITE);
+            byte[] encoded = new PnmImageWriter().write(
+                StaticImageData.of(original),
+                PnmWriteOptions.builder().withVariant(PnmWriteOptions.Variant.PGM).build()
+            );
+
+            assertThat("P5 magic", new String(encoded, 0, 2), is("P5"));
+
+            ImageData decoded = new PnmImageReader().read(encoded);
+            PixelBuffer got = decoded.getFrames().getFirst().pixels();
+            int px = got.getPixel(0, 0);
+            assertThat("R==G==B for grayscale", (px >> 16) & 0xFF, is((px >> 8) & 0xFF));
+            assertThat("G==B for grayscale", (px >> 8) & 0xFF, is(px & 0xFF));
+        }
+
+        @Test
+        void pbmBinaryProducesMonochrome() {
+            BufferedImage original = createRgbTestImage(8, 8, Color.BLACK);
+            byte[] encoded = new PnmImageWriter().write(
+                StaticImageData.of(original),
+                PnmWriteOptions.builder().withVariant(PnmWriteOptions.Variant.PBM).build()
+            );
+
+            assertThat("P4 magic", new String(encoded, 0, 2), is("P4"));
+
+            ImageData decoded = new PnmImageReader().read(encoded);
+            PixelBuffer got = decoded.getFrames().getFirst().pixels();
+            assertThat(got.getPixel(0, 0), is(0xFF000000));
+        }
+
+        @Test
+        void parsesHeaderComments() {
+            String source = "P3\n# this is a comment\n2 1\n255\n0 0 0 255 255 255\n";
+            ImageData decoded = new PnmImageReader().read(source.getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+            PixelBuffer got = decoded.getFrames().getFirst().pixels();
+            assertThat(got.getPixel(0, 0), is(0xFF000000));
+            assertThat(got.getPixel(1, 0), is(0xFFFFFFFF));
+        }
+
+    }
+
+    // ──── TIFF ────
+
+    @Nested
+    class TiffTests {
+
+        @Test
+        void deflateRoundTrip() {
+            BufferedImage original = createRgbTestImage(16, 16, Color.BLUE);
+            byte[] encoded = new TiffImageWriter().write(StaticImageData.of(original));
+
+            assertThat("TIFF magic", encoded[0] == 0x49 && encoded[1] == 0x49 && encoded[2] == 0x2A && encoded[3] == 0x00
+                || encoded[0] == 0x4D && encoded[1] == 0x4D && encoded[2] == 0x00 && encoded[3] == 0x2A, is(true));
+
+            ImageData decoded = new TiffImageReader().read(encoded);
+            assertThat(decoded.getWidth(), is(16));
+            assertThat(decoded.getHeight(), is(16));
+            assertThat(decoded.isAnimated(), is(false));
+        }
+
+        @Test
+        void lzwRoundTrip() {
+            BufferedImage original = createRgbTestImage(16, 16, Color.MAGENTA);
+            byte[] encoded = new TiffImageWriter().write(
+                StaticImageData.of(original),
+                TiffWriteOptions.builder().withCompression(TiffWriteOptions.Compression.LZW).build()
+            );
+            ImageData decoded = new TiffImageReader().read(encoded);
+            assertThat(decoded.getWidth(), is(16));
+        }
+
+        @Test
+        void packBitsRoundTrip() {
+            BufferedImage original = createRgbTestImage(16, 16, Color.YELLOW);
+            byte[] encoded = new TiffImageWriter().write(
+                StaticImageData.of(original),
+                TiffWriteOptions.builder().withCompression(TiffWriteOptions.Compression.PACKBITS).build()
+            );
+            ImageData decoded = new TiffImageReader().read(encoded);
+            assertThat(decoded.getWidth(), is(16));
+        }
+
+        @Test
+        void uncompressedRoundTrip() {
+            BufferedImage original = createRgbTestImage(16, 16, Color.GRAY);
+            byte[] encoded = new TiffImageWriter().write(
+                StaticImageData.of(original),
+                TiffWriteOptions.builder().withCompression(TiffWriteOptions.Compression.NONE).build()
+            );
+            ImageData decoded = new TiffImageReader().read(encoded);
+            assertThat(decoded.getWidth(), is(16));
+        }
+
+        @Test
+        void multiPageIsAnimated() {
+            ConcurrentList<ImageFrame> frames = Concurrent.newList();
+            frames.add(ImageFrame.of(PixelBuffer.wrap(createRgbTestImage(8, 8, Color.RED))));
+            frames.add(ImageFrame.of(PixelBuffer.wrap(createRgbTestImage(8, 8, Color.GREEN))));
+            frames.add(ImageFrame.of(PixelBuffer.wrap(createRgbTestImage(8, 8, Color.BLUE))));
+
+            AnimatedImageData data = AnimatedImageData.builder().withFrames(frames).build();
+            byte[] encoded = new TiffImageWriter().write(data);
+            ImageData decoded = new TiffImageReader().read(encoded);
+
+            assertThat(decoded.isAnimated(), is(true));
+            assertThat(decoded.getFrames(), hasSize(3));
+        }
+
+    }
+
+    // ──── TGA ────
+
+    @Nested
+    class TgaTests {
+
+        @Test
+        void rleRoundTripAlphaPreserved() {
+            BufferedImage original = new BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB);
+            for (int y = 0; y < 16; y++)
+                for (int x = 0; x < 16; x++)
+                    original.setRGB(x, y, 0xC80A141E);
+
+            byte[] encoded = new TgaImageWriter().write(StaticImageData.of(original));
+
+            ImageData decoded = new TgaImageReader().read(encoded);
+            PixelBuffer got = decoded.getFrames().getFirst().pixels();
+            assertThat(got.width(), is(16));
+            assertThat(got.height(), is(16));
+            assertThat(got.hasAlpha(), is(true));
+            for (int y = 0; y < 16; y++)
+                for (int x = 0; x < 16; x++)
+                    assertThat(got.getPixel(x, y), is(0xC80A141E));
+        }
+
+        @Test
+        void uncompressedRgbRoundTrip() {
+            BufferedImage original = createRgbGradient(16, 16);
+            byte[] encoded = new TgaImageWriter().write(
+                StaticImageData.of(original),
+                TgaWriteOptions.builder().isRle(false).build()
+            );
+            ImageData decoded = new TgaImageReader().read(encoded);
+            PixelBuffer got = decoded.getFrames().getFirst().pixels();
+
+            for (int y = 0; y < 16; y++)
+                for (int x = 0; x < 16; x++) {
+                    int expected = original.getRGB(x, y) | 0xFF000000;
+                    assertThat("pixel @ " + x + "," + y, got.getPixel(x, y), is(expected));
+                }
+        }
+
+        @Test
+        void rleRoundTripGradient() {
+            BufferedImage original = createArgbGradient(32, 32);
+            byte[] encoded = new TgaImageWriter().write(StaticImageData.of(original));
+            ImageData decoded = new TgaImageReader().read(encoded);
+            PixelBuffer got = decoded.getFrames().getFirst().pixels();
+
+            for (int y = 0; y < 32; y++)
+                for (int x = 0; x < 32; x++)
+                    assertThat("pixel @ " + x + "," + y, got.getPixel(x, y), is(original.getRGB(x, y)));
+        }
+
+        @Test
+        void factoryDetectsTgaByFooter() {
+            ImageFactory factory = new ImageFactory();
+            byte[] encoded = new TgaImageWriter().write(StaticImageData.of(createRgbTestImage(4, 4, Color.PINK)));
+            assertThat(factory.detectFormat(encoded), is(ImageFormat.TGA));
+        }
+
+    }
+
+    // ──── ICO ────
+
+    @Nested
+    class IcoTests {
+
+        @Test
+        void roundTripPreservesAlpha() {
+            BufferedImage original = new BufferedImage(32, 32, BufferedImage.TYPE_INT_ARGB);
+            for (int y = 0; y < 32; y++)
+                for (int x = 0; x < 32; x++)
+                    original.setRGB(x, y, 0x806496C8);
+
+            byte[] encoded = new IcoImageWriter().write(StaticImageData.of(original));
+
+            assertThat("ICO magic", encoded[0] == 0x00 && encoded[1] == 0x00 && encoded[2] == 0x01 && encoded[3] == 0x00, is(true));
+
+            ImageData decoded = new IcoImageReader().read(encoded);
+            assertThat(decoded.getWidth(), is(32));
+            assertThat(decoded.getHeight(), is(32));
+            assertThat(decoded.hasAlpha(), is(true));
+
+            PixelBuffer got = decoded.getFrames().getFirst().pixels();
+            assertThat(got.getPixel(0, 0), is(0x806496C8));
+        }
+
+        @Test
+        void fullyOpaqueRoundTripIsExact() {
+            BufferedImage original = new BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB);
+            for (int y = 0; y < 16; y++)
+                for (int x = 0; x < 16; x++)
+                    original.setRGB(x, y, 0xFFABCDEF);
+
+            byte[] encoded = new IcoImageWriter().write(StaticImageData.of(original));
+            ImageData decoded = new IcoImageReader().read(encoded);
+            PixelBuffer got = decoded.getFrames().getFirst().pixels();
+            assertThat(got.getPixel(0, 0), is(0xFFABCDEF));
+        }
+
+        @Test
+        void factoryDetectsIcoByMagic() {
+            ImageFactory factory = new ImageFactory();
+            byte[] encoded = new IcoImageWriter().write(StaticImageData.of(createArgbTestImage(16, 16, Color.WHITE)));
+            assertThat(factory.detectFormat(encoded), is(ImageFormat.ICO));
+        }
+
+    }
+
+    // ──── helpers for new codec tests ────
+
+    private static BufferedImage createRgbGradient(int width, int height) {
+        BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
+        for (int y = 0; y < height; y++)
+            for (int x = 0; x < width; x++) {
+                int r = (x * 255) / Math.max(1, width - 1);
+                int g = (y * 255) / Math.max(1, height - 1);
+                int b = ((x + y) * 255) / Math.max(1, width + height - 2);
+                image.setRGB(x, y, 0xFF000000 | (r << 16) | (g << 8) | b);
+            }
+        return image;
+    }
+
+    private static BufferedImage createArgbGradient(int width, int height) {
+        BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+        for (int y = 0; y < height; y++)
+            for (int x = 0; x < width; x++) {
+                int r = (x * 255) / Math.max(1, width - 1);
+                int g = (y * 255) / Math.max(1, height - 1);
+                int b = ((x * y) & 0xFF);
+                int a = 128 + ((x + y) % 128);
+                image.setRGB(x, y, (a << 24) | (r << 16) | (g << 8) | b);
+            }
+        return image;
     }
 
 }

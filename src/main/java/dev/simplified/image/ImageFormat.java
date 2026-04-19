@@ -18,7 +18,12 @@ public enum ImageFormat {
     PNG("png", false),
     BMP("bmp", false),
     GIF("gif", true),
-    WEBP("webp", true);
+    WEBP("webp", true),
+    TIFF("tiff", true),
+    ICO("ico", false),
+    TGA("tga", false),
+    QOI("qoi", false),
+    PNM("pnm", false);
 
     private final @NotNull String formatName;
     private final boolean supportsAnimation;
@@ -70,7 +75,36 @@ public enum ImageFormat {
                 && data[9] == 0x45   // E
                 && data[10] == 0x42  // B
                 && data[11] == 0x50; // P
+            case TIFF -> data.length >= 4
+                && ((data[0] == 0x49 && data[1] == 0x49 && data[2] == 0x2A && data[3] == 0x00)
+                    || (data[0] == 0x4D && data[1] == 0x4D && data[2] == 0x00 && data[3] == 0x2A));
+            case ICO -> data.length >= 4
+                && data[0] == 0x00
+                && data[1] == 0x00
+                && data[2] == 0x01
+                && data[3] == 0x00;
+            case TGA -> matchesTgaFooter(data);
+            case QOI -> data.length >= 4
+                && data[0] == 0x71   // q
+                && data[1] == 0x6F   // o
+                && data[2] == 0x69   // i
+                && data[3] == 0x66;  // f
+            case PNM -> data.length >= 2
+                && data[0] == 0x50   // P
+                && data[1] >= 0x31   // 1
+                && data[1] <= 0x36;  // 6
         };
+    }
+
+    private static boolean matchesTgaFooter(byte @NotNull [] data) {
+        if (data.length < 26) return false;
+
+        int off = data.length - 26;
+        return data[off + 8] == 'T' && data[off + 9] == 'R' && data[off + 10] == 'U' && data[off + 11] == 'E'
+            && data[off + 12] == 'V' && data[off + 13] == 'I' && data[off + 14] == 'S' && data[off + 15] == 'I'
+            && data[off + 16] == 'O' && data[off + 17] == 'N' && data[off + 18] == '-' && data[off + 19] == 'X'
+            && data[off + 20] == 'F' && data[off + 21] == 'I' && data[off + 22] == 'L' && data[off + 23] == 'E'
+            && data[off + 24] == '.' && data[off + 25] == 0x00;
     }
 
 }
