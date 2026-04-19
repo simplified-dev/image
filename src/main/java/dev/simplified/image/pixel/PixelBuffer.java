@@ -9,6 +9,7 @@ import java.awt.*;
 import java.awt.image.BufferedImage;
 import java.awt.image.ColorModel;
 import java.awt.image.DataBuffer;
+import java.awt.image.DataBufferByte;
 import java.awt.image.DataBufferInt;
 import java.awt.image.ImageObserver;
 import java.awt.image.Raster;
@@ -99,17 +100,24 @@ public class PixelBuffer {
     /**
      * Wraps the pixel data of a {@link BufferedImage}.
      * <p>
-     * If the image is {@link BufferedImage#TYPE_INT_ARGB}, the underlying data buffer is referenced
-     * directly (zero copy). Otherwise, the image is redrawn into a {@code TYPE_INT_ARGB} buffer
-     * through {@link Graphics2D#drawImage(Image, int, int, ImageObserver)} so the pixel bytes
-     * land in sRGB space without any ICC gamma stretch.
+     * {@link BufferedImage#TYPE_INT_ARGB} is the only layout that shares memory with this buffer's
+     * {@code int[]} ARGB store; for that type the backing array is referenced directly (zero-copy).
+     * For every other standard sRGB layout - {@link BufferedImage#TYPE_4BYTE_ABGR TYPE_4BYTE_ABGR},
+     * {@link BufferedImage#TYPE_3BYTE_BGR TYPE_3BYTE_BGR}, {@link BufferedImage#TYPE_INT_RGB
+     * TYPE_INT_RGB}, {@link BufferedImage#TYPE_INT_BGR TYPE_INT_BGR} - raw raster bytes are
+     * repacked into ARGB with no color-space transform, giving a bit-perfect copy of every channel.
      * <p>
-     * {@link BufferedImage#getRGB(int, int)} is deliberately avoided: on calibrated-gray (like
-     * {@code TYPE_BYTE_GRAY}) or otherwise non-sRGB colour-space inputs, {@code getRGB} runs a
-     * colour-space conversion that inflates dark-byte values (ex. {@code 2.86} linear grey
-     * becomes {@code 7.99} sRGB). Drawing through {@code Graphics2D} preserves the raw byte
-     * values for sRGB sources and performs the colour space transform Java's compositor uses
-     * for rendering, which matches what GL samplers see in practice.
+     * All other types (calibrated-gray, indexed, custom color models, alpha-premultiplied) fall
+     * back to {@link Graphics2D#drawImage(Image, int, int, ImageObserver)} for an sRGB conversion
+     * and may lose up to one least-significant bit per channel at partial alpha due to the
+     * compositor's premultiply/un-premultiply roundtrip.
+     * <p>
+     * {@link BufferedImage#getRGB(int, int)} is deliberately avoided in the fast paths: on
+     * calibrated-gray (like {@code TYPE_BYTE_GRAY}) or otherwise non-sRGB colour-space inputs,
+     * {@code getRGB} runs a colour-space conversion that inflates dark-byte values (ex. {@code 2.86}
+     * linear grey becomes {@code 7.99} sRGB). The {@code Graphics2D} fallback branch performs the
+     * colour-space transform Java's compositor uses for rendering, which matches what GL samplers
+     * see in practice.
      *
      * @param image the source image
      * @return a pixel buffer wrapping the image data
@@ -119,9 +127,53 @@ public class PixelBuffer {
         int h = image.getHeight();
         boolean alpha = image.getColorModel().hasAlpha();
 
-        if (image.getType() == BufferedImage.TYPE_INT_ARGB) {
-            int[] data = ((DataBufferInt) image.getRaster().getDataBuffer()).getData();
-            return new PixelBuffer(data, w, h, alpha);
+        switch (image.getType()) {
+            case BufferedImage.TYPE_INT_ARGB -> {
+                int[] data = ((DataBufferInt) image.getRaster().getDataBuffer()).getData();
+                return new PixelBuffer(data, w, h, alpha);
+            }
+            case BufferedImage.TYPE_INT_RGB -> {
+                int[] src = ((DataBufferInt) image.getRaster().getDataBuffer()).getData();
+                int[] dst = new int[src.length];
+                for (int i = 0; i < src.length; i++)
+                    dst[i] = (src[i] & 0x00FFFFFF) | 0xFF000000;
+                return new PixelBuffer(dst, w, h, alpha);
+            }
+            case BufferedImage.TYPE_INT_BGR -> {
+                int[] src = ((DataBufferInt) image.getRaster().getDataBuffer()).getData();
+                int[] dst = new int[src.length];
+                for (int i = 0; i < src.length; i++) {
+                    int p = src[i];
+                    int r = p & 0xFF;
+                    int g = (p >>> 8) & 0xFF;
+                    int b = (p >>> 16) & 0xFF;
+                    dst[i] = 0xFF000000 | (r << 16) | (g << 8) | b;
+                }
+                return new PixelBuffer(dst, w, h, alpha);
+            }
+            case BufferedImage.TYPE_4BYTE_ABGR -> {
+                byte[] src = ((DataBufferByte) image.getRaster().getDataBuffer()).getData();
+                int[] dst = new int[w * h];
+                for (int i = 0, j = 0; i < dst.length; i++, j += 4) {
+                    int a = src[j] & 0xFF;
+                    int b = src[j + 1] & 0xFF;
+                    int g = src[j + 2] & 0xFF;
+                    int r = src[j + 3] & 0xFF;
+                    dst[i] = (a << 24) | (r << 16) | (g << 8) | b;
+                }
+                return new PixelBuffer(dst, w, h, alpha);
+            }
+            case BufferedImage.TYPE_3BYTE_BGR -> {
+                byte[] src = ((DataBufferByte) image.getRaster().getDataBuffer()).getData();
+                int[] dst = new int[w * h];
+                for (int i = 0, j = 0; i < dst.length; i++, j += 3) {
+                    int b = src[j] & 0xFF;
+                    int g = src[j + 1] & 0xFF;
+                    int r = src[j + 2] & 0xFF;
+                    dst[i] = 0xFF000000 | (r << 16) | (g << 8) | b;
+                }
+                return new PixelBuffer(dst, w, h, alpha);
+            }
         }
 
         BufferedImage argb = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);

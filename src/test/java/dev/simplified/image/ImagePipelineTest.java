@@ -134,6 +134,52 @@ public class ImagePipelineTest {
         }
 
         @Test
+        void wrap4ByteAbgrIsBitPerfect() {
+            BufferedImage image = new BufferedImage(3, 3, BufferedImage.TYPE_4BYTE_ABGR);
+            for (int y = 0; y < 3; y++)
+                for (int x = 0; x < 3; x++)
+                    image.setRGB(x, y, 0x80123456);
+
+            PixelBuffer buffer = PixelBuffer.wrap(image);
+            for (int y = 0; y < 3; y++)
+                for (int x = 0; x < 3; x++)
+                    assertThat(buffer.getPixel(x, y), is(0x80123456));
+        }
+
+        @Test
+        void wrap3ByteBgrIsBitPerfect() {
+            BufferedImage image = new BufferedImage(3, 3, BufferedImage.TYPE_3BYTE_BGR);
+            for (int y = 0; y < 3; y++)
+                for (int x = 0; x < 3; x++)
+                    image.setRGB(x, y, 0xFFABCDEF);
+
+            PixelBuffer buffer = PixelBuffer.wrap(image);
+            for (int y = 0; y < 3; y++)
+                for (int x = 0; x < 3; x++)
+                    assertThat(buffer.getPixel(x, y), is(0xFFABCDEF));
+        }
+
+        @Test
+        void wrapIntRgbForcesOpaqueAlpha() {
+            BufferedImage image = new BufferedImage(2, 2, BufferedImage.TYPE_INT_RGB);
+            image.setRGB(0, 0, 0x00123456);
+            image.setRGB(1, 1, 0xFFABCDEF);
+
+            PixelBuffer buffer = PixelBuffer.wrap(image);
+            assertThat(buffer.getPixel(0, 0), is(0xFF123456));
+            assertThat(buffer.getPixel(1, 1), is(0xFFABCDEF));
+        }
+
+        @Test
+        void wrapIntBgrSwapsChannels() {
+            BufferedImage image = new BufferedImage(2, 2, BufferedImage.TYPE_INT_BGR);
+            image.setRGB(0, 0, 0xFF112233);
+
+            PixelBuffer buffer = PixelBuffer.wrap(image);
+            assertThat(buffer.getPixel(0, 0), is(0xFF112233));
+        }
+
+        @Test
         void getSetPixel() {
             int[] pixels = new int[4];
             PixelBuffer buffer = PixelBuffer.of(pixels, 2, 2);
