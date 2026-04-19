@@ -44,8 +44,8 @@ final class FrameDiffUtil {
                 "dimension mismatch: prev=%dx%d curr=%dx%d",
                 w, h, curr.width(), curr.height()));
 
-        int[] pp = prev.pixels();
-        int[] cp = curr.pixels();
+        int[] pp = prev.data();
+        int[] cp = curr.data();
         int minX = Integer.MAX_VALUE, minY = Integer.MAX_VALUE;
         int maxX = -1, maxY = -1;
         for (int y = 0; y < h; y++) {
@@ -88,7 +88,7 @@ final class FrameDiffUtil {
                 offsetX, offsetY, width, height, sw, sh));
 
         int[] out = new int[width * height];
-        int[] in = src.pixels();
+        int[] in = src.data();
         for (int y = 0; y < height; y++)
             System.arraycopy(in, (offsetY + y) * sw + offsetX, out, y * width, width);
         return PixelBuffer.of(out, width, height);

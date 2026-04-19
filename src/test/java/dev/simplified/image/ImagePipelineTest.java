@@ -2,21 +2,16 @@ package dev.simplified.image;
 
 import dev.simplified.collection.Concurrent;
 import dev.simplified.collection.ConcurrentList;
-import dev.simplified.image.data.AnimatedImageData;
-import dev.simplified.image.data.ImageFrame;
-import dev.simplified.image.data.StaticImageData;
-import dev.simplified.image.pixel.PixelBuffer;
-import dev.simplified.image.transform.FrameNormalizer;
 import dev.simplified.image.codec.bmp.BmpImageReader;
 import dev.simplified.image.codec.bmp.BmpImageWriter;
 import dev.simplified.image.codec.gif.GifImageReader;
 import dev.simplified.image.codec.gif.GifImageWriter;
 import dev.simplified.image.codec.gif.GifWriteOptions;
+import dev.simplified.image.codec.ico.IcoImageReader;
+import dev.simplified.image.codec.ico.IcoImageWriter;
 import dev.simplified.image.codec.jpeg.JpegImageReader;
 import dev.simplified.image.codec.jpeg.JpegImageWriter;
 import dev.simplified.image.codec.jpeg.JpegWriteOptions;
-import dev.simplified.image.codec.ico.IcoImageReader;
-import dev.simplified.image.codec.ico.IcoImageWriter;
 import dev.simplified.image.codec.png.PngImageReader;
 import dev.simplified.image.codec.png.PngImageWriter;
 import dev.simplified.image.codec.pnm.PnmImageReader;
@@ -30,7 +25,12 @@ import dev.simplified.image.codec.tga.TgaWriteOptions;
 import dev.simplified.image.codec.tiff.TiffImageReader;
 import dev.simplified.image.codec.tiff.TiffImageWriter;
 import dev.simplified.image.codec.tiff.TiffWriteOptions;
+import dev.simplified.image.data.AnimatedImageData;
+import dev.simplified.image.data.ImageFrame;
+import dev.simplified.image.data.StaticImageData;
 import dev.simplified.image.exception.UnsupportedFormatException;
+import dev.simplified.image.pixel.PixelBuffer;
+import dev.simplified.image.transform.FrameNormalizer;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
@@ -134,7 +134,7 @@ public class ImagePipelineTest {
 
             assertThat(buffer.width(), is(4));
             assertThat(buffer.height(), is(4));
-            assertThat(buffer.pixels().length, is(16));
+            assertThat(buffer.data().length, is(16));
         }
 
         @Test

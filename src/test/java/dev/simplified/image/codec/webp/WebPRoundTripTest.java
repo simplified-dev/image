@@ -5,11 +5,11 @@ import dev.simplified.collection.ConcurrentList;
 import dev.simplified.image.ImageData;
 import dev.simplified.image.ImageFactory;
 import dev.simplified.image.ImageFormat;
+import dev.simplified.image.codec.webp.lossless.VP8LEncoder;
 import dev.simplified.image.data.AnimatedImageData;
 import dev.simplified.image.data.FrameBlend;
 import dev.simplified.image.data.FrameDisposal;
 import dev.simplified.image.data.ImageFrame;
-import dev.simplified.image.codec.webp.lossless.VP8LEncoder;
 import dev.simplified.image.pixel.PixelBuffer;
 import org.jetbrains.annotations.NotNull;
 import org.junit.jupiter.api.DisplayName;
@@ -1340,11 +1340,11 @@ class WebPRoundTripTest {
             int[] partial;
             int partialW, partialH;
             if (f == 0) {
-                partial = curr.pixels();
+                partial = curr.data();
                 partialW = W; partialH = H;
             } else {
                 int[] bbox = dev.simplified.image.codec.webp.FrameDiffUtil.computeBoundingBox(prev, curr);
-                if (bbox == null) { partialW = 1; partialH = 1; partial = new int[]{ curr.pixels()[0] }; }
+                if (bbox == null) { partialW = 1; partialH = 1; partial = new int[]{ curr.data()[0] }; }
                 else {
                     partialW = bbox[2]; partialH = bbox[3];
                     partial = new int[partialW * partialH];

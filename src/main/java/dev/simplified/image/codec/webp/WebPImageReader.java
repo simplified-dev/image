@@ -2,20 +2,20 @@ package dev.simplified.image.codec.webp;
 
 import dev.simplified.collection.Concurrent;
 import dev.simplified.collection.ConcurrentList;
-import dev.simplified.image.data.AnimatedImageData;
 import dev.simplified.image.ImageData;
 import dev.simplified.image.ImageFormat;
-import dev.simplified.image.data.ImageFrame;
-import dev.simplified.image.data.FrameBlend;
-import dev.simplified.image.data.FrameDisposal;
-import dev.simplified.image.pixel.PixelBuffer;
-import dev.simplified.image.data.StaticImageData;
 import dev.simplified.image.codec.ImageReadOptions;
 import dev.simplified.image.codec.ImageReader;
 import dev.simplified.image.codec.webp.lossless.VP8LDecoder;
 import dev.simplified.image.codec.webp.lossy.VP8Decoder;
 import dev.simplified.image.codec.webp.lossy.VP8DecoderSession;
+import dev.simplified.image.data.AnimatedImageData;
+import dev.simplified.image.data.FrameBlend;
+import dev.simplified.image.data.FrameDisposal;
+import dev.simplified.image.data.ImageFrame;
+import dev.simplified.image.data.StaticImageData;
 import dev.simplified.image.exception.ImageDecodeException;
+import dev.simplified.image.pixel.PixelBuffer;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -200,7 +200,7 @@ public class WebPImageReader implements ImageReader {
             }
 
             // Composite the partial-frame pixels onto the canvas per blend flag.
-            int[] subPx = subPixels.pixels();
+            int[] subPx = subPixels.data();
             int dstX0 = Math.max(0, frameX);
             int dstY0 = Math.max(0, frameY);
             int dstX1 = Math.min(canvasWidth, frameX + frameW);
@@ -290,7 +290,7 @@ public class WebPImageReader implements ImageReader {
 
         int header = alphPayload[0] & 0xFF;
         int compression = header & 0x03;
-        int[] pixels = colorPixels.pixels();
+        int[] pixels = colorPixels.data();
 
         if (compression == 0) {
             int alphaOffset = 1;
@@ -303,7 +303,7 @@ public class WebPImageReader implements ImageReader {
             // standalone VP8L decoder.
             byte[] alphBitstream = prependVp8lHeader(alphPayload, 1, colorPixels.width(), colorPixels.height());
             PixelBuffer alphDecoded = VP8LDecoder.decode(alphBitstream);
-            int[] alphPixels = alphDecoded.pixels();
+            int[] alphPixels = alphDecoded.data();
             for (int i = 0; i < pixels.length && i < alphPixels.length; i++)
                 pixels[i] = (pixels[i] & 0x00FFFFFF) | (((alphPixels[i] >> 8) & 0xFF) << 24);
         }

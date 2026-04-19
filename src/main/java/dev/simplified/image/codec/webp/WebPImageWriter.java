@@ -3,19 +3,19 @@ package dev.simplified.image.codec.webp;
 
 import dev.simplified.collection.Concurrent;
 import dev.simplified.collection.ConcurrentList;
-import dev.simplified.image.data.AnimatedImageData;
 import dev.simplified.image.ImageData;
 import dev.simplified.image.ImageFormat;
-import dev.simplified.image.data.FrameBlend;
-import dev.simplified.image.data.FrameDisposal;
-import dev.simplified.image.data.ImageFrame;
-import dev.simplified.image.pixel.PixelBuffer;
 import dev.simplified.image.codec.ImageWriteOptions;
 import dev.simplified.image.codec.ImageWriter;
 import dev.simplified.image.codec.webp.lossless.NearLosslessPreprocess;
 import dev.simplified.image.codec.webp.lossless.VP8LEncoder;
 import dev.simplified.image.codec.webp.lossy.VP8Encoder;
 import dev.simplified.image.codec.webp.lossy.VP8EncoderSession;
+import dev.simplified.image.data.AnimatedImageData;
+import dev.simplified.image.data.FrameBlend;
+import dev.simplified.image.data.FrameDisposal;
+import dev.simplified.image.data.ImageFrame;
+import dev.simplified.image.pixel.PixelBuffer;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -307,7 +307,7 @@ public class WebPImageWriter implements ImageWriter {
     private static @NotNull PixelBuffer applyNearLosslessIfEnabled(@NotNull PixelBuffer pixels, int level) {
         if (level >= 100) return pixels;
         int[] out = NearLosslessPreprocess.apply(
-            pixels.pixels(), pixels.width(), pixels.height(), level);
+            pixels.data(), pixels.width(), pixels.height(), level);
         return PixelBuffer.of(out, pixels.width(), pixels.height());
     }
 
@@ -422,7 +422,7 @@ public class WebPImageWriter implements ImageWriter {
     }
 
     private static byte @NotNull [] encodeAlphaPlane(@NotNull PixelBuffer pixels, boolean compressed) {
-        int[] data = pixels.pixels();
+        int[] data = pixels.data();
         byte[] rawAlpha = new byte[data.length];
 
         for (int i = 0; i < data.length; i++)

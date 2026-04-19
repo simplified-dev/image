@@ -1,5 +1,6 @@
 package dev.simplified.image.codec.webp.lossless;
 
+import dev.simplified.image.codec.webp.RiffContainer;
 import dev.simplified.image.pixel.PixelBuffer;
 import org.jetbrains.annotations.NotNull;
 
@@ -110,7 +111,7 @@ public final class VP8LEncoder {
         // bits, tile mode sub-image, expanded alphabets) that can exceed the savings
         // on tiny images. Trying and picking is the simplest way to guarantee a
         // non-regression without replicating libwebp's entropy-estimation heuristic.
-        int[] palette = detectPalette(pixels.pixels());
+        int[] palette = detectPalette(pixels.data());
         boolean paletteEligible = palette != null;
 
         byte[] best = null;
@@ -183,7 +184,7 @@ public final class VP8LEncoder {
     ) {
         int width = pixels.width();
         int height = pixels.height();
-        int[] pixelData = pixels.pixels();
+        int[] pixelData = pixels.data();
 
         BitWriter writer = new BitWriter(Math.max(1024, width * height * 4));
 

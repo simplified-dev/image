@@ -1,11 +1,11 @@
 package dev.simplified.image.codec.gif;
 
-import dev.simplified.image.data.AnimatedImageData;
 import dev.simplified.image.ImageData;
 import dev.simplified.image.ImageFormat;
-import dev.simplified.image.data.ImageFrame;
 import dev.simplified.image.codec.ImageWriteOptions;
 import dev.simplified.image.codec.ImageWriter;
+import dev.simplified.image.data.AnimatedImageData;
+import dev.simplified.image.data.ImageFrame;
 import dev.simplified.stream.ByteArrayDataOutput;
 import lombok.Cleanup;
 import lombok.SneakyThrows;
@@ -145,11 +145,11 @@ public class GifImageWriter implements ImageWriter {
         int bgB = backgroundRgb & 0xFF;
         int totalPixels = 0;
         for (ImageFrame frame : data.getFrames())
-            totalPixels += frame.pixels().pixels().length;
+            totalPixels += frame.pixels().data().length;
         int[] out = new int[totalPixels];
         int offset = 0;
         for (ImageFrame frame : data.getFrames()) {
-            int[] src = frame.pixels().pixels();
+            int[] src = frame.pixels().data();
             for (int i = 0; i < src.length; i++) {
                 int argb = src[i];
                 int a = (argb >>> 24) & 0xFF;

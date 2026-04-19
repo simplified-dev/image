@@ -929,7 +929,7 @@ public final class VP8Encoder {
         writeFrameHeader(s, qi);
         s.tokenCosts = new VP8Costs.TokenCosts(s.tokenProba);
 
-        int[] argb = pixels.pixels();
+        int[] argb = pixels.data();
         for (int mbY = 0; mbY < s.mbRows; mbY++) {
             java.util.Arrays.fill(s.leftNz, 0);
             java.util.Arrays.fill(s.intraL, IntraPrediction.B_DC_PRED);
@@ -1059,7 +1059,7 @@ public final class VP8Encoder {
         // single-segment encode. Must run BEFORE the segFilterLevel derivation
         // below so the levels are re-derived in the segment-aware branch too.
         if (autoSegment)
-            applyAutoSegmentation(s, pixels.pixels(), width, height, qi);
+            applyAutoSegmentation(s, pixels.data(), width, height, qi);
 
         // Derive per-segment effective filter levels. Single-segment streams leave
         // segmentLfDelta all zero so every entry equals the base level.
@@ -1079,7 +1079,7 @@ public final class VP8Encoder {
         s.tokenCosts = new VP8Costs.TokenCosts(s.tokenProba);
 
         // Per-MB encoding loop.
-        int[] argb = pixels.pixels();
+        int[] argb = pixels.data();
 
         // P-frame motion-search prepass: compute the best NEW-MV per MB up front so
         // the serial R-D loop can look up the cached result instead of re-running
