@@ -83,8 +83,8 @@ public class VP8LCodecTest {
             PixelBuffer out = VP8LDecoder.decode(payload);
             assertThat("width", out.width(), is(src.width()));
             assertThat("height", out.height(), is(src.height()));
-            int[] expected = src.pixels();
-            int[] actual = out.pixels();
+            int[] expected = src.data();
+            int[] actual = out.data();
             for (int i = 0; i < expected.length; i++) {
                 if (expected[i] != actual[i]) {
                     int x = i % src.width();
@@ -142,7 +142,7 @@ public class VP8LCodecTest {
             assertThat(out.width(), is(2));
             assertThat(out.height(), is(2));
             for (int i = 0; i < 4; i++)
-                assertThat("pixel " + i, out.pixels()[i], is(0xFFFF0000));
+                assertThat("pixel " + i, out.data()[i], is(0xFFFF0000));
         }
 
         @Test @DisplayName("decodes libwebp-produced 4x4 noisy pattern")
@@ -159,10 +159,10 @@ public class VP8LCodecTest {
             assertThat(out.width(), is(4));
             assertThat(out.height(), is(4));
             for (int i = 0; i < 16; i++)
-                if (out.pixels()[i] != expected[i])
+                if (out.data()[i] != expected[i])
                     throw new AssertionError(String.format(
                         "libwebp 4x4 pixel idx=%d: expected 0x%08X got 0x%08X",
-                        i, expected[i], out.pixels()[i]));
+                        i, expected[i], out.data()[i]));
         }
 
         @Test @DisplayName("decodes libwebp-produced 16x16 gradient (LZ77)")
@@ -175,7 +175,7 @@ public class VP8LCodecTest {
             for (int y = 0; y < 16; y++)
                 for (int x = 0; x < 16; x++) {
                     int expected = 0xFF000000 | ((x * 16) << 16) | ((y * 16) << 8);
-                    int got = out.pixels()[y * 16 + x];
+                    int got = out.data()[y * 16 + x];
                     if (got != expected)
                         throw new AssertionError(String.format(
                             "libwebp 16x16 pixel (%d,%d): expected 0x%08X got 0x%08X",
@@ -208,8 +208,8 @@ public class VP8LCodecTest {
             PixelBuffer out = VP8LDecoder.decode(payload);
             assertThat("width", out.width(), is(src.width()));
             assertThat("height", out.height(), is(src.height()));
-            int[] expected = src.pixels();
-            int[] actual = out.pixels();
+            int[] expected = src.data();
+            int[] actual = out.data();
             for (int i = 0; i < expected.length; i++) {
                 if (expected[i] != actual[i]) {
                     int x = i % src.width();
@@ -261,7 +261,7 @@ public class VP8LCodecTest {
             for (int i = 0; i < 200; i++)
                 colors[i] = 0xFF000000 | (i * 83 & 0xFF) << 16 | (i * 37 & 0xFF) << 8 | (i * 11 & 0xFF);
             for (int i = 0; i < 40 * 40; i++)
-                buf.pixels()[i] = colors[i % 200];
+                buf.data()[i] = colors[i % 200];
             assertRoundTrips(buf);
         }
 
@@ -269,10 +269,10 @@ public class VP8LCodecTest {
         void paletteExactly256Colors() {
             PixelBuffer buf = PixelBuffer.create(32, 32);
             for (int i = 0; i < 256; i++)
-                buf.pixels()[i] = 0xFF000000 | (i << 16) | (i << 8) | i;
+                buf.data()[i] = 0xFF000000 | (i << 16) | (i << 8) | i;
             // Fill the remaining 768 pixels by repeating the 256 unique colors.
             for (int i = 256; i < 32 * 32; i++)
-                buf.pixels()[i] = buf.pixels()[i % 256];
+                buf.data()[i] = buf.data()[i % 256];
             assertRoundTrips(buf);
         }
 
@@ -283,7 +283,7 @@ public class VP8LCodecTest {
             PixelBuffer buf = PixelBuffer.create(32, 32);
             for (int i = 0; i < 32 * 32; i++) {
                 int c = i % 257;
-                buf.pixels()[i] = 0xFF000000 | ((c * 3) & 0xFF) << 16 | ((c * 5) & 0xFF) << 8 | (c & 0xFF);
+                buf.data()[i] = 0xFF000000 | ((c * 3) & 0xFF) << 16 | ((c * 5) & 0xFF) << 8 | (c & 0xFF);
             }
             assertRoundTrips(buf);
         }
@@ -308,7 +308,7 @@ public class VP8LCodecTest {
             for (int i = 0; i < 16; i++)
                 colors[i] = 0xFF000000 | (i * 16) << 16 | (i * 8) << 8 | (255 - i * 16);
             for (int i = 0; i < 64 * 64; i++)
-                buf.pixels()[i] = colors[i & 0xF];
+                buf.data()[i] = colors[i & 0xF];
             byte[] payload = VP8LEncoder.encode(buf);
             if (payload.length > 2_000)
                 throw new AssertionError(String.format(
@@ -336,8 +336,8 @@ public class VP8LCodecTest {
             PixelBuffer out = VP8LDecoder.decode(payload);
             assertThat("width", out.width(), is(src.width()));
             assertThat("height", out.height(), is(src.height()));
-            int[] expected = src.pixels();
-            int[] actual = out.pixels();
+            int[] expected = src.data();
+            int[] actual = out.data();
             for (int i = 0; i < expected.length; i++) {
                 if (expected[i] != actual[i]) {
                     int x = i % src.width();
@@ -389,8 +389,8 @@ public class VP8LCodecTest {
         void predictorNoisyImage() {
             PixelBuffer buf = PixelBuffer.create(40, 40);
             java.util.Random rng = new java.util.Random(42);
-            for (int i = 0; i < buf.pixels().length; i++)
-                buf.pixels()[i] = 0xFF000000 | rng.nextInt(0x01000000);
+            for (int i = 0; i < buf.data().length; i++)
+                buf.data()[i] = 0xFF000000 | rng.nextInt(0x01000000);
             assertRoundTripsWithPredictor(buf);
         }
 
@@ -471,8 +471,8 @@ public class VP8LCodecTest {
             PixelBuffer out = VP8LDecoder.decode(payload);
             assertThat("width", out.width(), is(src.width()));
             assertThat("height", out.height(), is(src.height()));
-            int[] expected = src.pixels();
-            int[] actual = out.pixels();
+            int[] expected = src.data();
+            int[] actual = out.data();
             for (int i = 0; i < expected.length; i++) {
                 if (expected[i] != actual[i]) {
                     int x = i % src.width();
@@ -489,7 +489,7 @@ public class VP8LCodecTest {
         void singleTile() {
             // tileBits=9 (512 tile) on 32x32 image -> 1x1 prefix image, 1 group.
             PixelBuffer buf = PixelBuffer.create(32, 32);
-            for (int i = 0; i < 1024; i++) buf.pixels()[i] = 0xFF000000 | (i & 0xFF) << 16 | (i & 0xFF);
+            for (int i = 0; i < 1024; i++) buf.data()[i] = 0xFF000000 | (i & 0xFF) << 16 | (i & 0xFF);
             assertRoundTripsMetaHuffman(buf, 9, 0);
         }
 
@@ -529,7 +529,7 @@ public class VP8LCodecTest {
             PixelBuffer buf = PixelBuffer.create(64, 64);
             for (int i = 0; i < 64 * 64; i++) {
                 int c = i % 300;
-                buf.pixels()[i] = 0xFF000000 | ((c * 7) & 0xFF) << 16 | ((c * 11) & 0xFF) << 8 | ((c * 13) & 0xFF);
+                buf.data()[i] = 0xFF000000 | ((c * 7) & 0xFF) << 16 | ((c * 11) & 0xFF) << 8 | ((c * 13) & 0xFF);
             }
             assertRoundTripsMetaHuffman(buf, 5, 10);
         }
@@ -568,8 +568,8 @@ public class VP8LCodecTest {
             PixelBuffer out = VP8LDecoder.decode(payload);
             assertThat("width", out.width(), is(src.width()));
             assertThat("height", out.height(), is(src.height()));
-            int[] expected = src.pixels();
-            int[] actual = out.pixels();
+            int[] expected = src.data();
+            int[] actual = out.data();
             for (int i = 0; i < expected.length; i++) {
                 if (expected[i] != actual[i]) {
                     int x = i % src.width();
@@ -647,8 +647,8 @@ public class VP8LCodecTest {
         void crossColorRandomContent() {
             PixelBuffer buf = PixelBuffer.create(40, 40);
             java.util.Random rng = new java.util.Random(17);
-            for (int i = 0; i < buf.pixels().length; i++)
-                buf.pixels()[i] = 0xFF000000 | (rng.nextInt(0x01000000));
+            for (int i = 0; i < buf.data().length; i++)
+                buf.data()[i] = 0xFF000000 | (rng.nextInt(0x01000000));
             assertRoundTripsWithMode(buf, VP8LEncoder.TransformMode.CROSS_COLOR);
         }
 
@@ -696,8 +696,8 @@ public class VP8LCodecTest {
             PixelBuffer out = VP8LDecoder.decode(payload);
             assertThat("width", out.width(), is(src.width()));
             assertThat("height", out.height(), is(src.height()));
-            int[] expected = src.pixels();
-            int[] actual = out.pixels();
+            int[] expected = src.data();
+            int[] actual = out.data();
             for (int i = 0; i < expected.length; i++) {
                 if (expected[i] != actual[i]) {
                     int x = i % src.width();
@@ -720,7 +720,7 @@ public class VP8LCodecTest {
             // stream. Regression gate for the fix introduced alongside color-cache.
             PixelBuffer buf = PixelBuffer.create(16, 16);
             for (int i = 0; i < 256; i++)
-                buf.pixels()[i] = 0xFF000000 | (i << 16) | ((i * 7 & 0xFF) << 8) | (i * 11 & 0xFF);
+                buf.data()[i] = 0xFF000000 | (i << 16) | ((i * 7 & 0xFF) << 8) | (i * 11 & 0xFF);
             assertRoundTripsWithCacheBits(buf, 0);
             assertRoundTripsWithCacheBits(buf, 1);
             assertRoundTripsWithCacheBits(buf, 10);
@@ -732,9 +732,9 @@ public class VP8LCodecTest {
             // Cache should hit heavily because the histogram is tight: 257 distinct
             // colors cycling across 16384 pixels.
             PixelBuffer buf = PixelBuffer.create(128, 128);
-            for (int i = 0; i < buf.pixels().length; i++) {
+            for (int i = 0; i < buf.data().length; i++) {
                 int c = i % 257;
-                buf.pixels()[i] = 0xFF000000 | ((c * 3) & 0xFF) << 16 | ((c * 5) & 0xFF) << 8 | (c & 0xFF);
+                buf.data()[i] = 0xFF000000 | ((c * 3) & 0xFF) << 16 | ((c * 5) & 0xFF) << 8 | (c & 0xFF);
             }
             assertRoundTripsWithCacheBits(buf, 0);
             assertRoundTripsWithCacheBits(buf, 10);
@@ -759,9 +759,9 @@ public class VP8LCodecTest {
             // overhead is still paid. Mostly tests the edge where the cache alphabet
             // grows the green alphabet by just 2 symbols.
             PixelBuffer buf = PixelBuffer.create(32, 32);
-            for (int i = 0; i < buf.pixels().length; i++) {
+            for (int i = 0; i < buf.data().length; i++) {
                 int c = i % 300;
-                buf.pixels()[i] = 0xFF000000 | ((c * 7) & 0xFF) << 16 | ((c * 11) & 0xFF) << 8 | ((c * 13) & 0xFF);
+                buf.data()[i] = 0xFF000000 | ((c * 7) & 0xFF) << 16 | ((c * 11) & 0xFF) << 8 | ((c * 13) & 0xFF);
             }
             assertRoundTripsWithCacheBits(buf, 1);
         }
@@ -771,9 +771,9 @@ public class VP8LCodecTest {
             // 2048-entry cache is the spec's maximum. Stresses the upper green-alphabet
             // range (positions 280..2327) during freq-count, prefix-code build, and emit.
             PixelBuffer buf = PixelBuffer.create(64, 64);
-            for (int i = 0; i < buf.pixels().length; i++) {
+            for (int i = 0; i < buf.data().length; i++) {
                 int c = i % 500;
-                buf.pixels()[i] = 0xFF000000 | ((c * 7) & 0xFF) << 16 | ((c * 11) & 0xFF) << 8 | ((c * 13) & 0xFF);
+                buf.data()[i] = 0xFF000000 | ((c * 7) & 0xFF) << 16 | ((c * 11) & 0xFF) << 8 | ((c * 13) & 0xFF);
             }
             assertRoundTripsWithCacheBits(buf, 11);
         }
@@ -783,9 +783,9 @@ public class VP8LCodecTest {
             // 128x128 recurring content where color cache must beat literal-only. The
             // public encode() has to choose cache-on as the smallest variant.
             PixelBuffer buf = PixelBuffer.create(128, 128);
-            for (int i = 0; i < buf.pixels().length; i++) {
+            for (int i = 0; i < buf.data().length; i++) {
                 int c = i % 300;
-                buf.pixels()[i] = 0xFF000000 | ((c * 7) & 0xFF) << 16 | ((c * 11) & 0xFF) << 8 | ((c * 13) & 0xFF);
+                buf.data()[i] = 0xFF000000 | ((c * 7) & 0xFF) << 16 | ((c * 11) & 0xFF) << 8 | ((c * 13) & 0xFF);
             }
             byte[] cacheOff = VP8LEncoder.encode(buf, false, 0);
             byte[] best = VP8LEncoder.encode(buf);

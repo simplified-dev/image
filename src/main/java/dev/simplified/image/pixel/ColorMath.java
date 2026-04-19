@@ -186,7 +186,7 @@ public class ColorMath {
         int w = source.width();
         int h = source.height();
         int[] result = new int[w * h];
-        int[] src = source.pixels();
+        int[] src = source.data();
 
         int tr = red(argbTint);
         int tg = green(argbTint);

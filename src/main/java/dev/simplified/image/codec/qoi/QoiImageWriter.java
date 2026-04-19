@@ -38,7 +38,7 @@ public class QoiImageWriter implements ImageWriter {
         int height = buffer.height();
         boolean hasAlpha = buffer.hasAlpha();
         int channels = hasAlpha ? 4 : 3;
-        int[] src = buffer.pixels();
+        int[] src = buffer.data();
 
         @Cleanup ByteArrayDataOutput out = new ByteArrayDataOutput(14 + src.length * 5 + 8);
         out.writeByte('q');

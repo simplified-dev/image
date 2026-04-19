@@ -7,12 +7,10 @@ import dev.simplified.image.pixel.Resample;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import java.awt.Rectangle;
+import java.awt.*;
 
 import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.equalTo;
-import static org.hamcrest.Matchers.is;
-import static org.hamcrest.Matchers.not;
+import static org.hamcrest.Matchers.*;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
@@ -236,7 +234,7 @@ class PixelBufferTest {
     @DisplayName("blit opaque source matches generic blend result")
     void blitOpaqueFastPathMatchesGeneric() {
         PixelBuffer src = gradient(4, 4);
-        PixelBuffer opaqueSrc = PixelBuffer.of(src.pixels().clone(), 4, 4, false);
+        PixelBuffer opaqueSrc = PixelBuffer.of(src.data().clone(), 4, 4, false);
 
         PixelBuffer fast = PixelBuffer.create(8, 8);
         fast.blit(opaqueSrc, 2, 2, BlendMode.NORMAL);
