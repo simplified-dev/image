@@ -17,8 +17,18 @@ import dev.simplified.image.codec.gif.GifImageReader;
 import dev.simplified.image.codec.gif.GifImageWriter;
 import dev.simplified.image.codec.jpeg.JpegImageReader;
 import dev.simplified.image.codec.jpeg.JpegImageWriter;
+import dev.simplified.image.codec.ico.IcoImageReader;
+import dev.simplified.image.codec.ico.IcoImageWriter;
 import dev.simplified.image.codec.png.PngImageReader;
 import dev.simplified.image.codec.png.PngImageWriter;
+import dev.simplified.image.codec.pnm.PnmImageReader;
+import dev.simplified.image.codec.pnm.PnmImageWriter;
+import dev.simplified.image.codec.qoi.QoiImageReader;
+import dev.simplified.image.codec.qoi.QoiImageWriter;
+import dev.simplified.image.codec.tga.TgaImageReader;
+import dev.simplified.image.codec.tga.TgaImageWriter;
+import dev.simplified.image.codec.tiff.TiffImageReader;
+import dev.simplified.image.codec.tiff.TiffImageWriter;
 import dev.simplified.image.codec.webp.WebPImageReader;
 import dev.simplified.image.codec.webp.WebPImageWriter;
 import dev.simplified.image.exception.ImageDecodeException;
@@ -65,12 +75,22 @@ public class ImageFactory {
         this.readers.add(new BmpImageReader());
         this.readers.add(new GifImageReader());
         this.readers.add(new WebPImageReader());
+        this.readers.add(new TiffImageReader());
+        this.readers.add(new IcoImageReader());
+        this.readers.add(new TgaImageReader());
+        this.readers.add(new QoiImageReader());
+        this.readers.add(new PnmImageReader());
 
         this.writers.add(new JpegImageWriter());
         this.writers.add(new PngImageWriter());
         this.writers.add(new BmpImageWriter());
         this.writers.add(new GifImageWriter());
         this.writers.add(new WebPImageWriter());
+        this.writers.add(new TiffImageWriter());
+        this.writers.add(new IcoImageWriter());
+        this.writers.add(new TgaImageWriter());
+        this.writers.add(new QoiImageWriter());
+        this.writers.add(new PnmImageWriter());
     }
 
     // === Registry ===
