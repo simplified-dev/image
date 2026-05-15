@@ -17,16 +17,24 @@ import java.awt.image.BufferedImage;
  */
 public interface ImageData {
 
-    /** The canvas width in pixels. */
+    /**
+     * The canvas width in pixels.
+     */
     int getWidth();
 
-    /** The canvas height in pixels. */
+    /**
+     * The canvas height in pixels.
+     */
     int getHeight();
 
-    /** Whether this image contains an alpha channel. */
+    /**
+     * Whether this image contains an alpha channel.
+     */
     boolean hasAlpha();
 
-    /** Whether this image contains multiple animation frames. */
+    /**
+     * Whether this image contains multiple animation frames.
+     */
     boolean isAnimated();
 
     /**

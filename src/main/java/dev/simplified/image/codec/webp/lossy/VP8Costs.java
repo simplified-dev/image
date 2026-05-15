@@ -18,11 +18,17 @@ import org.jetbrains.annotations.NotNull;
  */
 final class VP8Costs {
 
-    /** Last level (inclusive) whose cost is stored in the variable-level table. */
+    /**
+     * Last level (inclusive) whose cost is stored in the variable-level table.
+     */
     static final int MAX_VARIABLE_LEVEL = 67;
-    /** Largest codable coefficient level. */
+    /**
+     * Largest codable coefficient level.
+     */
     static final int MAX_LEVEL = 2047;
-    /** Distortion multiplier applied in the R-D score ({@code score = R*lambda + DISTO_MULT*D}). */
+    /**
+     * Distortion multiplier applied in the R-D score ({@code score = R*lambda + DISTO_MULT*D}).
+     */
     static final int RD_DISTO_MULT = 256;
 
     private VP8Costs() { }
@@ -405,9 +411,13 @@ final class VP8Costs {
      */
     static final class TokenCosts {
 
-        /** Active coefficient probabilities, indexed {@code [type][band][ctx][prob]}. */
+        /**
+         * Active coefficient probabilities, indexed {@code [type][band][ctx][prob]}.
+         */
         final int[][][][] proba;
-        /** Per-position variable-level cost table, indexed {@code [type][n][ctx][level]}. */
+        /**
+         * Per-position variable-level cost table, indexed {@code [type][n][ctx][level]}.
+         */
         final int[][][][] remapped;
 
         TokenCosts(int @NotNull [][][][] proba) {

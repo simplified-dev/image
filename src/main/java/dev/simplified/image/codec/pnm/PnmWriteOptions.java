@@ -32,13 +32,19 @@ public record PnmWriteOptions(@NotNull Variant variant, boolean ascii) implement
      */
     public enum Variant {
 
-        /** 1-bit bitmap (P1 ASCII, P4 binary). */
+        /**
+         * 1-bit bitmap (P1 ASCII, P4 binary).
+         */
         PBM,
 
-        /** Grayscale graymap (P2 ASCII, P5 binary). */
+        /**
+         * Grayscale graymap (P2 ASCII, P5 binary).
+         */
         PGM,
 
-        /** RGB pixmap (P3 ASCII, P6 binary). */
+        /**
+         * RGB pixmap (P3 ASCII, P6 binary).
+         */
         PPM
 
     }

@@ -16,16 +16,22 @@ import java.util.List;
  */
 public final class VP8LDecoder {
 
-    /** Number of Huffman code groups in VP8L: green+length, red, blue, alpha, distance. */
+    /**
+     * Number of Huffman code groups in VP8L: green+length, red, blue, alpha, distance.
+     */
     private static final int NUM_CODE_GROUPS = 5;
     private static final int NUM_LITERAL_CODES = 256;
     private static final int NUM_LENGTH_CODES = 24;
     private static final int MAX_COLOR_CACHE_BITS = 11;
     private static final int CODE_LENGTH_CODES = 19;
-    /** Upper bound on distinct meta-Huffman groups per image; matches libwebp. */
+    /**
+     * Upper bound on distinct meta-Huffman groups per image; matches libwebp.
+     */
     private static final int MAX_NUM_META_HUFF_CODES = 1 << 16;
 
-    /** Code length code order per VP8L spec. */
+    /**
+     * Code length code order per VP8L spec.
+     */
     private static final int[] CODE_LENGTH_ORDER = {
         17, 18, 0, 1, 2, 3, 4, 5, 16, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15
     };

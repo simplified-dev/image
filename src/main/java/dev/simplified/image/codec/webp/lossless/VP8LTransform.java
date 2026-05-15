@@ -11,10 +11,14 @@ import org.jetbrains.annotations.NotNull;
  */
 sealed interface VP8LTransform {
 
-    /** Applies the inverse (decoding) transform in-place. */
+    /**
+     * Applies the inverse (decoding) transform in-place.
+     */
     void inverseTransform(int @NotNull [] pixels, int width, int height);
 
-    /** Applies the forward (encoding) transform in-place. */
+    /**
+     * Applies the forward (encoding) transform in-place.
+     */
     void forwardTransform(int @NotNull [] pixels, int width, int height);
 
     // -----------------------------------------------------------------------
@@ -124,10 +128,14 @@ sealed interface VP8LTransform {
      */
     record Predictor(int blockBits, int @NotNull [] blockModes, int blockWidth) implements VP8LTransform {
 
-        /** Number of prediction filters defined in the VP8L spec. */
+        /**
+         * Number of prediction filters defined in the VP8L spec.
+         */
         static final int NUM_FILTERS = 14;
 
-        /** Opaque black - the implicit predictor value for the top-left pixel (mode 0). */
+        /**
+         * Opaque black - the implicit predictor value for the top-left pixel (mode 0).
+         */
         static final int ARGB_BLACK = 0xFF000000;
 
         @Override

@@ -21,10 +21,14 @@ import org.jetbrains.annotations.NotNull;
  */
 final class SubpelPrediction {
 
-    /** Sum of the 6-tap coefficients (scales rounding + output normalisation). */
+    /**
+     * Sum of the 6-tap coefficients (scales rounding + output normalisation).
+     */
     private static final int FILTER_WEIGHT = 128;
 
-    /** Right-shift amount used to normalise 6-tap products back into sample range. */
+    /**
+     * Right-shift amount used to normalise 6-tap products back into sample range.
+     */
     private static final int FILTER_SHIFT = 7;
 
     /**

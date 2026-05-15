@@ -11,10 +11,14 @@ import org.jetbrains.annotations.NotNull;
 @RequiredArgsConstructor
 public enum FrameBlend {
 
-    /** Replace the canvas region with this frame's pixels. */
+    /**
+     * Replace the canvas region with this frame's pixels.
+     */
     SOURCE(0),
 
-    /** Alpha-blend this frame over the existing canvas content. */
+    /**
+     * Alpha-blend this frame over the existing canvas content.
+     */
     OVER(1);
 
     private static final @NotNull FrameBlend[] BY_VALUE;

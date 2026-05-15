@@ -4,7 +4,9 @@ import dev.simplified.image.ImageData;
 import dev.simplified.image.ImageFormat;
 import dev.simplified.image.codec.ImageWriteOptions;
 import dev.simplified.image.codec.ImageWriter;
+import dev.simplified.image.data.AnimatedImageData;
 import dev.simplified.image.data.ImageFrame;
+import dev.simplified.image.data.StaticImageData;
 import dev.simplified.image.exception.ImageEncodeException;
 import dev.simplified.stream.ByteArrayDataOutput;
 import lombok.Cleanup;
@@ -12,17 +14,17 @@ import lombok.SneakyThrows;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
+import java.awt.image.BufferedImage;
 import javax.imageio.IIOImage;
 import javax.imageio.ImageIO;
 import javax.imageio.ImageWriteParam;
 import javax.imageio.stream.ImageOutputStream;
-import java.awt.image.BufferedImage;
 
 /**
  * Writes TIFF images (single- and multi-page) via {@link ImageIO}'s baseline TIFF plugin.
  * <p>
- * {@link dev.simplified.image.data.AnimatedImageData AnimatedImageData} is encoded as a
- * multi-page TIFF using {@code writeToSequence}; {@link dev.simplified.image.data.StaticImageData
+ * {@link AnimatedImageData AnimatedImageData} is encoded as a
+ * multi-page TIFF using {@code writeToSequence}; {@link StaticImageData
  * StaticImageData} is encoded as a single page. Compression scheme is selected via
  * {@link TiffWriteOptions}; the default is {@link TiffWriteOptions.Compression#DEFLATE}.
  */

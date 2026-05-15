@@ -109,11 +109,17 @@ public final class VP8Decoder {
         return new DecodedFrame(pixels, meta);
     }
 
-    /** Per-frame decoder state threaded through the MB loop. */
+    /**
+     * Per-frame decoder state threaded through the MB loop.
+     */
     private static final class State {
-        /** {@code true} for a keyframe, {@code false} for a P-frame (inter frame). */
+        /**
+         * {@code true} for a keyframe, {@code false} for a P-frame (inter frame).
+         */
         final boolean isKeyframe;
-        /** Backing session for P-frame reference buffers, or {@code null} for keyframe-only decode. */
+        /**
+         * Backing session for P-frame reference buffers, or {@code null} for keyframe-only decode.
+         */
         @Nullable final VP8DecoderSession session;
 
         final int mbCols, mbRows;
@@ -1389,13 +1395,17 @@ public final class VP8Decoder {
         }
     }
 
-    /** Round-away-from-zero division of the internal luma MV by 2 (libvpx parity). */
+    /**
+     * Round-away-from-zero division of the internal luma MV by 2 (libvpx parity).
+     */
     private static int chromaMv(int internalLumaMv) {
         int adj = 1 | (internalLumaMv >> 31);
         return (internalLumaMv + adj) / 2;
     }
 
-    /** Commits a 16x16 inter-MB reconstruction = prediction + IDCT(residual), clamped. */
+    /**
+     * Commits a 16x16 inter-MB reconstruction = prediction + IDCT(residual), clamped.
+     */
     private static void commitInterRecon16x16(
         short @NotNull [] plane, int planeStride, int baseX, int baseY,
         short @NotNull [] pred, short @NotNull [] @NotNull [] coefs, boolean skip
@@ -1415,7 +1425,9 @@ public final class VP8Decoder {
         }
     }
 
-    /** Commits an 8x8 chroma inter-MB reconstruction = prediction + IDCT(residual), clamped. */
+    /**
+     * Commits an 8x8 chroma inter-MB reconstruction = prediction + IDCT(residual), clamped.
+     */
     private static void commitInterRecon8x8(
         short @NotNull [] plane, int planeStride, int baseX, int baseY,
         short @NotNull [] pred, short @NotNull [] @NotNull [] coefs, boolean skip
@@ -1464,7 +1476,9 @@ public final class VP8Decoder {
     }
 
 
-    /** Copies the 16x16 luma MB at ({@code mbX}, {@code mbY}) from {@code ref} to {@code dst}. */
+    /**
+     * Copies the 16x16 luma MB at ({@code mbX}, {@code mbY}) from {@code ref} to {@code dst}.
+     */
     private static void copyRefMb16x16(
         short @NotNull [] ref, int refStride, short @NotNull [] dst, int dstStride, int mbX, int mbY
     ) {
@@ -1475,7 +1489,9 @@ public final class VP8Decoder {
         }
     }
 
-    /** Copies the 8x8 chroma MB at ({@code mbX}, {@code mbY}) from {@code ref} to {@code dst}. */
+    /**
+     * Copies the 8x8 chroma MB at ({@code mbX}, {@code mbY}) from {@code ref} to {@code dst}.
+     */
     private static void copyRefMb8x8(
         short @NotNull [] ref, int refStride, short @NotNull [] dst, int dstStride, int mbX, int mbY
     ) {
@@ -1486,7 +1502,9 @@ public final class VP8Decoder {
         }
     }
 
-    /** Maps a 16x16 luma macroblock mode to the corresponding sub-block mode for B_PRED neighbor context. */
+    /**
+     * Maps a 16x16 luma macroblock mode to the corresponding sub-block mode for B_PRED neighbor context.
+     */
     private static int mb16ToSubMode(int mbMode) {
         return switch (mbMode) {
             case IntraPrediction.V_PRED -> IntraPrediction.B_VE_PRED;
@@ -1637,7 +1655,9 @@ public final class VP8Decoder {
         return plane[(blockY - 1) * stride + blockX - 1];
     }
 
-    /** Deep-copies the static default proba table so per-frame updates do not mutate the source. */
+    /**
+     * Deep-copies the static default proba table so per-frame updates do not mutate the source.
+     */
     private static int[][][][] cloneProba(int[][][][] src) {
         int[][][][] out = new int[src.length][][][];
         for (int t = 0; t < src.length; t++) {

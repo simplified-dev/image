@@ -10,12 +10,16 @@ import org.jetbrains.annotations.NotNull;
  */
 final class IntraPrediction {
 
-    /** 16x16 luma prediction modes. */
+    /**
+     * 16x16 luma prediction modes.
+     */
     static final int DC_PRED = 0;
     static final int V_PRED = 1;
     static final int H_PRED = 2;
     static final int TM_PRED = 3;
-    /** Per-sub-block prediction mode - each 4x4 block has its own mode. */
+    /**
+     * Per-sub-block prediction mode - each 4x4 block has its own mode.
+     */
     static final int B_PRED = 4;
 
     /**
@@ -35,13 +39,21 @@ final class IntraPrediction {
     static final int B_HD_PRED = 8;
     static final int B_HU_PRED = 9;
 
-    /** Number of 16x16 luma modes (excluding B_PRED). */
+    /**
+     * Number of 16x16 luma modes (excluding B_PRED).
+     */
     static final int NUM_16x16_MODES = 4;
-    /** Number of macroblock luma modes (including B_PRED). */
+    /**
+     * Number of macroblock luma modes (including B_PRED).
+     */
     static final int NUM_YMODES = 5;
-    /** Number of 4x4 sub-block modes. */
+    /**
+     * Number of 4x4 sub-block modes.
+     */
     static final int NUM_4x4_MODES = 10;
-    /** Number of 8x8 chroma modes. */
+    /**
+     * Number of 8x8 chroma modes.
+     */
     static final int NUM_CHROMA_MODES = 4;
 
     private IntraPrediction() { }

@@ -24,28 +24,48 @@ import org.jetbrains.annotations.Nullable;
 final class LoopFilter {
 
     // ── Reference-frame labels for per-MB loop-filter indexing (RFC 6386 section 15) ──
-    /** Reference-frame index for intra-coded MBs. */
+    /**
+     * Reference-frame index for intra-coded MBs.
+     */
     static final int REF_INTRA = 0;
-    /** Reference-frame index for MBs referencing {@code LAST}. */
+    /**
+     * Reference-frame index for MBs referencing {@code LAST}.
+     */
     static final int REF_LAST = 1;
-    /** Reference-frame index for MBs referencing {@code GOLDEN}. */
+    /**
+     * Reference-frame index for MBs referencing {@code GOLDEN}.
+     */
     static final int REF_GOLDEN = 2;
-    /** Reference-frame index for MBs referencing {@code ALTREF}. */
+    /**
+     * Reference-frame index for MBs referencing {@code ALTREF}.
+     */
     static final int REF_ALTREF = 3;
 
     // ── Mode-class labels for per-MB loop-filter indexing (RFC 6386 section 15) ──
-    /** Intra MB with 16x16 (non-B_PRED) luma prediction. No {@code mode_lf_delta} applied. */
+    /**
+     * Intra MB with 16x16 (non-B_PRED) luma prediction. No {@code mode_lf_delta} applied.
+     */
     static final int MODE_NON_BPRED_INTRA = 0;
-    /** Intra MB with B_PRED luma. Picks up {@code mode_lf_delta[0]} + inner-edge filtering. */
+    /**
+     * Intra MB with B_PRED luma. Picks up {@code mode_lf_delta[0]} + inner-edge filtering.
+     */
     static final int MODE_BPRED = 1;
-    /** Inter MB coded as ZEROMV. Picks up {@code mode_lf_delta[1]}. */
+    /**
+     * Inter MB coded as ZEROMV. Picks up {@code mode_lf_delta[1]}.
+     */
     static final int MODE_ZEROMV = 2;
-    /** Inter MB coded as NEAREST / NEAR / NEW. Picks up {@code mode_lf_delta[2]}. */
+    /**
+     * Inter MB coded as NEAREST / NEAR / NEW. Picks up {@code mode_lf_delta[2]}.
+     */
     static final int MODE_OTHER_INTER = 3;
-    /** Inter MB coded as SPLITMV. Picks up {@code mode_lf_delta[3]}. */
+    /**
+     * Inter MB coded as SPLITMV. Picks up {@code mode_lf_delta[3]}.
+     */
     static final int MODE_SPLITMV = 4;
 
-    /** Per-MB mode-class index into the {@code mode_lf_delta[4]} array, or {@code -1} for no delta. */
+    /**
+     * Per-MB mode-class index into the {@code mode_lf_delta[4]} array, or {@code -1} for no delta.
+     */
     private static final int[] MODE_LF_DELTA_INDEX = {
         -1,   // MODE_NON_BPRED_INTRA (no mode delta)
          0,   // MODE_BPRED
@@ -54,15 +74,25 @@ final class LoopFilter {
          3,   // MODE_SPLITMV
     };
 
-    /** Precomputed per-MB filter strength (matches libwebp's {@code VP8FInfo}). */
+    /**
+     * Precomputed per-MB filter strength (matches libwebp's {@code VP8FInfo}).
+     */
     static final class FInfo {
-        /** Edge-activity threshold {@code 2*level + ilevel}; {@code 0} means no filtering. */
+        /**
+         * Edge-activity threshold {@code 2*level + ilevel}; {@code 0} means no filtering.
+         */
         final int fLimit;
-        /** Inner threshold used by {@code NeedsFilter2}. */
+        /**
+         * Inner threshold used by {@code NeedsFilter2}.
+         */
         final int fIlevel;
-        /** High-edge-variance threshold for the {@code DoFilter2 vs DoFilter6/4} branch. */
+        /**
+         * High-edge-variance threshold for the {@code DoFilter2 vs DoFilter6/4} branch.
+         */
         final int hevThresh;
-        /** Whether inner 4x4 sub-block edges should also be filtered (true for B_PRED MBs). */
+        /**
+         * Whether inner 4x4 sub-block edges should also be filtered (true for B_PRED MBs).
+         */
         final boolean fInner;
 
         FInfo(int limit, int ilevel, int hevThresh, boolean inner) {
@@ -212,7 +242,9 @@ final class LoopFilter {
         return new FInfo(limit, ilevel, hev, inner);
     }
 
-    /** Per-MB filter dispatch. Mirrors libwebp's {@code DoFilter} in {@code src/dec/frame_dec.c}. */
+    /**
+     * Per-MB filter dispatch. Mirrors libwebp's {@code DoFilter} in {@code src/dec/frame_dec.c}.
+     */
     private static void doFilter(
         short[] planeY, short[] planeU, short[] planeV,
         int yStride, int uvStride, int mbX, int mbY,
@@ -256,7 +288,9 @@ final class LoopFilter {
     // Simple filter (paragraph 15.2) - NeedsFilter_C + DoFilter2_C
     // ──────────────────────────────────────────────────────────────────────
 
-    /** Simple filter on the horizontal edge between MB row {@code mbY-1} and {@code mbY}. */
+    /**
+     * Simple filter on the horizontal edge between MB row {@code mbY-1} and {@code mbY}.
+     */
     private static void simpleVFilter16(short[] p, int ptr, int stride, int thresh) {
         int thresh2 = 2 * thresh + 1;
         for (int i = 0; i < 16; i++)
@@ -264,7 +298,9 @@ final class LoopFilter {
                 doFilter2(p, ptr + i, stride);
     }
 
-    /** Simple filter on the vertical edge between MB col {@code mbX-1} and {@code mbX}. */
+    /**
+     * Simple filter on the vertical edge between MB col {@code mbX-1} and {@code mbX}.
+     */
     private static void simpleHFilter16(short[] p, int ptr, int stride, int thresh) {
         int thresh2 = 2 * thresh + 1;
         for (int i = 0; i < 16; i++)
@@ -272,7 +308,9 @@ final class LoopFilter {
                 doFilter2(p, ptr + i * stride, 1);
     }
 
-    /** Simple filter on the three inner horizontal 4x4 edges at offsets 4, 8, 12 rows. */
+    /**
+     * Simple filter on the three inner horizontal 4x4 edges at offsets 4, 8, 12 rows.
+     */
     private static void simpleVFilter16i(short[] p, int ptr, int stride, int thresh) {
         for (int k = 3; k > 0; k--) {
             ptr += 4 * stride;
@@ -280,7 +318,9 @@ final class LoopFilter {
         }
     }
 
-    /** Simple filter on the three inner vertical 4x4 edges at offsets 4, 8, 12 columns. */
+    /**
+     * Simple filter on the three inner vertical 4x4 edges at offsets 4, 8, 12 columns.
+     */
     private static void simpleHFilter16i(short[] p, int ptr, int stride, int thresh) {
         for (int k = 3; k > 0; k--) {
             ptr += 4;
@@ -314,7 +354,9 @@ final class LoopFilter {
         }
     }
 
-    /** Same as {@link #filterLoop26} but uses {@code DoFilter4_C} (inner edges). */
+    /**
+     * Same as {@link #filterLoop26} but uses {@code DoFilter4_C} (inner edges).
+     */
     private static void filterLoop24(
         short[] plane, int ptr, int hstride, int vstride, int size,
         int thresh, int ithresh, int hevThresh
@@ -381,7 +423,9 @@ final class LoopFilter {
     // Filter kernels (DoFilter2/4/6) + predicates (NeedsFilter/2, Hev)
     // ──────────────────────────────────────────────────────────────────────
 
-    /** 4 pixels in, 2 pixels out. Writes {@code p0} and {@code q0}. */
+    /**
+     * 4 pixels in, 2 pixels out. Writes {@code p0} and {@code q0}.
+     */
     private static void doFilter2(short[] p, int ptr, int step) {
         int p1 = p[ptr - 2 * step], p0 = p[ptr - step], q0 = p[ptr], q1 = p[ptr + step];
         int a = 3 * (q0 - p0) + sclip1(p1 - q1);
@@ -391,7 +435,9 @@ final class LoopFilter {
         p[ptr] = (short) clip1(q0 - a1);
     }
 
-    /** 4 pixels in, 4 pixels out. Used on inner sub-block edges (normal filter). */
+    /**
+     * 4 pixels in, 4 pixels out. Used on inner sub-block edges (normal filter).
+     */
     private static void doFilter4(short[] p, int ptr, int step) {
         int p1 = p[ptr - 2 * step], p0 = p[ptr - step], q0 = p[ptr], q1 = p[ptr + step];
         int a = 3 * (q0 - p0);
@@ -404,7 +450,9 @@ final class LoopFilter {
         p[ptr + step] = (short) clip1(q1 - a3);
     }
 
-    /** 6 pixels in, 6 pixels out. Used on MB-edge non-HEV transitions. */
+    /**
+     * 6 pixels in, 6 pixels out. Used on MB-edge non-HEV transitions.
+     */
     private static void doFilter6(short[] p, int ptr, int step) {
         int p2 = p[ptr - 3 * step], p1 = p[ptr - 2 * step], p0 = p[ptr - step];
         int q0 = p[ptr], q1 = p[ptr + step], q2 = p[ptr + 2 * step];
@@ -420,19 +468,25 @@ final class LoopFilter {
         p[ptr + 2 * step] = (short) clip1(q2 - a3);
     }
 
-    /** High-edge-variance detector: either {@code |p1-p0|} or {@code |q1-q0|} exceeds {@code thresh}. */
+    /**
+     * High-edge-variance detector: either {@code |p1-p0|} or {@code |q1-q0|} exceeds {@code thresh}.
+     */
     private static boolean hev(short[] p, int ptr, int step, int thresh) {
         int p1 = p[ptr - 2 * step], p0 = p[ptr - step], q0 = p[ptr], q1 = p[ptr + step];
         return Math.abs(p1 - p0) > thresh || Math.abs(q1 - q0) > thresh;
     }
 
-    /** Simple filter edge-activity predicate: {@code 4|p0-q0| + |p1-q1| <= thresh}. */
+    /**
+     * Simple filter edge-activity predicate: {@code 4|p0-q0| + |p1-q1| <= thresh}.
+     */
     private static boolean needsFilter(short[] p, int ptr, int step, int t) {
         int p1 = p[ptr - 2 * step], p0 = p[ptr - step], q0 = p[ptr], q1 = p[ptr + step];
         return (4 * Math.abs(p0 - q0) + Math.abs(p1 - q1)) <= t;
     }
 
-    /** 6-tap needs-filter predicate: simple check plus six inner-level smoothness tests. */
+    /**
+     * 6-tap needs-filter predicate: simple check plus six inner-level smoothness tests.
+     */
     private static boolean needsFilter2(short[] p, int ptr, int step, int t, int it) {
         int p3 = p[ptr - 4 * step], p2 = p[ptr - 3 * step], p1 = p[ptr - 2 * step];
         int p0 = p[ptr - step], q0 = p[ptr];
@@ -443,17 +497,23 @@ final class LoopFilter {
             && Math.abs(q2 - q1) <= it && Math.abs(q1 - q0) <= it;
     }
 
-    /** Clamps to {@code [-128, 127]} (libwebp's {@code VP8ksclip1}). */
+    /**
+     * Clamps to {@code [-128, 127]} (libwebp's {@code VP8ksclip1}).
+     */
     private static int sclip1(int v) {
         return Math.clamp(v, -128, 127);
     }
 
-    /** Clamps to {@code [-16, 15]} (libwebp's {@code VP8ksclip2}). */
+    /**
+     * Clamps to {@code [-16, 15]} (libwebp's {@code VP8ksclip2}).
+     */
     private static int sclip2(int v) {
         return Math.clamp(v, -16, 15);
     }
 
-    /** Clamps to {@code [0, 255]} (libwebp's {@code VP8kclip1}). */
+    /**
+     * Clamps to {@code [0, 255]} (libwebp's {@code VP8kclip1}).
+     */
     private static int clip1(int v) {
         return Math.clamp(v, 0, 255);
     }

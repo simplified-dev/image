@@ -9,7 +9,9 @@ import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.is;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
-/** Tests for the WebP RIFF container - parsing, assembly, and round-trip. */
+/**
+ * Tests for the WebP RIFF container - parsing, assembly, and round-trip.
+ */
 public class RiffContainerTest {
 
     @Test

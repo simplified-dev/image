@@ -35,7 +35,9 @@ import java.util.Map;
  */
 public class GifImageWriter implements ImageWriter {
 
-    /** Maximum palette entries in a GIF local or global color table. */
+    /**
+     * Maximum palette entries in a GIF local or global color table.
+     */
     private static final int MAX_PALETTE_SIZE = 256;
 
     @Override

@@ -11,23 +11,39 @@ import org.jetbrains.annotations.NotNull;
  */
 final class Macroblock {
 
-    /** Luma samples (16x16 = 256 values). */
+    /**
+     * Luma samples (16x16 = 256 values).
+     */
     final short[] y = new short[256];
-    /** Cb chroma samples (8x8 = 64 values). */
+    /**
+     * Cb chroma samples (8x8 = 64 values).
+     */
     final short[] cb = new short[64];
-    /** Cr chroma samples (8x8 = 64 values). */
+    /**
+     * Cr chroma samples (8x8 = 64 values).
+     */
     final short[] cr = new short[64];
 
-    /** Reconstructed luma (after decode or encode round-trip). */
+    /**
+     * Reconstructed luma (after decode or encode round-trip).
+     */
     final short[] reconY = new short[256];
-    /** Reconstructed Cb. */
+    /**
+     * Reconstructed Cb.
+     */
     final short[] reconCb = new short[64];
-    /** Reconstructed Cr. */
+    /**
+     * Reconstructed Cr.
+     */
     final short[] reconCr = new short[64];
 
-    /** Selected 16x16 prediction mode. */
+    /**
+     * Selected 16x16 prediction mode.
+     */
     int yMode = IntraPrediction.DC_PRED;
-    /** Selected chroma prediction mode. */
+    /**
+     * Selected chroma prediction mode.
+     */
     int uvMode = IntraPrediction.DC_PRED;
 
     /**

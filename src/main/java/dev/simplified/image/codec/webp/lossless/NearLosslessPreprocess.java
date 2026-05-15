@@ -1,5 +1,6 @@
 package dev.simplified.image.codec.webp.lossless;
 
+import dev.simplified.image.codec.webp.WebPWriteOptions;
 import org.jetbrains.annotations.NotNull;
 
 /**
@@ -33,7 +34,7 @@ import org.jetbrains.annotations.NotNull;
  * </ul>
  * <p>
  * Typical usage: invoked by the VP8L encode path when
- * {@link dev.simplified.image.codec.webp.WebPWriteOptions#getNearLossless()}
+ * {@link WebPWriteOptions#getNearLossless()}
  * returns a value less than 100. The preprocessed pixel buffer is then
  * encoded normally via {@link VP8LEncoder#encode}; the output is a standard
  * VP8L bitstream decodable by any conformant WebP decoder (including libwebp
@@ -43,9 +44,13 @@ import org.jetbrains.annotations.NotNull;
  */
 public final class NearLosslessPreprocess {
 
-    /** Below this dimension libwebp skips near-lossless entirely (icon heuristic). */
+    /**
+     * Below this dimension libwebp skips near-lossless entirely (icon heuristic).
+     */
     private static final int MIN_DIM_FOR_NEAR_LOSSLESS = 64;
-    /** Maximum {@code limit_bits} derived from level 0. */
+    /**
+     * Maximum {@code limit_bits} derived from level 0.
+     */
     private static final int MAX_LIMIT_BITS = 5;
 
     private NearLosslessPreprocess() { }
@@ -185,7 +190,9 @@ public final class NearLosslessPreprocess {
         return true;
     }
 
-    /** Applies {@link #findClosestDiscretized} to each channel of {@code argb}. */
+    /**
+     * Applies {@link #findClosestDiscretized} to each channel of {@code argb}.
+     */
     private static int closestDiscretizedArgb(int argb, int bits) {
         return (findClosestDiscretized((argb >>> 24) & 0xFF, bits) << 24)
              | (findClosestDiscretized((argb >>> 16) & 0xFF, bits) << 16)

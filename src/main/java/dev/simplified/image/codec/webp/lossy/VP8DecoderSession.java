@@ -25,36 +25,58 @@ import org.jetbrains.annotations.NotNull;
 public final class VP8DecoderSession {
 
     // ── LAST reference (legacy field names, retained for call-site stability) ──
-    /** Last reconstructed luma plane, or {@code null} before the first decode. */
+    /**
+     * Last reconstructed luma plane, or {@code null} before the first decode.
+     */
     short[] refY;
-    /** Last reconstructed U chroma plane, or {@code null} before the first decode. */
+    /**
+     * Last reconstructed U chroma plane, or {@code null} before the first decode.
+     */
     short[] refU;
-    /** Last reconstructed V chroma plane, or {@code null} before the first decode. */
+    /**
+     * Last reconstructed V chroma plane, or {@code null} before the first decode.
+     */
     short[] refV;
 
     // ── GOLDEN reference ──
-    /** Golden-slot luma plane, or {@code null} when {@link #hasReferenceGolden()} is false. */
+    /**
+     * Golden-slot luma plane, or {@code null} when {@link #hasReferenceGolden()} is false.
+     */
     short[] goldenY;
     short[] goldenU;
     short[] goldenV;
 
     // ── ALTREF reference ──
-    /** Altref-slot luma plane, or {@code null} when {@link #hasReferenceAltref()} is false. */
+    /**
+     * Altref-slot luma plane, or {@code null} when {@link #hasReferenceAltref()} is false.
+     */
     short[] altrefY;
     short[] altrefU;
     short[] altrefV;
 
-    /** Luma plane stride in samples (MB-grid-aligned); shared across all 3 slots. */
+    /**
+     * Luma plane stride in samples (MB-grid-aligned); shared across all 3 slots.
+     */
     int refLumaStride;
-    /** Chroma plane stride in samples (MB-grid-aligned); shared across all 3 slots. */
+    /**
+     * Chroma plane stride in samples (MB-grid-aligned); shared across all 3 slots.
+     */
     int refChromaStride;
-    /** Macroblock columns in the reference planes. */
+    /**
+     * Macroblock columns in the reference planes.
+     */
     int refMbCols;
-    /** Macroblock rows in the reference planes. */
+    /**
+     * Macroblock rows in the reference planes.
+     */
     int refMbRows;
-    /** Reference frame width in pixels. */
+    /**
+     * Reference frame width in pixels.
+     */
     int refWidth;
-    /** Reference frame height in pixels. */
+    /**
+     * Reference frame height in pixels.
+     */
     int refHeight;
 
     /**
@@ -63,7 +85,9 @@ public final class VP8DecoderSession {
      * MV sign relative to the current MB's reference before reuse.
      */
     boolean signBiasGolden;
-    /** Sign-bias flag for the altref reference (symmetric to {@link #signBiasGolden}). */
+    /**
+     * Sign-bias flag for the altref reference (symmetric to {@link #signBiasGolden}).
+     */
     boolean signBiasAltref;
 
     /**
@@ -74,10 +98,14 @@ public final class VP8DecoderSession {
      */
     int[] @NotNull [] mvProba = cloneMvProba();
 
-    /** Constructs a new {@code VP8DecoderSession} with no cached references. */
+    /**
+     * Constructs a new {@code VP8DecoderSession} with no cached references.
+     */
     public VP8DecoderSession() { }
 
-    /** Deep-copies {@link VP8Tables#MV_DEFAULT_PROBA} so per-frame updates don't mutate the source. */
+    /**
+     * Deep-copies {@link VP8Tables#MV_DEFAULT_PROBA} so per-frame updates don't mutate the source.
+     */
     static int[] @NotNull [] cloneMvProba() {
         int[][] out = new int[2][VP8Tables.NUM_MV_PROBAS];
         for (int c = 0; c < 2; c++)
@@ -97,22 +125,30 @@ public final class VP8DecoderSession {
         return VP8Decoder.decodeFrame(data, this);
     }
 
-    /** {@code true} when the {@code LAST} reference is available. */
+    /**
+     * {@code true} when the {@code LAST} reference is available.
+     */
     public boolean hasReference() {
         return refY != null;
     }
 
-    /** {@code true} when the {@code GOLDEN} reference is available. */
+    /**
+     * {@code true} when the {@code GOLDEN} reference is available.
+     */
     public boolean hasReferenceGolden() {
         return goldenY != null;
     }
 
-    /** {@code true} when the {@code ALTREF} reference is available. */
+    /**
+     * {@code true} when the {@code ALTREF} reference is available.
+     */
     public boolean hasReferenceAltref() {
         return altrefY != null;
     }
 
-    /** Clears all cached references so the next decode starts from a clean state. */
+    /**
+     * Clears all cached references so the next decode starts from a clean state.
+     */
     public void reset() {
         refY = refU = refV = null;
         goldenY = goldenU = goldenV = null;
@@ -138,7 +174,9 @@ public final class VP8DecoderSession {
         };
     }
 
-    /** Chroma U plane for the selected reference frame. */
+    /**
+     * Chroma U plane for the selected reference frame.
+     */
     short @NotNull [] uRef(int refFrame) {
         return switch (refFrame) {
             case LoopFilter.REF_LAST -> refU;
@@ -148,7 +186,9 @@ public final class VP8DecoderSession {
         };
     }
 
-    /** Chroma V plane for the selected reference frame. */
+    /**
+     * Chroma V plane for the selected reference frame.
+     */
     short @NotNull [] vRef(int refFrame) {
         return switch (refFrame) {
             case LoopFilter.REF_LAST -> refV;
@@ -182,7 +222,9 @@ public final class VP8DecoderSession {
         this.refHeight = height;
     }
 
-    /** Snapshots the reconstructed planes into this session's {@code GOLDEN} slot. */
+    /**
+     * Snapshots the reconstructed planes into this session's {@code GOLDEN} slot.
+     */
     void captureReferenceGolden(
         short @NotNull [] reconY, short @NotNull [] reconU, short @NotNull [] reconV,
         int lumaStride, int chromaStride, int mbCols, int mbRows, int width, int height
@@ -203,7 +245,9 @@ public final class VP8DecoderSession {
         this.refHeight = height;
     }
 
-    /** Snapshots the reconstructed planes into this session's {@code ALTREF} slot. */
+    /**
+     * Snapshots the reconstructed planes into this session's {@code ALTREF} slot.
+     */
     void captureReferenceAltref(
         short @NotNull [] reconY, short @NotNull [] reconU, short @NotNull [] reconV,
         int lumaStride, int chromaStride, int mbCols, int mbRows, int width, int height
@@ -224,7 +268,9 @@ public final class VP8DecoderSession {
         this.refHeight = height;
     }
 
-    /** Implements {@code copy_buffer_to_golden = 1} (copy LAST -> GOLDEN). */
+    /**
+     * Implements {@code copy_buffer_to_golden = 1} (copy LAST -> GOLDEN).
+     */
     void copyLastToGolden() {
         goldenY = ensureLen(goldenY, refY.length);
         goldenU = ensureLen(goldenU, refU.length);
@@ -234,7 +280,9 @@ public final class VP8DecoderSession {
         System.arraycopy(refV, 0, goldenV, 0, refV.length);
     }
 
-    /** Implements {@code copy_buffer_to_golden = 2} (copy ALTREF -> GOLDEN). */
+    /**
+     * Implements {@code copy_buffer_to_golden = 2} (copy ALTREF -> GOLDEN).
+     */
     void copyAltrefToGolden() {
         goldenY = ensureLen(goldenY, altrefY.length);
         goldenU = ensureLen(goldenU, altrefU.length);
@@ -244,7 +292,9 @@ public final class VP8DecoderSession {
         System.arraycopy(altrefV, 0, goldenV, 0, altrefV.length);
     }
 
-    /** Implements {@code copy_buffer_to_alt = 1} (copy LAST -> ALTREF). */
+    /**
+     * Implements {@code copy_buffer_to_alt = 1} (copy LAST -> ALTREF).
+     */
     void copyLastToAltref() {
         altrefY = ensureLen(altrefY, refY.length);
         altrefU = ensureLen(altrefU, refU.length);
@@ -254,7 +304,9 @@ public final class VP8DecoderSession {
         System.arraycopy(refV, 0, altrefV, 0, refV.length);
     }
 
-    /** Implements {@code copy_buffer_to_alt = 2} (copy GOLDEN -> ALTREF). */
+    /**
+     * Implements {@code copy_buffer_to_alt = 2} (copy GOLDEN -> ALTREF).
+     */
     void copyGoldenToAltref() {
         altrefY = ensureLen(altrefY, goldenY.length);
         altrefU = ensureLen(altrefU, goldenU.length);

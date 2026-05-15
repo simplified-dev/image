@@ -3,6 +3,8 @@ package dev.simplified.image.codec.gif;
 import dev.simplified.image.codec.ImageWriteOptions;
 import org.jetbrains.annotations.NotNull;
 
+import java.awt.Graphics2D;
+
 /**
  * GIF-specific encoding options.
  *
@@ -11,7 +13,7 @@ import org.jetbrains.annotations.NotNull;
  * @param transparentColorIndex the palette slot to mark as transparent when {@code transparent} is set
  * @param backgroundRgb the RGB color to composite partial-alpha pixels onto before
  *     quantizing. GIF supports only 1-bit transparency, so partial alpha otherwise gets
- *     rendered as a dithered checkerboard by {@link java.awt.Graphics2D}. Any pixel with
+ *     rendered as a dithered checkerboard by {@link Graphics2D}. Any pixel with
  *     {@code alpha &lt; alphaThreshold} becomes fully transparent; everything else is
  *     flattened onto this color and becomes fully opaque.
  * @param alphaThreshold pixels with alpha strictly below this value ({@code 0}-{@code 255})

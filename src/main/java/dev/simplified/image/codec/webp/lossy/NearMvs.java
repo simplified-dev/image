@@ -19,27 +19,45 @@ import org.jetbrains.annotations.NotNull;
  */
 final class NearMvs {
 
-    /** Index into {@link Result#cnt} for the "intra or zero-MV" neighbour count. */
+    /**
+     * Index into {@link Result#cnt} for the "intra or zero-MV" neighbour count.
+     */
     static final int CNT_INTRA = 0;
 
-    /** Index for the "matches nearest_mv" neighbour count. */
+    /**
+     * Index for the "matches nearest_mv" neighbour count.
+     */
     static final int CNT_NEAREST = 1;
 
-    /** Index for the "matches near_mv" neighbour count. */
+    /**
+     * Index for the "matches near_mv" neighbour count.
+     */
     static final int CNT_NEAR = 2;
 
-    /** Index for the SPLITMV neighbour count (always 0 in our encoder - we never emit SPLITMV). */
+    /**
+     * Index for the SPLITMV neighbour count (always 0 in our encoder - we never emit SPLITMV).
+     */
     static final int CNT_SPLITMV = 3;
 
-    /** Output bundle - nearest / near / best MVs plus the 4-slot vote counter. */
+    /**
+     * Output bundle - nearest / near / best MVs plus the 4-slot vote counter.
+     */
     static final class Result {
-        /** Nearest-neighbour MV (1/8-pel internal units). */
+        /**
+         * Nearest-neighbour MV (1/8-pel internal units).
+         */
         int nearestRow, nearestCol;
-        /** Near-neighbour MV. */
+        /**
+         * Near-neighbour MV.
+         */
         int nearRow, nearCol;
-        /** Best-guess MV for NEW_MV initial search / ZEROMV fallback. */
+        /**
+         * Best-guess MV for NEW_MV initial search / ZEROMV fallback.
+         */
         int bestRow, bestCol;
-        /** Vote counts indexed by {@link #CNT_INTRA}, {@link #CNT_NEAREST}, etc. */
+        /**
+         * Vote counts indexed by {@link #CNT_INTRA}, {@link #CNT_NEAREST}, etc.
+         */
         final int[] cnt = new int[4];
     }
 

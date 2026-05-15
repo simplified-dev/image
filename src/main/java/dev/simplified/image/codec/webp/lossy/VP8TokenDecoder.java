@@ -94,7 +94,9 @@ final class VP8TokenDecoder {
         return 1;
     }
 
-    /** Reads category flags plus extra bits for a coefficient magnitude of 11 or greater. */
+    /**
+     * Reads category flags plus extra bits for a coefficient magnitude of 11 or greater.
+     */
     private static int decodeCategory(@NotNull BooleanDecoder dec, int @NotNull [] p) {
         int base;
         int bits;

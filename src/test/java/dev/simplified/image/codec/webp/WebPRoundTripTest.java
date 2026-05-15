@@ -15,15 +15,16 @@ import org.jetbrains.annotations.NotNull;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.opentest4j.TestAbortedException;
 
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.greaterThan;
-import static org.hamcrest.Matchers.is;
+import org.hamcrest.MatcherAssert.assertThat;
+import org.hamcrest.Matchers.greaterThan;
+import org.hamcrest.Matchers.is;
 
 /**
  * End-to-end WebP file-I/O round trips through {@link ImageFactory}. Complements
@@ -1482,7 +1483,9 @@ class WebPRoundTripTest {
         assertThat("file written", Files.size(out.toPath()), is(greaterThan(12L)));
     }
 
-    /** Minimal wrapper so we can write a single frame without instantiating TextRenderer. */
+    /**
+     * Minimal wrapper so we can write a single frame without instantiating TextRenderer.
+     */
     private record StaticImageData(ImageFrame frame) implements ImageData {
 
         @Override
@@ -1520,7 +1523,7 @@ class WebPRoundTripTest {
      * when set (useful on Windows where the default {@code python3} on PATH is a
      * Microsoft Store stub without the {@code webp} package). Falls back to the
      * standard launchers otherwise. Returns {@code null} when nothing launches -
-     * callers typically throw {@link org.opentest4j.TestAbortedException}.
+     * callers typically throw {@link TestAbortedException}.
      */
     private static Process startPythonSubprocess(String script) {
         String override = System.getProperty("vp8.pythonBin");

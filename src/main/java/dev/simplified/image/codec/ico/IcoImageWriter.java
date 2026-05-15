@@ -5,6 +5,7 @@ import dev.simplified.image.ImageFormat;
 import dev.simplified.image.codec.ImageWriteOptions;
 import dev.simplified.image.codec.ImageWriter;
 import dev.simplified.image.codec.png.PngImageWriter;
+import dev.simplified.image.data.AnimatedImageData;
 import dev.simplified.image.data.StaticImageData;
 import dev.simplified.stream.ByteArrayDataOutput;
 import lombok.Cleanup;
@@ -19,7 +20,7 @@ import java.io.IOException;
  * PNG embedding is valid per the ICO specification since Windows Vista and sidesteps the
  * need to synthesize a BITMAPINFOHEADER + AND mask.
  * <p>
- * Multi-frame input ({@link dev.simplified.image.data.AnimatedImageData AnimatedImageData})
+ * Multi-frame input ({@link AnimatedImageData AnimatedImageData})
  * is not supported for ICO - only the first frame is written, since ICO's multi-entry
  * structure describes resolutions rather than animation frames.
  */

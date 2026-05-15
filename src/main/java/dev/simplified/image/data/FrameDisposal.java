@@ -15,16 +15,24 @@ import java.util.Locale;
 @RequiredArgsConstructor
 public enum FrameDisposal {
 
-    /** No disposal action specified. */
+    /**
+     * No disposal action specified.
+     */
     NONE(0, "none"),
 
-    /** Leave the canvas as-is after displaying this frame. */
+    /**
+     * Leave the canvas as-is after displaying this frame.
+     */
     DO_NOT_DISPOSE(1, "doNotDispose"),
 
-    /** Restore the canvas to the background color. */
+    /**
+     * Restore the canvas to the background color.
+     */
     RESTORE_TO_BACKGROUND(2, "restoreToBackgroundColor"),
 
-    /** Restore the canvas to its state before this frame was rendered. */
+    /**
+     * Restore the canvas to its state before this frame was rendered.
+     */
     RESTORE_TO_PREVIOUS(3, "restoreToPrevious");
 
     private static final @NotNull FrameDisposal[] BY_VALUE;

@@ -149,7 +149,9 @@ final class VP8TokenEncoder {
         return 1;
     }
 
-    /** Emits {@code p[idx]}-prob bit and, when {@code bctx} is non-null, bumps {@code bctx[idx][bit]}. */
+    /**
+     * Emits {@code p[idx]}-prob bit and, when {@code bctx} is non-null, bumps {@code bctx[idx][bit]}.
+     */
     private static void writeBit(
         @NotNull BooleanEncoder enc, int @NotNull [] p, int[] @Nullable [] bctx, int idx, int bit
     ) {

@@ -39,7 +39,9 @@ public final class VP8Encoder {
      * parse rows in parallel.
      */
     private static final int NUM_TOKEN_PARTITIONS = 4;
-    /** {@code log2(NUM_TOKEN_PARTITIONS)}; encoded into the 2-bit header field. */
+    /**
+     * {@code log2(NUM_TOKEN_PARTITIONS)}; encoded into the 2-bit header field.
+     */
     private static final int LOG2_NUM_TOKEN_PARTITIONS = 2;
 
     private VP8Encoder() { }
@@ -76,11 +78,17 @@ public final class VP8Encoder {
      */
     private static final int INTER_PROB_GF = 128;
 
-    /** Per-frame encoding state threaded through the MB loop. */
+    /**
+     * Per-frame encoding state threaded through the MB loop.
+     */
     static final class State {
-        /** {@code true} for a keyframe, {@code false} for a P-frame (inter frame). */
+        /**
+         * {@code true} for a keyframe, {@code false} for a P-frame (inter frame).
+         */
         final boolean isKeyframe;
-        /** Backing session for P-frame reference buffers, or {@code null} for a stateless keyframe. */
+        /**
+         * Backing session for P-frame reference buffers, or {@code null} for a stateless keyframe.
+         */
         @Nullable final VP8EncoderSession session;
 
         final int mbCols, mbRows;
@@ -508,7 +516,9 @@ public final class VP8Encoder {
         }
     }
 
-    /** Deep-copies the {@code [NUM_TYPES][NUM_BANDS][NUM_CTX][NUM_PROBAS]} proba table. */
+    /**
+     * Deep-copies the {@code [NUM_TYPES][NUM_BANDS][NUM_CTX][NUM_PROBAS]} proba table.
+     */
     private static int[][][][] deepCloneTokenProba(int @NotNull [][][][] src) {
         int[][][][] out = new int[src.length][][][];
         for (int t = 0; t < src.length; t++) {
@@ -1174,7 +1184,9 @@ public final class VP8Encoder {
         return assembleFrame(width, height, headerBytes, tokenBytes, isKeyframe);
     }
 
-    /** Maps a 0..1 quality value to VP8's 0..127 QI index (higher quality = lower QI). */
+    /**
+     * Maps a 0..1 quality value to VP8's 0..127 QI index (higher quality = lower QI).
+     */
     private static int qualityToQi(float quality) {
         return Math.clamp((int) ((1.0f - quality) * 127f + 0.5f), 0, 127);
     }
@@ -1198,7 +1210,9 @@ public final class VP8Encoder {
         return level < 2 ? 0 : Math.min(level, 63);
     }
 
-    /** Emits the boolean-coded first-partition frame header up to the per-MB modes. */
+    /**
+     * Emits the boolean-coded first-partition frame header up to the per-MB modes.
+     */
     private static void writeFrameHeader(@NotNull State s, int qi) {
         BooleanEncoder e = s.header;
 
@@ -1496,7 +1510,9 @@ public final class VP8Encoder {
         }
     }
 
-    /** Minimum observations at a (type, band, ctx, probaIdx) slot before we consider a coef update. */
+    /**
+     * Minimum observations at a (type, band, ctx, probaIdx) slot before we consider a coef update.
+     */
     private static final int COEF_UPDATE_MIN_OBSERVATIONS = 4;
 
     /**
@@ -1685,7 +1701,9 @@ public final class VP8Encoder {
         abstract void commit(@NotNull State s, int mbX, int mbY);
     }
 
-    /** ZEROMV + skip: reconstruction is a direct copy of the LAST reference MB at ({@code 0, 0}). */
+    /**
+     * ZEROMV + skip: reconstruction is a direct copy of the LAST reference MB at ({@code 0, 0}).
+     */
     private static final class ZeroMvSkipCandidate extends InterCandidate {
         final int @NotNull [] mvRefProbs;
         ZeroMvSkipCandidate(long sse, int rate, int lambda, int @NotNull [] mvRefProbs) {
@@ -1832,7 +1850,9 @@ public final class VP8Encoder {
         }
     }
 
-    /** Intra 16x16 macroblock inside a P-frame, using inter-frame Y/UV mode probabilities. */
+    /**
+     * Intra 16x16 macroblock inside a P-frame, using inter-frame Y/UV mode probabilities.
+     */
     private static final class IntraInPCandidate extends InterCandidate {
         final int yMode16;
         final int uvMode;
@@ -2126,14 +2146,18 @@ public final class VP8Encoder {
         }
     }
 
-    /** Returns the lower-R-D of the two candidates, or {@code next} when {@code prev} is null. */
+    /**
+     * Returns the lower-R-D of the two candidates, or {@code next} when {@code prev} is null.
+     */
     private static @NotNull InterCandidate chooseBetter(
         @Nullable InterCandidate prev, @NotNull InterCandidate next
     ) {
         return prev == null || next.rdScore < prev.rdScore ? next : prev;
     }
 
-    /** Resets the per-MB nz slots and {@code intraT}/{@code intraL} context for an inter-skip MB. */
+    /**
+     * Resets the per-MB nz slots and {@code intraT}/{@code intraL} context for an inter-skip MB.
+     */
     private static void clearNzAndIntraContextForInterSkip(@NotNull State s, int mbX) {
         for (int i = 0; i < 9; i++) {
             s.topNz[mbX][i] = 0;
@@ -2143,7 +2167,9 @@ public final class VP8Encoder {
         java.util.Arrays.fill(s.intraL, IntraPrediction.B_DC_PRED);
     }
 
-    /** Copies an 8x8 chroma MB-local buffer into {@code plane} at ({@code mbX}, {@code mbY}). */
+    /**
+     * Copies an 8x8 chroma MB-local buffer into {@code plane} at ({@code mbX}, {@code mbY}).
+     */
     private static void commitChromaBufferToRecon(
         short @NotNull [] plane, int stride, int mbX, int mbY, short @NotNull [] buf
     ) {
@@ -2367,8 +2393,8 @@ public final class VP8Encoder {
      * the classification at {@code VP8Decoder.decodeSplitMv} so encoder rate-cost
      * estimation indexes the same proba row the decoder will read.
      *
-     * @param leftRow  left-neighbour sub-MV row component (1/8-pel internal)
-     * @param leftCol  left-neighbour sub-MV col component
+     * @param leftRow left-neighbour sub-MV row component (1/8-pel internal)
+     * @param leftCol left-neighbour sub-MV col component
      * @param aboveRow above-neighbour sub-MV row component
      * @param aboveCol above-neighbour sub-MV col component
      * @return context row index in {@code [0, 4]}
@@ -3006,7 +3032,9 @@ public final class VP8Encoder {
         return rate;
     }
 
-    /** Computes SSE between source 16x16 luma samples and the reference plane at {@code (x0, y0)}. */
+    /**
+     * Computes SSE between source 16x16 luma samples and the reference plane at {@code (x0, y0)}.
+     */
     private static long sseVsRef16x16(short @NotNull [] ref, int refStride, int x0, int y0, short @NotNull [] src) {
         long sum = 0;
         for (int y = 0; y < 16; y++) {
@@ -3020,7 +3048,9 @@ public final class VP8Encoder {
         return sum;
     }
 
-    /** Computes SSE between source 8x8 chroma samples and the reference plane at {@code (x0, y0)}. */
+    /**
+     * Computes SSE between source 8x8 chroma samples and the reference plane at {@code (x0, y0)}.
+     */
     private static long sseVsRef8x8(short @NotNull [] ref, int refStride, int x0, int y0, short @NotNull [] src) {
         long sum = 0;
         for (int y = 0; y < 8; y++) {
@@ -3272,7 +3302,9 @@ public final class VP8Encoder {
         return new int[] { bestWireRow, bestWireCol, sseInt };
     }
 
-    /** Sum of absolute differences between the 16x16 source block and a reference block. */
+    /**
+     * Sum of absolute differences between the 16x16 source block and a reference block.
+     */
     private static long sadLuma16x16(
         short @NotNull [] ref, int refStride, int refX, int refY, short @NotNull [] src
     ) {
@@ -3301,15 +3333,15 @@ public final class VP8Encoder {
      * <p>
      * Returns {@code null} when every candidate lies outside the reference frame bounds.
      *
-     * @param s       encoder state (provides session ref planes)
-     * @param mb      MB-local source samples ({@code mb.y} carries the full 16x16 luma)
-     * @param mbX     MB column
-     * @param mbY     MB row
+     * @param s encoder state (provides session ref planes)
+     * @param mb MB-local source samples ({@code mb.y} carries the full 16x16 luma)
+     * @param mbX MB column
+     * @param mbY MB row
      * @param blockX0 sub-block x offset within the MB, in samples ({@code 0}, {@code 4},
      *                {@code 8}, or {@code 12})
      * @param blockY0 sub-block y offset within the MB, in samples
-     * @param blockW  sub-block width ({@code 4}, {@code 8}, or {@code 16})
-     * @param blockH  sub-block height ({@code 4}, {@code 8}, or {@code 16})
+     * @param blockW sub-block width ({@code 4}, {@code 8}, or {@code 16})
+     * @param blockH sub-block height ({@code 4}, {@code 8}, or {@code 16})
      * @return wire MV in {@code [bestWireRow, bestWireCol]} (quarter-pel units), or
      *         {@code null} if every candidate clipped
      */
@@ -3512,7 +3544,9 @@ public final class VP8Encoder {
         return (internalLumaMv + adj) / 2;
     }
 
-    /** Copies the 16x16 luma MB at ({@code mbX}, {@code mbY}) from {@code ref} to {@code dst}. */
+    /**
+     * Copies the 16x16 luma MB at ({@code mbX}, {@code mbY}) from {@code ref} to {@code dst}.
+     */
     private static void copyRef16x16(
         short @NotNull [] ref, int refStride, short @NotNull [] dst, int dstStride, int mbX, int mbY
     ) {
@@ -3523,7 +3557,9 @@ public final class VP8Encoder {
         }
     }
 
-    /** Copies the 8x8 chroma MB at ({@code mbX}, {@code mbY}) from {@code ref} to {@code dst}. */
+    /**
+     * Copies the 8x8 chroma MB at ({@code mbX}, {@code mbY}) from {@code ref} to {@code dst}.
+     */
     private static void copyRef8x8(
         short @NotNull [] ref, int refStride, short @NotNull [] dst, int dstStride, int mbX, int mbY
     ) {
@@ -3617,7 +3653,9 @@ public final class VP8Encoder {
         }
     }
 
-    /** Increments {@code branches[slot][outcome]} when {@code branches} is non-null. */
+    /**
+     * Increments {@code branches[slot][outcome]} when {@code branches} is non-null.
+     */
     private static void countBranch(int[] @Nullable [] branches, int slot, int outcome) {
         if (branches != null) branches[slot][outcome]++;
     }
@@ -3641,7 +3679,9 @@ public final class VP8Encoder {
         }
     }
 
-    /** Output of the per-MB 16x16 luma encode: zig-zag coefficients for emit + reconstruction. */
+    /**
+     * Output of the per-MB 16x16 luma encode: zig-zag coefficients for emit + reconstruction.
+     */
     private static final class I16Result {
         final short[] y2ZigZag;              // Y2 block, zig-zag order (16 entries)
         final short[][] yAcZigZag;           // 16 Y AC blocks, zig-zag order
@@ -3869,7 +3909,9 @@ public final class VP8Encoder {
         return recon;
     }
 
-    /** Output of the per-MB B_PRED evaluation path. */
+    /**
+     * Output of the per-MB B_PRED evaluation path.
+     */
     private static final class BPredResult {
         final int[] modes;          // 16 sub-block modes, raster order (by * 4 + bx)
         final short[][] yAc;        // 16 quantized coefficient blocks, <b>zig-zag order</b>
@@ -3992,7 +4034,9 @@ public final class VP8Encoder {
         return new BPredResult(modes, yAc, recon, totalSse, totalRDScore);
     }
 
-    /** Maps a 16x16 luma macroblock mode to the analogous B_PRED sub-block constant. */
+    /**
+     * Maps a 16x16 luma macroblock mode to the analogous B_PRED sub-block constant.
+     */
     private static int mb16ToSubMode(int mbMode) {
         return switch (mbMode) {
             case IntraPrediction.V_PRED -> IntraPrediction.B_VE_PRED;
@@ -4027,7 +4071,9 @@ public final class VP8Encoder {
         return above;
     }
 
-    /** Left-column 4 neighbours for sub-block ({@code by}, {@code bx}). */
+    /**
+     * Left-column 4 neighbours for sub-block ({@code by}, {@code bx}).
+     */
     private static short[] neighborLeft4(@NotNull State s, short @NotNull [] mbRecon, int mbX, int mbY, int bx, int by) {
         if (bx == 0 && mbX == 0) return null;
         short[] left = new short[4];
@@ -4072,7 +4118,9 @@ public final class VP8Encoder {
         return zz;
     }
 
-    /** Copies a 16x16 MB-local reconstruction buffer to the appropriate region of {@code s.reconY}. */
+    /**
+     * Copies a 16x16 MB-local reconstruction buffer to the appropriate region of {@code s.reconY}.
+     */
     private static void commitLumaToRecon(@NotNull State s, int mbX, int mbY, short @NotNull [] recon) {
         for (int yy = 0; yy < 16; yy++) {
             int dst = (mbY * 16 + yy) * s.lumaStride + mbX * 16;

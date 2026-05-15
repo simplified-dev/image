@@ -119,7 +119,9 @@ public class VP8CodecTest {
                 assertThat(dec.decodeTree(tree, probs), is(expected));
         }
 
-        /** Walks the tree toward {@code leaf} and emits each branch bit via {@code enc}. */
+        /**
+         * Walks the tree toward {@code leaf} and emits each branch bit via {@code enc}.
+         */
         private static void encodeTree(BooleanEncoder enc, int[] tree, int[] probs, int leaf) {
             int[] path = new int[16];
             int[] nodes = new int[16];
@@ -432,7 +434,9 @@ public class VP8CodecTest {
                     expectR, expectG, expectB, (p >> 16) & 0xFF, (p >> 8) & 0xFF, p & 0xFF, tolerance));
         }
 
-        /** Writes {@code riff} to a temp file, shells out to libwebp, and returns the decoded ARGB buffer. */
+        /**
+         * Writes {@code riff} to a temp file, shells out to libwebp, and returns the decoded ARGB buffer.
+         */
         private static int[] decodeWithLibwebp(byte[] riff, int expectedW, int expectedH)
             throws Exception {
             java.nio.file.Path tmp = java.nio.file.Files.createTempFile("vp8-px-", ".webp");
@@ -748,7 +752,9 @@ public class VP8CodecTest {
             }
         }
 
-        /** Strips RIFF/WEBP/VP8 chunk headers and returns the bare VP8 payload. */
+        /**
+         * Strips RIFF/WEBP/VP8 chunk headers and returns the bare VP8 payload.
+         */
         private static byte[] extractVp8Payload(byte[] riff) {
             // RIFF header: 4 + 4 + 4 = 12 bytes (magic + size + "WEBP").
             int offset = 12;
@@ -964,7 +970,9 @@ public class VP8CodecTest {
                     "B_PRED-in-P self-roundtrip PSNR = %.2f dB (expected >= 20 dB)", psnr));
         }
 
-        /** Flattens a decoded {@link PixelBuffer} into a row-major ARGB int array. */
+        /**
+         * Flattens a decoded {@link PixelBuffer} into a row-major ARGB int array.
+         */
         private static int[] toArray(PixelBuffer buf) {
             int[] out = new int[buf.width() * buf.height()];
             for (int y = 0; y < buf.height(); y++)
@@ -2101,7 +2109,9 @@ public class VP8CodecTest {
 
         private ConformanceHelper() { }
 
-        /** PSNR in dB between an RGB {@link PixelBuffer} and a decoded ARGB pixel array of the same dims. */
+        /**
+         * PSNR in dB between an RGB {@link PixelBuffer} and a decoded ARGB pixel array of the same dims.
+         */
         static double pixelPsnr(PixelBuffer src, int[] decoded, int w, int h) {
             long sumSq = 0;
             int n = 0;
@@ -2217,7 +2227,9 @@ public class VP8CodecTest {
             }
         }
 
-        /** Strips RIFF container headers, returns the bare VP8 payload. */
+        /**
+         * Strips RIFF container headers, returns the bare VP8 payload.
+         */
         private static byte[] extractVp8Payload(byte[] riff) {
             int offset = 12;
             while (offset + 8 <= riff.length) {
@@ -2398,7 +2410,9 @@ public class VP8CodecTest {
                 agreeI4, agreeI16, agreeSplit, mvExact, mvManhattan, segmentAgree);
         }
 
-        /** Short human-readable summary of a diff - used by the demo test to log. */
+        /**
+         * Short human-readable summary of a diff - used by the demo test to log.
+         */
         static @org.jetbrains.annotations.NotNull String formatDiff(
             @org.jetbrains.annotations.NotNull ModeDecisionDiff d
         ) {

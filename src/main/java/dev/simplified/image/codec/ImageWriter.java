@@ -11,7 +11,9 @@ import org.jetbrains.annotations.Nullable;
  */
 public interface ImageWriter {
 
-    /** The image format this writer produces. */
+    /**
+     * The image format this writer produces.
+     */
     @NotNull ImageFormat getFormat();
 
     /**

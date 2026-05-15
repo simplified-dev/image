@@ -15,9 +15,13 @@ import org.jetbrains.annotations.NotNull;
  */
 final class DCT {
 
-    /** WEBP_TRANSFORM_AC3_C1 - first cosine constant (~20091/65536). */
+    /**
+     * WEBP_TRANSFORM_AC3_C1 - first cosine constant (~20091/65536).
+     */
     private static final int C1 = 20091;
-    /** WEBP_TRANSFORM_AC3_C2 - second cosine constant (~35468/65536). */
+    /**
+     * WEBP_TRANSFORM_AC3_C2 - second cosine constant (~35468/65536).
+     */
     private static final int C2 = 35468;
 
     private DCT() { }
@@ -98,12 +102,16 @@ final class DCT {
         }
     }
 
-    /** {@code WEBP_TRANSFORM_AC3_MUL1}: approximates {@code v * C1/65536 + v}. */
+    /**
+     * {@code WEBP_TRANSFORM_AC3_MUL1}: approximates {@code v * C1/65536 + v}.
+     */
     private static int mul1(int v) {
         return ((v * C1) >> 16) + v;
     }
 
-    /** {@code WEBP_TRANSFORM_AC3_MUL2}: approximates {@code v * C2/65536}. */
+    /**
+     * {@code WEBP_TRANSFORM_AC3_MUL2}: approximates {@code v * C2/65536}.
+     */
     private static int mul2(int v) {
         return (v * C2) >> 16;
     }

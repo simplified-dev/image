@@ -42,13 +42,19 @@ public final class VP8LEncoder {
     private static final int NUM_DISTANCE_CODES = 40;
     private static final int MAX_HUFFMAN_BITS = 15;
 
-    /** Maximum {@code color_cache_size} exponent the VP8L spec accepts. */
+    /**
+     * Maximum {@code color_cache_size} exponent the VP8L spec accepts.
+     */
     private static final int MAX_COLOR_CACHE_BITS = 11;
 
-    /** Number of code-length-code symbols in the VP8L alphabet (0..15 literal + 16..18 RLE). */
+    /**
+     * Number of code-length-code symbols in the VP8L alphabet (0..15 literal + 16..18 RLE).
+     */
     private static final int CODE_LENGTH_CODES = 19;
 
-    /** Max bit length for the code-length-code Huffman table (per spec). */
+    /**
+     * Max bit length for the code-length-code Huffman table (per spec).
+     */
     private static final int CLC_MAX_BITS = 7;
 
     /**
@@ -68,7 +74,9 @@ public final class VP8LEncoder {
      * @param pixels the ARGB source buffer
      * @return the encoded VP8L bitstream
      */
-    /** Color-cache trial sizes, in bits. 0 = cache disabled. */
+    /**
+     * Color-cache trial sizes, in bits. 0 = cache disabled.
+     */
     private static final int[] CACHE_BITS_TRIALS = { 0, 10 };
 
     /**
@@ -89,15 +97,25 @@ public final class VP8LEncoder {
      * treats the two as competing strategies and we match that).
      */
     public enum TransformMode {
-        /** No transform - emit pixels as literal ARGB through the body entropy coder. */
+        /**
+         * No transform - emit pixels as literal ARGB through the body entropy coder.
+         */
         NONE,
-        /** Color-indexing / palette transform; only valid when palette-eligible. */
+        /**
+         * Color-indexing / palette transform; only valid when palette-eligible.
+         */
         PALETTE,
-        /** Spatial predictor transform; always applicable. */
+        /**
+         * Spatial predictor transform; always applicable.
+         */
         PREDICTOR,
-        /** Subtract-green transform: {@code R -= G; B -= G;} tightens R/B histograms. */
+        /**
+         * Subtract-green transform: {@code R -= G; B -= G;} tightens R/B histograms.
+         */
         SUBTRACT_GREEN,
-        /** Cross-color (colour-transform) decorrelation; per-tile coefficients. */
+        /**
+         * Cross-color (colour-transform) decorrelation; per-tile coefficients.
+         */
         CROSS_COLOR
     }
 
@@ -1273,13 +1291,17 @@ public final class VP8LEncoder {
         return symbol < prefix.normalLengths.length ? prefix.normalLengths[symbol] : 0;
     }
 
-    /** Guarantees at least one used symbol in the distance alphabet. */
+    /**
+     * Guarantees at least one used symbol in the distance alphabet.
+     */
     private static void ensureDistanceNonEmpty(int @NotNull [] distFreq) {
         for (int f : distFreq) if (f > 0) return;
         distFreq[0] = 1;
     }
 
-    /** Sums the Huffman bit cost of every token in a stream under the given prefix codes. */
+    /**
+     * Sums the Huffman bit cost of every token in a stream under the given prefix codes.
+     */
     private static long computeTokenBitTotal(
         int @NotNull [] kind, int @NotNull [] len, int @NotNull [] value, int count,
         @NotNull PrefixCode green, @NotNull PrefixCode red,

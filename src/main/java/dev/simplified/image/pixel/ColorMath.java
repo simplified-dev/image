@@ -14,13 +14,19 @@ public class ColorMath {
 
     // --- constants ---
 
-    /** An opaque black ARGB pixel. */
+    /**
+     * An opaque black ARGB pixel.
+     */
     public static final int BLACK = 0xFF000000;
 
-    /** A fully transparent ARGB pixel. */
+    /**
+     * A fully transparent ARGB pixel.
+     */
     public static final int TRANSPARENT = 0x00000000;
 
-    /** An opaque white ARGB pixel. */
+    /**
+     * An opaque white ARGB pixel.
+     */
     public static final int WHITE = 0xFFFFFFFF;
 
     // --- channel accessors ---

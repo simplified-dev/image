@@ -10,37 +10,57 @@ package dev.simplified.image.codec.webp.lossy;
  */
 final class VP8Tables {
 
-    /** Number of coefficient distribution groups: Y1, Y2, U/V, Y1-without-Y2. */
+    /**
+     * Number of coefficient distribution groups: Y1, Y2, U/V, Y1-without-Y2.
+     */
     static final int NUM_TYPES = 4;
 
-    /** Number of coefficient frequency bands per distribution group. */
+    /**
+     * Number of coefficient frequency bands per distribution group.
+     */
     static final int NUM_BANDS = 8;
 
-    /** Number of contextual predictor classes per band. */
+    /**
+     * Number of contextual predictor classes per band.
+     */
     static final int NUM_CTX = 3;
 
-    /** Number of probabilities per context (one per token-tree branch). */
+    /**
+     * Number of probabilities per context (one per token-tree branch).
+     */
     static final int NUM_PROBAS = 11;
 
-    /** Coefficient type: intra 16x16 AC - first coefficient is stored separately in Y2. */
+    /**
+     * Coefficient type: intra 16x16 AC - first coefficient is stored separately in Y2.
+     */
     static final int TYPE_I16_AC = 0;
 
-    /** Coefficient type: intra 16x16 DC (Y2 block - WHT-coded DC coefficients of luma). */
+    /**
+     * Coefficient type: intra 16x16 DC (Y2 block - WHT-coded DC coefficients of luma).
+     */
     static final int TYPE_I16_DC = 1;
 
-    /** Coefficient type: chroma (UV) - both DC and AC. */
+    /**
+     * Coefficient type: chroma (UV) - both DC and AC.
+     */
     static final int TYPE_CHROMA_A = 2;
 
-    /** Coefficient type: intra 4x4 AC - used when the block is B_PRED (no Y2). */
+    /**
+     * Coefficient type: intra 4x4 AC - used when the block is B_PRED (no Y2).
+     */
     static final int TYPE_I4_AC = 3;
 
-    /** Maps zig-zag coefficient index 0..15 to its band. Entry 16 is a sentinel. */
+    /**
+     * Maps zig-zag coefficient index 0..15 to its band. Entry 16 is a sentinel.
+     */
     static final int[] COEF_BANDS = {
         0, 1, 2, 3, 6, 4, 5, 6, 6, 6, 6, 6, 6, 6, 6, 7,
         0
     };
 
-    /** Zig-zag scan order: natural position -> raster position in a 4x4 block. */
+    /**
+     * Zig-zag scan order: natural position -> raster position in a 4x4 block.
+     */
     static final int[] ZIGZAG = {
         0, 1, 4,  8,
         5, 2, 3,  6,
@@ -48,19 +68,29 @@ final class VP8Tables {
         7, 11, 14, 15
     };
 
-    /** Extra-bit probabilities for coefficient magnitude category 3 (values 11..18, 3 extra bits). */
+    /**
+     * Extra-bit probabilities for coefficient magnitude category 3 (values 11..18, 3 extra bits).
+     */
     static final int[] CAT3 = { 173, 148, 140 };
 
-    /** Extra-bit probabilities for coefficient magnitude category 4 (values 19..34, 4 extra bits). */
+    /**
+     * Extra-bit probabilities for coefficient magnitude category 4 (values 19..34, 4 extra bits).
+     */
     static final int[] CAT4 = { 176, 155, 140, 135 };
 
-    /** Extra-bit probabilities for coefficient magnitude category 5 (values 35..66, 5 extra bits). */
+    /**
+     * Extra-bit probabilities for coefficient magnitude category 5 (values 35..66, 5 extra bits).
+     */
     static final int[] CAT5 = { 180, 157, 141, 134, 130 };
 
-    /** Extra-bit probabilities for coefficient magnitude category 6 (values 67..2048, 11 extra bits). */
+    /**
+     * Extra-bit probabilities for coefficient magnitude category 6 (values 67..2048, 11 extra bits).
+     */
     static final int[] CAT6 = { 254, 254, 243, 230, 196, 177, 153, 140, 133, 130, 129 };
 
-    /** Base DC quantizer step for each of the 128 quantizer indices (RFC 6386 paragraph 9.6). */
+    /**
+     * Base DC quantizer step for each of the 128 quantizer indices (RFC 6386 paragraph 9.6).
+     */
     static final int[] DC_Q_LOOKUP = {
           4,   5,   6,   7,   8,   9,  10,  10,  11,  12,  13,  14,  15,  16,  17,  17,
          18,  19,  20,  20,  21,  21,  22,  22,  23,  23,  24,  25,  25,  26,  27,  28,
@@ -72,7 +102,9 @@ final class VP8Tables {
         122, 124, 126, 128, 130, 132, 134, 136, 138, 140, 143, 145, 148, 151, 154, 157
     };
 
-    /** Base AC quantizer step for each of the 128 quantizer indices (RFC 6386 paragraph 9.6). */
+    /**
+     * Base AC quantizer step for each of the 128 quantizer indices (RFC 6386 paragraph 9.6).
+     */
     static final int[] AC_Q_LOOKUP = {
           4,   5,   6,   7,   8,   9,  10,  11,  12,  13,  14,  15,  16,  17,  18,  19,
          20,  21,  22,  23,  24,  25,  26,  27,  28,  29,  30,  31,  32,  33,  34,  35,
@@ -84,7 +116,9 @@ final class VP8Tables {
         213, 217, 221, 225, 229, 234, 239, 245, 249, 254, 259, 264, 269, 274, 279, 284
     };
 
-    /** Y2 (WHT) AC quantizer step - distinct curve from the base AC table (libwebp {@code kAcTable2}). */
+    /**
+     * Y2 (WHT) AC quantizer step - distinct curve from the base AC table (libwebp {@code kAcTable2}).
+     */
     static final int[] AC2_Q_LOOKUP = {
           8,   8,   9,  10,  12,  13,  15,  17,  18,  20,  21,  23,  24,  26,  27,  29,
          31,  32,  34,  35,  37,  38,  40,  41,  43,  44,  46,  48,  49,  51,  52,  54,
@@ -433,25 +467,39 @@ final class VP8Tables {
         { 234, 188, 128,  28 },
     };
 
-    /** Number of MV probabilities per component in the inter-frame header. */
+    /**
+     * Number of MV probabilities per component in the inter-frame header.
+     */
     static final int NUM_MV_PROBAS = 19;
 
-    /** Magnitude values 0..7 emitted via the small-MV tree (libvpx {@code mvnum_short}). */
+    /**
+     * Magnitude values 0..7 emitted via the small-MV tree (libvpx {@code mvnum_short}).
+     */
     static final int MV_SHORT_COUNT = 8;
 
-    /** Long-MV magnitude probability slots (libvpx {@code mvlong_width}). */
+    /**
+     * Long-MV magnitude probability slots (libvpx {@code mvlong_width}).
+     */
     static final int MV_LONG_BITS = 10;
 
-    /** Probability index for the "is short (mag &lt; 8)" bit in a component's proba vector. */
+    /**
+     * Probability index for the "is short (mag &lt; 8)" bit in a component's proba vector.
+     */
     static final int MVP_IS_SHORT = 0;
 
-    /** Probability index for the sign bit. */
+    /**
+     * Probability index for the sign bit.
+     */
     static final int MVP_SIGN = 1;
 
-    /** First probability index of the small-MV tree (7 entries follow). */
+    /**
+     * First probability index of the small-MV tree (7 entries follow).
+     */
     static final int MVP_SHORT = 2;
 
-    /** First probability index of the long-MV magnitude bits (10 entries follow). */
+    /**
+     * First probability index of the long-MV magnitude bits (10 entries follow).
+     */
     static final int MVP_BITS = MVP_SHORT + MV_SHORT_COUNT - 1;
 
     /**
@@ -486,22 +534,38 @@ final class VP8Tables {
 
     // ── SPLITMV tables (RFC 6386 section 17.3) ──────────────────────────────
 
-    /** SPLITMV partitioning scheme: 16x8 horizontal halves. */
+    /**
+     * SPLITMV partitioning scheme: 16x8 horizontal halves.
+     */
     static final int MBSPLIT_TOP_BOTTOM = 0;
-    /** SPLITMV partitioning scheme: 8x16 vertical halves. */
+    /**
+     * SPLITMV partitioning scheme: 8x16 vertical halves.
+     */
     static final int MBSPLIT_LEFT_RIGHT = 1;
-    /** SPLITMV partitioning scheme: 4 x 8x8 quadrants. */
+    /**
+     * SPLITMV partitioning scheme: 4 x 8x8 quadrants.
+     */
     static final int MBSPLIT_QUARTERS = 2;
-    /** SPLITMV partitioning scheme: 16 x 4x4 sub-blocks (all independent). */
+    /**
+     * SPLITMV partitioning scheme: 16 x 4x4 sub-blocks (all independent).
+     */
     static final int MBSPLIT_EIGHTS = 3;
 
-    /** Sub-MV reference leaf: inherit LEFT neighbour's MV. */
+    /**
+     * Sub-MV reference leaf: inherit LEFT neighbour's MV.
+     */
     static final int SUB_MV_REF_LEFT = 0;
-    /** Sub-MV reference leaf: inherit ABOVE neighbour's MV. */
+    /**
+     * Sub-MV reference leaf: inherit ABOVE neighbour's MV.
+     */
     static final int SUB_MV_REF_ABOVE = 1;
-    /** Sub-MV reference leaf: (0, 0). */
+    /**
+     * Sub-MV reference leaf: (0, 0).
+     */
     static final int SUB_MV_REF_ZERO = 2;
-    /** Sub-MV reference leaf: wire-decoded MV component pair. */
+    /**
+     * Sub-MV reference leaf: wire-decoded MV component pair.
+     */
     static final int SUB_MV_REF_NEW = 3;
 
     /**
@@ -516,7 +580,9 @@ final class VP8Tables {
         { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15 }
     };
 
-    /** Number of distinct sub-MVs per SPLITMV scheme (libvpx {@code vp8_mbsplit_count}). */
+    /**
+     * Number of distinct sub-MVs per SPLITMV scheme (libvpx {@code vp8_mbsplit_count}).
+     */
     static final int[] MBSPLIT_COUNT = { 2, 2, 4, 16 };
 
     /**
@@ -548,7 +614,9 @@ final class VP8Tables {
         -MBSPLIT_TOP_BOTTOM, -MBSPLIT_LEFT_RIGHT
     };
 
-    /** Default probabilities for {@link #MBSPLIT_TREE} (libvpx {@code vp8_mbsplit_probs}). */
+    /**
+     * Default probabilities for {@link #MBSPLIT_TREE} (libvpx {@code vp8_mbsplit_probs}).
+     */
     static final int[] MBSPLIT_PROBS = { 110, 111, 150 };
 
     /**

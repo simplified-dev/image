@@ -10,9 +10,13 @@ import org.jetbrains.annotations.NotNull;
  */
 final class Quantizer {
 
-    /** VP8 DC quantization table (indexed by QP 0-127). */
+    /**
+     * VP8 DC quantization table (indexed by QP 0-127).
+     */
     private static final int[] DC_TABLE = buildDcTable();
-    /** VP8 AC quantization table (indexed by QP 0-127). */
+    /**
+     * VP8 AC quantization table (indexed by QP 0-127).
+     */
     private static final int[] AC_TABLE = buildAcTable();
 
     private final int yDc;
@@ -79,7 +83,9 @@ final class Quantizer {
             coefficients[i] = (short) (coefficients[i] * uvAc);
     }
 
-    /** The quantization parameter (0-127). */
+    /**
+     * The quantization parameter (0-127).
+     */
     int getQP() {
         return qp;
     }

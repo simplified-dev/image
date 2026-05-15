@@ -29,19 +29,29 @@ final class TrellisQuantizer {
         30, 27, 19, 11, 27, 24, 17, 10, 19, 17, 12, 8, 11, 10, 8, 6
     };
 
-    /** Search range: we test {@code level0} and {@code level0 + 1} at each coefficient. */
+    /**
+     * Search range: we test {@code level0} and {@code level0 + 1} at each coefficient.
+     */
     private static final int MIN_DELTA = 0;
     private static final int MAX_DELTA = 1;
     private static final int NUM_NODES = MIN_DELTA + 1 + MAX_DELTA;
 
-    /** {@link VP8Costs#MAX_VARIABLE_LEVEL}. */
+    /**
+     * {@link VP8Costs#MAX_VARIABLE_LEVEL}.
+     */
     private static final int MAX_VARIABLE_LEVEL = VP8Costs.MAX_VARIABLE_LEVEL;
-    /** {@link VP8Costs#MAX_LEVEL}. */
+    /**
+     * {@link VP8Costs#MAX_LEVEL}.
+     */
     private static final int MAX_LEVEL = VP8Costs.MAX_LEVEL;
-    /** {@link VP8Costs#RD_DISTO_MULT}. */
+    /**
+     * {@link VP8Costs#RD_DISTO_MULT}.
+     */
     private static final int RD_DISTO_MULT = VP8Costs.RD_DISTO_MULT;
 
-    /** Sentinel for an unreachable trellis node. */
+    /**
+     * Sentinel for an unreachable trellis node.
+     */
     private static final long MAX_COST = 0x7fffffffffffffL;
 
     private TrellisQuantizer() { }

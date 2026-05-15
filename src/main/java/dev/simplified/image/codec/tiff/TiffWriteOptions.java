@@ -23,16 +23,24 @@ public record TiffWriteOptions(@NotNull Compression compression) implements Imag
      */
     public enum Compression {
 
-        /** Uncompressed baseline TIFF. Largest output; highest compatibility. */
+        /**
+         * Uncompressed baseline TIFF. Largest output; highest compatibility.
+         */
         NONE,
 
-        /** Lempel-Ziv-Welch. Good compression ratio on indexed/synthetic imagery. */
+        /**
+         * Lempel-Ziv-Welch. Good compression ratio on indexed/synthetic imagery.
+         */
         LZW,
 
-        /** Deflate (zlib). Strong general-purpose compression. */
+        /**
+         * Deflate (zlib). Strong general-purpose compression.
+         */
         DEFLATE,
 
-        /** Apple PackBits byte-level RLE. Weakest compression but universally supported. */
+        /**
+         * Apple PackBits byte-level RLE. Weakest compression but universally supported.
+         */
         PACKBITS
 
     }

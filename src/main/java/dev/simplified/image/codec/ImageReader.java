@@ -11,7 +11,9 @@ import org.jetbrains.annotations.Nullable;
  */
 public interface ImageReader {
 
-    /** The image format this reader handles. */
+    /**
+     * The image format this reader handles.
+     */
     @NotNull ImageFormat getFormat();
 
     /**

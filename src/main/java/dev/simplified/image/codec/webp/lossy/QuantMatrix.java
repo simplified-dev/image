@@ -16,10 +16,14 @@ import org.jetbrains.annotations.NotNull;
  */
 final class QuantMatrix {
 
-    /** Q17 fixed-point shift used by {@link #iq} and {@link #bias}. */
+    /**
+     * Q17 fixed-point shift used by {@link #iq} and {@link #bias}.
+     */
     static final int QFIX = 17;
 
-    /** Per-coefficient quantization bias shift. {@code BIAS(b) = b << 9}. */
+    /**
+     * Per-coefficient quantization bias shift. {@code BIAS(b) = b << 9}.
+     */
     static int bias(int b) {
         return b << (QFIX - 8);
     }
@@ -34,20 +38,30 @@ final class QuantMatrix {
     };
     private static final int SHARPEN_BITS = 11;
 
-    /** Quantizer-bias matrix {@code [type][is_ac_coeff]}, type 0=luma Y1, 1=luma Y2, 2=chroma. */
+    /**
+     * Quantizer-bias matrix {@code [type][is_ac_coeff]}, type 0=luma Y1, 1=luma Y2, 2=chroma.
+     */
     private static final int[][] BIAS_MATRIX = {
         { 96, 110 },   // luma Y1 (I16 AC + I4 AC): DC bias 96, AC bias 110
         { 96, 108 },   // luma Y2 (WHT): DC bias 96, AC bias 108
         { 110, 115 }   // chroma: DC bias 110, AC bias 115
     };
 
-    /** Per-coefficient quantizer step. {@code q[0]} is DC; {@code q[1..15]} are AC (flat). */
+    /**
+     * Per-coefficient quantizer step. {@code q[0]} is DC; {@code q[1..15]} are AC (flat).
+     */
     final int[] q = new int[16];
-    /** Per-coefficient Q17 fixed-point reciprocal: {@code iq[i] = (1<<17) / q[i]}. */
+    /**
+     * Per-coefficient Q17 fixed-point reciprocal: {@code iq[i] = (1<<17) / q[i]}.
+     */
     final int[] iq = new int[16];
-    /** Per-coefficient rounding bias in Q17: {@code bias[i] = kBias[type][ac] << 9}. */
+    /**
+     * Per-coefficient rounding bias in Q17: {@code bias[i] = kBias[type][ac] << 9}.
+     */
     final int[] bias = new int[16];
-    /** Luma AC sharpening (raises coefficients by a small amount); zero for Y2 and chroma. */
+    /**
+     * Luma AC sharpening (raises coefficients by a small amount); zero for Y2 and chroma.
+     */
     final int[] sharpen = new int[16];
 
     private QuantMatrix(int dcQ, int acQ, int type) {
@@ -66,17 +80,23 @@ final class QuantMatrix {
         }
     }
 
-    /** Builds a luma Y1 matrix (used for I16 AC, I4 AC, and B_PRED sub-block quant). */
+    /**
+     * Builds a luma Y1 matrix (used for I16 AC, I4 AC, and B_PRED sub-block quant).
+     */
     static @NotNull QuantMatrix luma(int dcQ, int acQ) {
         return new QuantMatrix(dcQ, acQ, 0);
     }
 
-    /** Builds a luma Y2 (WHT) matrix for the 16 DC coefficients of an I16 macroblock. */
+    /**
+     * Builds a luma Y2 (WHT) matrix for the 16 DC coefficients of an I16 macroblock.
+     */
     static @NotNull QuantMatrix lumaY2(int dcQ, int acQ) {
         return new QuantMatrix(dcQ, acQ, 1);
     }
 
-    /** Builds a chroma matrix. */
+    /**
+     * Builds a chroma matrix.
+     */
     static @NotNull QuantMatrix chroma(int dcQ, int acQ) {
         return new QuantMatrix(dcQ, acQ, 2);
     }

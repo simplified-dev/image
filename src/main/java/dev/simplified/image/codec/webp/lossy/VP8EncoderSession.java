@@ -3,6 +3,8 @@ package dev.simplified.image.codec.webp.lossy;
 import dev.simplified.image.pixel.PixelBuffer;
 import org.jetbrains.annotations.NotNull;
 
+import java.util.concurrent.ForkJoinPool;
+
 /**
  * Stateful VP8 encoder carrying the three VP8 reference-frame slots - {@code LAST},
  * {@code GOLDEN}, and {@code ALTREF} - across calls.
@@ -26,7 +28,9 @@ import org.jetbrains.annotations.NotNull;
 public final class VP8EncoderSession {
 
     // ── LAST reference (legacy field names) ──
-    /** Last reconstructed luma plane, or {@code null} before the first encode. */
+    /**
+     * Last reconstructed luma plane, or {@code null} before the first encode.
+     */
     short[] refY;
     short[] refU;
     short[] refV;
@@ -41,17 +45,29 @@ public final class VP8EncoderSession {
     short[] altrefU;
     short[] altrefV;
 
-    /** Luma plane stride in samples (MB-grid-aligned); shared across all 3 slots. */
+    /**
+     * Luma plane stride in samples (MB-grid-aligned); shared across all 3 slots.
+     */
     int refLumaStride;
-    /** Chroma plane stride in samples (MB-grid-aligned); shared across all 3 slots. */
+    /**
+     * Chroma plane stride in samples (MB-grid-aligned); shared across all 3 slots.
+     */
     int refChromaStride;
-    /** Macroblock columns in the reference planes. */
+    /**
+     * Macroblock columns in the reference planes.
+     */
     int refMbCols;
-    /** Macroblock rows in the reference planes. */
+    /**
+     * Macroblock rows in the reference planes.
+     */
     int refMbRows;
-    /** Reference frame width in pixels. */
+    /**
+     * Reference frame width in pixels.
+     */
     int refWidth;
-    /** Reference frame height in pixels. */
+    /**
+     * Reference frame height in pixels.
+     */
     int refHeight;
 
     /**
@@ -81,7 +97,9 @@ public final class VP8EncoderSession {
      */
     int @org.jetbrains.annotations.Nullable [][] prevYModeBranches;
 
-    /** Previous frame's UV-mode tree branch counts. 3 slots. See {@link #prevYModeBranches}. */
+    /**
+     * Previous frame's UV-mode tree branch counts. 3 slots. See {@link #prevYModeBranches}.
+     */
     int @org.jetbrains.annotations.Nullable [][] prevUvModeBranches;
 
     /**
@@ -97,7 +115,7 @@ public final class VP8EncoderSession {
     /**
      * Parallelism for the per-MB motion-search prepass on P-frame encodes. {@code 1}
      * means serial (deterministic ordering, no pool overhead); {@code N > 1} runs the
-     * prepass on a throwaway {@link java.util.concurrent.ForkJoinPool} sized to
+     * prepass on a throwaway {@link ForkJoinPool} sized to
      * {@code N}. Motion-searched MVs are a hint - R-D still picks the final MV per
      * MB - so parallelism does not affect bit output.
      */
@@ -112,7 +130,9 @@ public final class VP8EncoderSession {
      */
     private boolean autoSegment = false;
 
-    /** Constructs a new {@code VP8EncoderSession} with no cached references. */
+    /**
+     * Constructs a new {@code VP8EncoderSession} with no cached references.
+     */
     public VP8EncoderSession() { }
 
     /**
@@ -125,7 +145,7 @@ public final class VP8EncoderSession {
     /**
      * Sets the parallelism used by the P-frame motion-search prepass. Use {@code 1}
      * for serial / deterministic behaviour; higher values speed up encodes of
-     * motion-heavy content at the cost of a throwaway {@link java.util.concurrent.ForkJoinPool}
+     * motion-heavy content at the cost of a throwaway {@link ForkJoinPool}
      * per P-frame. Output is bit-identical across thread counts for the same input.
      *
      * @param threads number of worker threads, must be {@code >= 1}
@@ -160,7 +180,9 @@ public final class VP8EncoderSession {
         return this;
     }
 
-    /** Returns {@code true} when auto-segmentation is enabled on this session. */
+    /**
+     * Returns {@code true} when auto-segmentation is enabled on this session.
+     */
     public boolean isAutoSegment() {
         return autoSegment;
     }
@@ -200,22 +222,30 @@ public final class VP8EncoderSession {
             : VP8Encoder.encodePFrame(pixels, quality, this);
     }
 
-    /** {@code true} when the {@code LAST} reference is available. */
+    /**
+     * {@code true} when the {@code LAST} reference is available.
+     */
     public boolean hasReference() {
         return refY != null;
     }
 
-    /** {@code true} when the {@code GOLDEN} reference is available. */
+    /**
+     * {@code true} when the {@code GOLDEN} reference is available.
+     */
     public boolean hasReferenceGolden() {
         return goldenY != null;
     }
 
-    /** {@code true} when the {@code ALTREF} reference is available. */
+    /**
+     * {@code true} when the {@code ALTREF} reference is available.
+     */
     public boolean hasReferenceAltref() {
         return altrefY != null;
     }
 
-    /** Clears all cached references so the next encode starts from a clean state. */
+    /**
+     * Clears all cached references so the next encode starts from a clean state.
+     */
     public void reset() {
         refY = refU = refV = null;
         goldenY = goldenU = goldenV = null;
@@ -255,7 +285,9 @@ public final class VP8EncoderSession {
         this.refHeight = height;
     }
 
-    /** Snapshots the reconstructed planes into this session's {@code GOLDEN} slot. */
+    /**
+     * Snapshots the reconstructed planes into this session's {@code GOLDEN} slot.
+     */
     void captureReferenceGolden(
         short @NotNull [] reconY, short @NotNull [] reconU, short @NotNull [] reconV,
         int lumaStride, int chromaStride, int mbCols, int mbRows, int width, int height
@@ -276,7 +308,9 @@ public final class VP8EncoderSession {
         this.refHeight = height;
     }
 
-    /** Snapshots the reconstructed planes into this session's {@code ALTREF} slot. */
+    /**
+     * Snapshots the reconstructed planes into this session's {@code ALTREF} slot.
+     */
     void captureReferenceAltref(
         short @NotNull [] reconY, short @NotNull [] reconU, short @NotNull [] reconV,
         int lumaStride, int chromaStride, int mbCols, int mbRows, int width, int height
@@ -297,7 +331,9 @@ public final class VP8EncoderSession {
         this.refHeight = height;
     }
 
-    /** Implements {@code copy_buffer_to_golden = 1} (copy LAST -> GOLDEN). */
+    /**
+     * Implements {@code copy_buffer_to_golden = 1} (copy LAST -> GOLDEN).
+     */
     void copyLastToGolden() {
         goldenY = ensureLen(goldenY, refY.length);
         goldenU = ensureLen(goldenU, refU.length);
@@ -307,7 +343,9 @@ public final class VP8EncoderSession {
         System.arraycopy(refV, 0, goldenV, 0, refV.length);
     }
 
-    /** Implements {@code copy_buffer_to_golden = 2} (copy ALTREF -> GOLDEN). */
+    /**
+     * Implements {@code copy_buffer_to_golden = 2} (copy ALTREF -> GOLDEN).
+     */
     void copyAltrefToGolden() {
         goldenY = ensureLen(goldenY, altrefY.length);
         goldenU = ensureLen(goldenU, altrefU.length);
@@ -317,7 +355,9 @@ public final class VP8EncoderSession {
         System.arraycopy(altrefV, 0, goldenV, 0, altrefV.length);
     }
 
-    /** Implements {@code copy_buffer_to_alt = 1} (copy LAST -> ALTREF). */
+    /**
+     * Implements {@code copy_buffer_to_alt = 1} (copy LAST -> ALTREF).
+     */
     void copyLastToAltref() {
         altrefY = ensureLen(altrefY, refY.length);
         altrefU = ensureLen(altrefU, refU.length);
@@ -327,7 +367,9 @@ public final class VP8EncoderSession {
         System.arraycopy(refV, 0, altrefV, 0, refV.length);
     }
 
-    /** Implements {@code copy_buffer_to_alt = 2} (copy GOLDEN -> ALTREF). */
+    /**
+     * Implements {@code copy_buffer_to_alt = 2} (copy GOLDEN -> ALTREF).
+     */
     void copyGoldenToAltref() {
         altrefY = ensureLen(altrefY, goldenY.length);
         altrefU = ensureLen(altrefU, goldenU.length);

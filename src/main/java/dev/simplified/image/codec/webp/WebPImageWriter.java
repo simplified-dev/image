@@ -275,7 +275,9 @@ public class WebPImageWriter implements ImageWriter {
         return RiffContainer.write(chunks);
     }
 
-    /** Reads the disposal + blend flags from an {@link ImageFrame}'s metadata. */
+    /**
+     * Reads the disposal + blend flags from an {@link ImageFrame}'s metadata.
+     */
     private static int computeFrameFlags(@NotNull ImageFrame frame) {
         int flags = 0;
         if (frame.disposal() == FrameDisposal.RESTORE_TO_BACKGROUND) flags |= 0x01;
