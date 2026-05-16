@@ -22,9 +22,9 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
-import org.hamcrest.MatcherAssert.assertThat;
-import org.hamcrest.Matchers.greaterThan;
-import org.hamcrest.Matchers.is;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.greaterThan;
+import static org.hamcrest.Matchers.is;
 
 /**
  * End-to-end WebP file-I/O round trips through {@link ImageFactory}. Complements
