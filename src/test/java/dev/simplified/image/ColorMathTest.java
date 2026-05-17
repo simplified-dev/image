@@ -98,4 +98,52 @@ class ColorMathTest {
         assertThat(ColorMath.blue(tinted.getPixel(0, 0)), equalTo(0x00));
     }
 
+    @Test
+    @DisplayName("blend MULTIPLY rounds half-up to match OpenGL normalized fixed-point")
+    void blendMultiplyRoundsHalfUp() {
+        // 200 * 200 / 255 = 156.862... Truncation gives 156, round-half-up gives 157.
+        // Vanilla GLSL writes a normalized-fixed-point byte via floor(v * 255 + 0.5), so the
+        // correct value is 157. Pinning this catches regression to integer truncation.
+        int blended = ColorMath.blend(0xFFC8C8C8, 0xFFC8C8C8, BlendMode.MULTIPLY);
+        assertThat(ColorMath.red(blended), equalTo(157));
+        assertThat(ColorMath.green(blended), equalTo(157));
+        assertThat(ColorMath.blue(blended), equalTo(157));
+    }
+
+    @Test
+    @DisplayName("blend OVERLAY rounds half-up in both dark/light branches")
+    void blendOverlayRoundsHalfUp() {
+        // dark branch d < 128: 2 * 100 * 100 / 255 = 78.43... -> 78
+        // light branch d >= 128: 255 - (2 * 100 * 100 / 255) where the inner uses (255-s)(255-d)
+        //   for s=d=156: 255 - (2 * 99 * 99 / 255) = 255 - 19602/255 = 255 - 76.87... = 255 - 77 = 178
+        int darkBranch = ColorMath.blend(0xFF646464, 0xFF646464, BlendMode.OVERLAY);
+        assertThat(ColorMath.red(darkBranch), equalTo(78));
+
+        int lightBranch = ColorMath.blend(0xFF9C9C9C, 0xFF9C9C9C, BlendMode.OVERLAY);
+        assertThat(ColorMath.red(lightBranch), equalTo(178));
+    }
+
+    @Test
+    @DisplayName("tint SIMD prefix and scalar tail produce bit-identical per-pixel output")
+    void tintSimdScalarParity() {
+        // SPECIES_PREFERRED is typically 4-8 int lanes. A 1-pixel buffer exercises only the
+        // scalar fallback (loopBound(1) = 0). A 64-pixel buffer exercises the SIMD prefix for
+        // most/all pixels. Both should produce identical per-pixel output - this catches drift
+        // between scalar and SIMD rounding conventions.
+        int sourcePixel = 0xC0C8C8C8; // alpha=192, RGB=200; mid-range to expose rounding
+        int tint = 0xFFC8C8C8;        // tint=200 per channel
+
+        PixelBuffer scalarOnly = PixelBuffer.of(new int[]{ sourcePixel }, 1, 1);
+        PixelBuffer scalarTinted = ColorMath.tint(scalarOnly, tint);
+        int scalarResult = scalarTinted.getPixel(0, 0);
+
+        int[] bulk = new int[64];
+        java.util.Arrays.fill(bulk, sourcePixel);
+        PixelBuffer simdInput = PixelBuffer.of(bulk, 64, 1);
+        PixelBuffer simdTinted = ColorMath.tint(simdInput, tint);
+        for (int i = 0; i < 64; i++)
+            assertThat("pixel " + i + " (SIMD lane vs scalar)",
+                simdTinted.getPixel(i, 0), equalTo(scalarResult));
+    }
+
 }

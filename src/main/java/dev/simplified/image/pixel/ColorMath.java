@@ -221,9 +221,9 @@ public class ColorMath {
         int sa = alpha(src);
         if (sa == 0) return dst;
 
-        int r = (red(src) * red(dst)) / 255;
-        int g = (green(src) * green(dst)) / 255;
-        int b = (blue(src) * blue(dst)) / 255;
+        int r = div255(red(src) * red(dst));
+        int g = div255(green(src) * green(dst));
+        int b = div255(blue(src) * blue(dst));
         return pack(alpha(dst), r, g, b);
     }
 
@@ -255,8 +255,22 @@ public class ColorMath {
 
     private static int overlayChannel(int s, int d) {
         return d < 128
-            ? (2 * s * d) / 255
-            : 255 - (2 * (255 - s) * (255 - d)) / 255;
+            ? div255(2 * s * d)
+            : 255 - div255(2 * (255 - s) * (255 - d));
+    }
+
+    /**
+     * Divides a non-negative product of two 8-bit channels by 255 with round-half-up semantics,
+     * matching the OpenGL normalized fixed-point conversion {@code floor(v * 255 + 0.5)}. Plain
+     * integer division biases every shaded channel ~0.5 LSB low; this trick adds 127 before the
+     * divide to round-half-up instead.
+     *
+     * @param product the channel product in {@code [0, 65025]} (or {@code [0, 130050]} for the
+     *                doubled-product variant in {@link #overlayChannel}, which still fits in int)
+     * @return the round-half-up quotient
+     */
+    private static int div255(int product) {
+        return (product + 127) / 255;
     }
 
 }

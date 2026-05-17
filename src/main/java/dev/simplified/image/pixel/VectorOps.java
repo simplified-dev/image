@@ -38,7 +38,10 @@ final class VectorOps {
             FloatVector luma = ((FloatVector) r.convert(I2F, 0)).mul(0.299f)
                 .add(((FloatVector) g.convert(I2F, 0)).mul(0.587f))
                 .add(((FloatVector) b.convert(I2F, 0)).mul(0.114f));
-            IntVector y = ((IntVector) luma.convert(F2I, 0)).max(0).min(255);
+            // +0.5f before F2I gives round-half-up, matching scalar Math.round and the OpenGL
+            // normalized fixed-point conversion. Adding before clamp is safe because luma is
+            // non-negative.
+            IntVector y = ((IntVector) luma.add(0.5f).convert(F2I, 0)).max(0).min(255);
             a.lanewise(LSHL, 24)
                 .lanewise(OR, y.lanewise(LSHL, 16))
                 .lanewise(OR, y.lanewise(LSHL, 8))
@@ -69,9 +72,10 @@ final class VectorOps {
             int at = off + i;
             IntVector v = IntVector.fromArray(I, p, at);
             IntVector a = v.lanewise(LSHR, 24).lanewise(AND, 0xFF);
-            IntVector r = v.lanewise(LSHR, 16).lanewise(AND, 0xFF).mul(a).lanewise(DIV, 255);
-            IntVector g = v.lanewise(LSHR, 8).lanewise(AND, 0xFF).mul(a).lanewise(DIV, 255);
-            IntVector b = v.lanewise(AND, 0xFF).mul(a).lanewise(DIV, 255);
+            // +127 before integer DIV 255 rounds half-up, matching ColorMath/PixelVector div255.
+            IntVector r = v.lanewise(LSHR, 16).lanewise(AND, 0xFF).mul(a).add(127).lanewise(DIV, 255);
+            IntVector g = v.lanewise(LSHR, 8).lanewise(AND, 0xFF).mul(a).add(127).lanewise(DIV, 255);
+            IntVector b = v.lanewise(AND, 0xFF).mul(a).add(127).lanewise(DIV, 255);
             a.lanewise(LSHL, 24)
                 .lanewise(OR, r.lanewise(LSHL, 16))
                 .lanewise(OR, g.lanewise(LSHL, 8))
@@ -87,9 +91,10 @@ final class VectorOps {
             int at = off + i;
             IntVector v = IntVector.fromArray(I, src, at);
             IntVector a = v.lanewise(LSHR, 24).lanewise(AND, 0xFF);
-            IntVector r = v.lanewise(LSHR, 16).lanewise(AND, 0xFF).mul(tr).lanewise(DIV, 255);
-            IntVector g = v.lanewise(LSHR, 8).lanewise(AND, 0xFF).mul(tg).lanewise(DIV, 255);
-            IntVector b = v.lanewise(AND, 0xFF).mul(tb).lanewise(DIV, 255);
+            // +127 before integer DIV 255 rounds half-up, matching ColorMath/PixelVector div255.
+            IntVector r = v.lanewise(LSHR, 16).lanewise(AND, 0xFF).mul(tr).add(127).lanewise(DIV, 255);
+            IntVector g = v.lanewise(LSHR, 8).lanewise(AND, 0xFF).mul(tg).add(127).lanewise(DIV, 255);
+            IntVector b = v.lanewise(AND, 0xFF).mul(tb).add(127).lanewise(DIV, 255);
             IntVector out = a.lanewise(LSHL, 24)
                 .lanewise(OR, r.lanewise(LSHL, 16))
                 .lanewise(OR, g.lanewise(LSHL, 8))
@@ -124,6 +129,7 @@ final class VectorOps {
         IntVector dc = d.lanewise(LSHR, shift).lanewise(AND, 0xFF);
         FloatVector f = ((FloatVector) sc.convert(I2F, 0)).mul(inverse)
             .add(((FloatVector) dc.convert(I2F, 0)).mul(blend));
-        return (IntVector) f.max(0f).min(255f).convert(F2I, 0);
+        // +0.5f before F2I rounds half-up, matching scalar Math.round in PixelVector#clampByte.
+        return (IntVector) f.max(0f).min(255f).add(0.5f).convert(F2I, 0);
     }
 }
