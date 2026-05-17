@@ -31,7 +31,7 @@ final class PixelVector {
         for (int i = off + start; i < end; i++) {
             int px = p[i];
             int a = (px >>> 24) & 0xFF;
-            int y = Math.clamp((int) ColorMath.luma(px | 0xFF000000), 0, 255);
+            int y = Math.clamp(Math.round(ColorMath.luma(px | 0xFF000000)), 0, 255);
             p[i] = (a << 24) | (y << 16) | (y << 8) | y;
         }
     }
@@ -58,9 +58,9 @@ final class PixelVector {
                 p[i] = 0;
                 continue;
             }
-            int r = (((px >>> 16) & 0xFF) * a) / 255;
-            int g = (((px >>> 8) & 0xFF) * a) / 255;
-            int b = ((px & 0xFF) * a) / 255;
+            int r = div255(((px >>> 16) & 0xFF) * a);
+            int g = div255(((px >>> 8) & 0xFF) * a);
+            int b = div255((px & 0xFF) * a);
             p[i] = (a << 24) | (r << 16) | (g << 8) | b;
         }
     }
@@ -75,9 +75,9 @@ final class PixelVector {
                 dst[i] = pixel;
                 continue;
             }
-            int r = (((pixel >>> 16) & 0xFF) * tr) / 255;
-            int g = (((pixel >>> 8) & 0xFF) * tg) / 255;
-            int b = ((pixel & 0xFF) * tb) / 255;
+            int r = div255(((pixel >>> 16) & 0xFF) * tr);
+            int g = div255(((pixel >>> 8) & 0xFF) * tg);
+            int b = div255((pixel & 0xFF) * tb);
             dst[i] = (a << 24) | (r << 16) | (g << 8) | b;
         }
     }
@@ -97,6 +97,18 @@ final class PixelVector {
     }
 
     private static int clampByte(float value) {
-        return (int) Math.clamp(value, 0f, 255f);
+        return Math.round(Math.clamp(value, 0f, 255f));
+    }
+
+    /**
+     * Divides a non-negative product of two 8-bit channels by 255 with round-half-up semantics,
+     * matching the OpenGL normalized fixed-point conversion {@code floor(v * 255 + 0.5)}. Mirrors
+     * {@code ColorMath#div255} so scalar and SIMD compose paths stay bit-identical.
+     *
+     * @param product the channel product in {@code [0, 65025]}
+     * @return the round-half-up quotient
+     */
+    private static int div255(int product) {
+        return (product + 127) / 255;
     }
 }
