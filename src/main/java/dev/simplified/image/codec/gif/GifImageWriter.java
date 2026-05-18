@@ -6,7 +6,7 @@ import dev.simplified.image.codec.ImageWriteOptions;
 import dev.simplified.image.codec.ImageWriter;
 import dev.simplified.image.data.AnimatedImageData;
 import dev.simplified.image.data.ImageFrame;
-import dev.simplified.stream.ByteArrayDataOutput;
+import dev.simplified.util.io.ByteArrayDataOutput;
 import lombok.Cleanup;
 import lombok.SneakyThrows;
 import org.jetbrains.annotations.NotNull;

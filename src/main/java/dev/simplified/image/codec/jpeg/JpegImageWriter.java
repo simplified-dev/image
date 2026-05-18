@@ -5,7 +5,7 @@ import dev.simplified.image.ImageFormat;
 import dev.simplified.image.pixel.PixelBuffer;
 import dev.simplified.image.codec.ImageWriteOptions;
 import dev.simplified.image.codec.ImageWriter;
-import dev.simplified.stream.ByteArrayDataOutput;
+import dev.simplified.util.io.ByteArrayDataOutput;
 import lombok.Cleanup;
 import lombok.SneakyThrows;
 import org.jetbrains.annotations.NotNull;
