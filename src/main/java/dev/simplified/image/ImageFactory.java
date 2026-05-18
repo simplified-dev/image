@@ -34,7 +34,7 @@ import dev.simplified.image.codec.webp.WebPImageWriter;
 import dev.simplified.image.exception.ImageDecodeException;
 import dev.simplified.image.exception.ImageException;
 import dev.simplified.image.exception.UnsupportedFormatException;
-import dev.simplified.stream.ByteArrayDataOutput;
+import dev.simplified.util.io.ByteArrayDataOutput;
 import dev.simplified.util.StringUtil;
 import dev.simplified.util.SystemUtil;
 import lombok.Getter;
