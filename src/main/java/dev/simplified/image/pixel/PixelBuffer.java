@@ -680,6 +680,29 @@ public class PixelBuffer {
         blit(ColorMath.tint(source, argbTint), dx, dy, mode);
     }
 
+    // --- diff ---
+
+    /**
+     * Computes a per-pixel difference visualisation against another buffer.
+     * <p>
+     * Delegates to {@link PixelDiff#of(PixelBuffer, PixelBuffer, DiffType)}. The receiver is the
+     * {@code a} (left-side / reference) argument and {@code other} is the {@code b} (right-side /
+     * candidate) argument - see {@link DiffType} for per-mode pixel semantics and the meaning of
+     * the directional shifts.
+     * <p>
+     * The result is sized to the intersection of the two buffers
+     * ({@code min(this.width, other.width) × min(this.height, other.height)}). Out-of-canvas
+     * pixels (both inputs fully transparent) are written as {@link ColorMath#TRANSPARENT} so the
+     * caller can composite the diff over its own background.
+     *
+     * @param other the buffer to diff against; receiver is the left-side argument
+     * @param type the diff visualisation mode
+     * @return a new buffer carrying the requested diff
+     */
+    public @NotNull PixelBuffer diff(@NotNull PixelBuffer other, @NotNull DiffType type) {
+        return PixelDiff.of(this, other, type);
+    }
+
     /**
      * Creates a new pixel buffer by linearly interpolating between two buffers per pixel.
      * <p>
