@@ -29,6 +29,19 @@ public enum BlendMode {
     /**
      * Photoshop-style overlay: {@code dst < 128 ? 2*src*dst/255 : 255 - 2*(255-src)*(255-dst)/255}.
      */
-    OVERLAY
+    OVERLAY,
+
+    /**
+     * Quadratic additive blend: the source is squared (in normalized space) before adding the
+     * destination. The result equals {@code min(255, src * src / 255 + dst)} per channel, with the
+     * destination alpha preserved ({@code out.a = dst.a}); a fully transparent source is a no-op.
+     * Squaring biases dark sources toward black and only lets bright sources contribute strongly, a
+     * softer, more selective add than {@link #ADD}.
+     * <p>
+     * Equivalent to the GPU blend with source factor {@code SRC_COLOR} and destination factor
+     * {@code ONE} ({@code out = src * src_color + dst}). Any per-source intensity scaling should be
+     * pre-multiplied into the source RGB by the caller, since the square applies to the source as-is.
+     */
+    QUADRATIC_ADD
 
 }

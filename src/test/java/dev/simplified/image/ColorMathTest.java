@@ -124,6 +124,34 @@ class ColorMathTest {
     }
 
     @Test
+    @DisplayName("blend QUADRATIC_ADD squares the source (round-half-up) and adds the destination")
+    void blendQuadraticAddSquaresAndAdds() {
+        // out = min(255, src*src/255 + dst). src=200: 200*200/255 = 156.86 -> 157; + dst 32 = 189.
+        int blended = ColorMath.blend(0xFFC8C8C8, 0xFF202020, BlendMode.QUADRATIC_ADD);
+        assertThat(ColorMath.red(blended), equalTo(189));
+        assertThat(ColorMath.green(blended), equalTo(189));
+        assertThat(ColorMath.blue(blended), equalTo(189));
+    }
+
+    @Test
+    @DisplayName("blend QUADRATIC_ADD saturates at 0xFF and preserves the destination alpha")
+    void blendQuadraticAddSaturatesAndKeepsDestinationAlpha() {
+        // src=255: 255*255/255 = 255; + dst 64 -> clamp 255. Alpha must come from dst, not src.
+        int blended = ColorMath.blend(0xFFFFFFFF, 0x80404040, BlendMode.QUADRATIC_ADD);
+        assertThat(ColorMath.alpha(blended), equalTo(0x80));
+        assertThat(ColorMath.red(blended), equalTo(0xFF));
+        assertThat(ColorMath.green(blended), equalTo(0xFF));
+        assertThat(ColorMath.blue(blended), equalTo(0xFF));
+    }
+
+    @Test
+    @DisplayName("blend QUADRATIC_ADD with a fully transparent source is a no-op")
+    void blendQuadraticAddTransparentSourceNoOp() {
+        int dst = 0xFF123456;
+        assertThat(ColorMath.blend(0x00FFFFFF, dst, BlendMode.QUADRATIC_ADD), equalTo(dst));
+    }
+
+    @Test
     @DisplayName("tint SIMD prefix and scalar tail produce bit-identical per-pixel output")
     void tintSimdScalarParity() {
         // SPECIES_PREFERRED is typically 4-8 int lanes. A 1-pixel buffer exercises only the
