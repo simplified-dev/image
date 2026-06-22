@@ -159,6 +159,7 @@ public class ColorMath {
             case ADD -> blendAdd(src, dst);
             case MULTIPLY -> blendMultiply(src, dst);
             case OVERLAY -> blendOverlay(src, dst);
+            case QUADRATIC_ADD -> blendQuadraticAdd(src, dst);
         };
     }
 
@@ -257,6 +258,15 @@ public class ColorMath {
         return d < 128
             ? div255(2 * s * d)
             : 255 - div255(2 * (255 - s) * (255 - d));
+    }
+
+    private static int blendQuadraticAdd(int src, int dst) {
+        if (alpha(src) == 0) return dst;
+
+        int r = Math.min(255, div255(red(src) * red(src)) + red(dst));
+        int g = Math.min(255, div255(green(src) * green(src)) + green(dst));
+        int b = Math.min(255, div255(blue(src) * blue(src)) + blue(dst));
+        return pack(alpha(dst), r, g, b);
     }
 
     /**
