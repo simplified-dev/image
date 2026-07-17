@@ -100,6 +100,7 @@ public final class PixelBufferPool {
      */
     static void release(@NotNull PixelBuffer buffer, long key) {
         buffer.fill(0);
+        buffer.clearMask();
         Map<Long, Deque<SoftReference<PixelBuffer>>> local = LOCAL_POOL.get();
         Deque<SoftReference<PixelBuffer>> deque = local.computeIfAbsent(key, k -> new ArrayDeque<>(MAX_PER_SIZE_CLASS));
         if (deque.size() < MAX_PER_SIZE_CLASS)

@@ -16,6 +16,7 @@ import java.awt.image.ImageObserver;
 import java.awt.image.Raster;
 import java.awt.image.SinglePixelPackedSampleModel;
 import java.util.Arrays;
+import java.util.Optional;
 import java.util.function.IntConsumer;
 import java.util.stream.IntStream;
 
@@ -46,10 +47,25 @@ public class PixelBuffer {
      */
     private static final int MIN_PARALLEL_ROWS = 64;
 
+    /** Packed ARGB pixel data in row-major order, of length {@code width * height}. */
     private final int @NotNull [] data;
+
+    /** Buffer width in pixels. */
     private final int width;
+
+    /** Buffer height in pixels. */
     private final int height;
+
+    /** Whether the alpha channel carries meaningful data. */
     private final boolean hasAlpha;
+
+    /**
+     * Optional per-pixel coverage mask owned by this buffer - auxiliary render metadata, excluded from
+     * value identity ({@link #equals}/{@link #hashCode}) and never carried by {@link #copy()}. Absent
+     * ({@link Optional#empty()}) means no mask; present but unmarked and present-with-marks are
+     * distinct states the consumer reads through {@link #mask()}.
+     */
+    private @NotNull Optional<PixelMask> mask = Optional.empty();
 
     private PixelBuffer(int @NotNull [] data, int width, int height, boolean hasAlpha) {
         if (data.length != width * height)
@@ -843,6 +859,39 @@ public class PixelBuffer {
             false,
             null
         );
+    }
+
+    // --- mask ---
+
+    /**
+     * Enables an empty coverage mask sized to this buffer, replacing any existing mask.
+     *
+     * @return this buffer
+     */
+    public @NotNull PixelBuffer enableMask() {
+        this.mask = Optional.of(new PixelMask(this.width, this.height));
+        return this;
+    }
+
+    /**
+     * Attaches the given coverage mask to this buffer, replacing any existing mask.
+     *
+     * @param mask the mask to attach
+     * @return this buffer
+     */
+    public @NotNull PixelBuffer attachMask(@NotNull PixelMask mask) {
+        this.mask = Optional.of(mask);
+        return this;
+    }
+
+    /**
+     * Clears this buffer's coverage mask, restoring the unmasked state.
+     *
+     * @return this buffer
+     */
+    public @NotNull PixelBuffer clearMask() {
+        this.mask = Optional.empty();
+        return this;
     }
 
     // --- value semantics ---
