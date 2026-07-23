@@ -1,5 +1,6 @@
 package dev.simplified.image.codec.gif;
 
+import dev.simplified.collection.ConcurrentList;
 import dev.simplified.image.ImageData;
 import dev.simplified.image.ImageFormat;
 import dev.simplified.image.codec.ImageWriteOptions;
@@ -53,6 +54,7 @@ public class GifImageWriter implements ImageWriter {
         int transparentColorIndex = 0;
         int backgroundRgb = 0x000000;
         int alphaThreshold = 128;
+        DelayFidelity delayFidelity = DelayFidelity.PLAYABLE;
 
         if (options instanceof GifWriteOptions gifOptions) {
             loopCount = gifOptions.loopCount();
@@ -60,9 +62,12 @@ public class GifImageWriter implements ImageWriter {
             transparentColorIndex = gifOptions.transparentColorIndex();
             backgroundRgb = gifOptions.backgroundRgb();
             alphaThreshold = gifOptions.alphaThreshold();
+            delayFidelity = gifOptions.delayFidelity();
         } else if (data instanceof AnimatedImageData animated) {
             loopCount = animated.getLoopCount();
         }
+
+        int[] delaysCs = quantizeDelays(data.getFrames(), delayFidelity);
 
         // Flatten every source frame onto a solid background color up-front. GIF supports
         // only 1-bit transparency, so passing partial-alpha pixels to the indexed writer
@@ -98,7 +103,7 @@ public class GifImageWriter implements ImageWriter {
 
             for (ImageFrame frame : data.getFrames()) {
                 IIOMetadata metadata = writer.getDefaultImageMetadata(specifier, param);
-                configureFrameMetadata(metadata, frame, transparent, transparentColorIndex);
+                configureFrameMetadata(metadata, frame, delaysCs[frameIdx], transparent, transparentColorIndex);
 
                 if (firstFrame) {
                     configureLoopMetadata(metadata, loopCount);
@@ -117,7 +122,7 @@ public class GifImageWriter implements ImageWriter {
         } else {
             ImageFrame frame = data.getFrames().getFirst();
             IIOMetadata metadata = writer.getDefaultImageMetadata(specifier, param);
-            configureFrameMetadata(metadata, frame, transparent, transparentColorIndex);
+            configureFrameMetadata(metadata, frame, delaysCs[0], transparent, transparentColorIndex);
             BufferedImage indexedFrame = buildIndexedFrame(
                 flattenedPixels, 0, frame.pixels().width(), frame.pixels().height(),
                 palette, transparent, transparentColorIndex);
@@ -475,10 +480,48 @@ public class GifImageWriter implements ImageWriter {
         return indexed;
     }
 
+    /**
+     * Quantizes the cumulative frame timeline onto GIF's centisecond grid and returns the delay to
+     * declare for each frame.
+     * <p>
+     * Rounding each delay on its own lets the error accumulate without bound - a 60-frame strip at
+     * 33 ms truncates to 1800 cs against 1980 ms of intent, and the gap widens with every frame
+     * added. Rounding the running total instead and emitting the differences makes the error
+     * telescope: the declared total comes out as the rounded true total whatever the frame count,
+     * so individual frames land on the grid but the timeline never drifts.
+     * <p>
+     * {@code fidelity} sets the smallest delay that may be declared. A frame whose share rounds
+     * below it is raised, and the surplus is charged against the following frames' allowance so
+     * the inflation cannot compound.
+     *
+     * @param frames the frames to quantize, in playback order
+     * @param fidelity the smallest declarable delay
+     * @return the per-frame delays in centiseconds, parallel to {@code frames}
+     */
+    private static int @NotNull [] quantizeDelays(
+        @NotNull ConcurrentList<ImageFrame> frames,
+        @NotNull DelayFidelity fidelity
+    ) {
+        int[] delaysCs = new int[frames.size()];
+        long elapsedMs = 0L;
+        long emittedCs = 0L;
+
+        for (int index = 0; index < frames.size(); index++) {
+            elapsedMs += frames.get(index).delayMs();
+            long boundaryCs = Math.round(elapsedMs / 10.0d);
+            long delayCs = Math.max(fidelity.getMinimumDelayCs(), boundaryCs - emittedCs);
+            emittedCs += delayCs;
+            delaysCs[index] = (int) delayCs;
+        }
+
+        return delaysCs;
+    }
+
     @SneakyThrows
     private static void configureFrameMetadata(
         @NotNull IIOMetadata metadata,
         @NotNull ImageFrame frame,
+        int delayCs,
         boolean transparent,
         int transparentColorIndex
     ) {
@@ -489,7 +532,7 @@ public class GifImageWriter implements ImageWriter {
         gce.setAttribute("disposalMethod", frame.disposal().getMethod());
         gce.setAttribute("userInputFlag", "FALSE");
         gce.setAttribute("transparentColorFlag", String.valueOf(transparent));
-        gce.setAttribute("delayTime", Integer.toString(Math.max(1, frame.delayMs() / 10)));
+        gce.setAttribute("delayTime", Integer.toString(delayCs));
         gce.setAttribute("transparentColorIndex", Integer.toString(transparentColorIndex));
 
         metadata.setFromTree(formatName, root);

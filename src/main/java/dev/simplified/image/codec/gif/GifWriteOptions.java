@@ -19,13 +19,17 @@ import java.awt.Graphics2D;
  * @param alphaThreshold pixels with alpha strictly below this value ({@code 0}-{@code 255})
  *     are treated as fully transparent; pixels at or above are flattened onto
  *     {@code backgroundRgb}. Default {@code 128}.
+ * @param delayFidelity how frame delays finer than GIF's centisecond grid are resolved, trading
+ *     an exact declared total against a delay every player honors. Default
+ *     {@link DelayFidelity#PLAYABLE}.
  */
 public record GifWriteOptions(
     int loopCount,
     boolean transparent,
     int transparentColorIndex,
     int backgroundRgb,
-    int alphaThreshold
+    int alphaThreshold,
+    @NotNull DelayFidelity delayFidelity
 ) implements ImageWriteOptions {
 
     /**
@@ -47,6 +51,7 @@ public record GifWriteOptions(
         private int transparentColorIndex = 0;
         private int backgroundRgb = 0x000000;
         private int alphaThreshold = 128;
+        private DelayFidelity delayFidelity = DelayFidelity.PLAYABLE;
 
         /**
          * Sets the animation loop count.
@@ -116,13 +121,26 @@ public record GifWriteOptions(
             return this;
         }
 
+        /**
+         * Sets how delays finer than GIF's centisecond grid are resolved.
+         *
+         * @param delayFidelity the fidelity to encode with; defaults to
+         *     {@link DelayFidelity#PLAYABLE}
+         * @return this builder for chaining
+         */
+        public @NotNull Builder withDelayFidelity(@NotNull DelayFidelity delayFidelity) {
+            this.delayFidelity = delayFidelity;
+            return this;
+        }
+
         public @NotNull GifWriteOptions build() {
             return new GifWriteOptions(
                 this.loopCount,
                 this.transparent,
                 this.transparentColorIndex,
                 this.backgroundRgb,
-                this.alphaThreshold
+                this.alphaThreshold,
+                this.delayFidelity
             );
         }
 

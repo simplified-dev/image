@@ -17,8 +17,6 @@ import org.jetbrains.annotations.NotNull;
 @RequiredArgsConstructor(access = AccessLevel.PRIVATE)
 public class AnimatedImageData implements ImageData {
 
-    private static final int MIN_FRAME_DURATION_MS = 50;
-
     private final int width;
     private final int height;
     @Accessors(fluent = true)
@@ -26,6 +24,10 @@ public class AnimatedImageData implements ImageData {
     private final @NotNull ConcurrentList<ImageFrame> frames;
     private final int loopCount;
     private final int backgroundColor;
+    /**
+     * the summed declared delay of every frame - the timing the animation itself describes, not an
+     * estimate of what any particular player would show
+     */
     private final int totalDurationMs;
 
     @Override
@@ -39,6 +41,11 @@ public class AnimatedImageData implements ImageData {
      * When interpolation is enabled and the elapsed time falls between two keyframes,
      * the returned frame is a per-pixel blend of the adjacent keyframes using
      * {@link PixelBuffer#lerp(PixelBuffer, PixelBuffer, float)}.
+     * <p>
+     * Each frame occupies its own declared delay, so the timeline walked here is the one the
+     * frames describe. Frames with a zero delay occupy no time and are skipped rather than
+     * silently never matching; an animation made entirely of them has no timeline to walk at all,
+     * and the first frame is returned for every query.
      *
      * @param elapsedMs the elapsed time since animation start in milliseconds
      * @param interpolate whether to blend between keyframes
@@ -48,6 +55,7 @@ public class AnimatedImageData implements ImageData {
         if (this.frames.isEmpty())
             throw new IllegalStateException("Animation does not contain frames");
 
+        // Also guards the modulo below, which is the only division by this value.
         if (this.totalDurationMs <= 0)
             return new FrameAtTimeResult(this.frames.getFirst(), false);
 
@@ -56,7 +64,9 @@ public class AnimatedImageData implements ImageData {
 
         for (int index = 0; index < this.frames.size(); index++) {
             ImageFrame frame = this.frames.get(index);
-            int duration = Math.max(frame.delayMs(), MIN_FRAME_DURATION_MS);
+            int duration = frame.delayMs();
+            if (duration <= 0) continue;
+
             int nextAccumulated = accumulated + duration;
 
             if (normalized < nextAccumulated) {
@@ -187,7 +197,7 @@ public class AnimatedImageData implements ImageData {
             int h = this.height > 0 ? this.height : first.pixels().height();
             boolean alpha = first.pixels().hasAlpha();
             int totalDuration = this.frames.stream()
-                .mapToInt(frame -> Math.max(frame.delayMs(), MIN_FRAME_DURATION_MS))
+                .mapToInt(ImageFrame::delayMs)
                 .sum();
 
             return new AnimatedImageData(w, h, alpha, this.frames, this.loopCount, this.backgroundColor, totalDuration);

@@ -2,17 +2,17 @@ package dev.simplified.image.codec.gif;
 
 import dev.simplified.collection.Concurrent;
 import dev.simplified.collection.ConcurrentList;
-import dev.simplified.image.data.AnimatedImageData;
 import dev.simplified.image.ImageData;
 import dev.simplified.image.ImageFormat;
-import dev.simplified.image.data.ImageFrame;
-import dev.simplified.image.data.FrameBlend;
-import dev.simplified.image.data.FrameDisposal;
-import dev.simplified.image.pixel.PixelBuffer;
-import dev.simplified.image.data.StaticImageData;
 import dev.simplified.image.codec.ImageReadOptions;
 import dev.simplified.image.codec.ImageReader;
+import dev.simplified.image.data.AnimatedImageData;
+import dev.simplified.image.data.FrameBlend;
+import dev.simplified.image.data.FrameDisposal;
+import dev.simplified.image.data.ImageFrame;
+import dev.simplified.image.data.StaticImageData;
 import dev.simplified.image.exception.ImageDecodeException;
+import dev.simplified.image.pixel.PixelBuffer;
 import dev.simplified.util.StringUtil;
 import lombok.Cleanup;
 import lombok.SneakyThrows;
@@ -73,8 +73,14 @@ public class GifImageReader implements ImageReader {
                 IIOMetadataNode gce = findNode(root, "GraphicControlExtension");
                 if (gce != null) {
                     String delayAttr = gce.getAttribute("delayTime");
-                    if (StringUtil.isNotEmpty(delayAttr))
-                        delayMs = Math.max(10, Integer.parseInt(delayAttr)) * 10;
+                    if (StringUtil.isNotEmpty(delayAttr)) {
+                        // A declared 0 means "unspecified", not "zero time" - it is the legacy
+                        // idiom for "as fast as you like", and every player substitutes its own
+                        // duration for it. Anything else is reported as declared, so a file's
+                        // own timing survives a decode.
+                        int declaredCs = Integer.parseInt(delayAttr);
+                        delayMs = declaredCs == 0 ? 100 : declaredCs * 10;
+                    }
 
                     String disposalAttr = gce.getAttribute("disposalMethod");
                     if (StringUtil.isNotEmpty(disposalAttr))
