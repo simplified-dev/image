@@ -156,6 +156,7 @@ public class ColorMath {
     public static int blend(int src, int dst, @NotNull BlendMode mode) {
         return switch (mode) {
             case NORMAL -> blendNormal(src, dst);
+            case REPLACE -> src;
             case ADD -> blendAdd(src, dst);
             case MULTIPLY -> blendMultiply(src, dst);
             case OVERLAY -> blendOverlay(src, dst);

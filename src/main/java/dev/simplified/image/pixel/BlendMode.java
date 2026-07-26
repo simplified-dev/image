@@ -15,6 +15,20 @@ public enum BlendMode {
     NORMAL,
 
     /**
+     * Porter-Duff <i>source</i>: the source replaces the destination verbatim, alpha included. The
+     * result equals {@code src}, and {@code dst} is not read.
+     * <p>
+     * This is the absence of a blend rather than another kind of one, which is what a GPU pipeline
+     * declaring no blend function does with each fragment that survives its depth and alpha tests.
+     * <p>
+     * It agrees with {@link #NORMAL} on every source whose alpha is {@code 0} or {@code 255} - at full
+     * alpha source-over returns the source unchanged, and a fully transparent source is normally
+     * discarded before it reaches a composite - so the two can differ only where the source carries
+     * partial alpha.
+     */
+    REPLACE,
+
+    /**
      * Additive blend, clamped to byte range. The result equals
      * {@code min(255, src + dst)} per channel.
      */

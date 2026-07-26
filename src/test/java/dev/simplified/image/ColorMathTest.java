@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.lessThanOrEqualTo;
+import static org.hamcrest.Matchers.not;
 
 class ColorMathTest {
 
@@ -64,6 +65,28 @@ class ColorMathTest {
         int src = 0x00FFFFFF;
         int dst = 0xFFABCDEF;
         assertThat(ColorMath.blend(src, dst, BlendMode.NORMAL), equalTo(dst));
+    }
+
+    @Test
+    @DisplayName("blend REPLACE returns src verbatim whatever its alpha")
+    void blendReplaceReturnsSource() {
+        int dst = 0xFFABCDEF;
+        assertThat(ColorMath.blend(0xFF123456, dst, BlendMode.REPLACE), equalTo(0xFF123456));
+        assertThat(ColorMath.blend(0x80123456, dst, BlendMode.REPLACE), equalTo(0x80123456));
+        assertThat(ColorMath.blend(0x00FFFFFF, dst, BlendMode.REPLACE), equalTo(0x00FFFFFF));
+    }
+
+    @Test
+    @DisplayName("blend REPLACE agrees with NORMAL at full alpha and differs at partial alpha")
+    void blendReplaceAgreesWithNormalAtFullAlpha() {
+        int dst = 0xFFABCDEF;
+        int opaque = 0xFF123456;
+        assertThat(ColorMath.blend(opaque, dst, BlendMode.REPLACE),
+            equalTo(ColorMath.blend(opaque, dst, BlendMode.NORMAL)));
+
+        int partial = 0x80123456;
+        assertThat(ColorMath.blend(partial, dst, BlendMode.REPLACE),
+            not(equalTo(ColorMath.blend(partial, dst, BlendMode.NORMAL))));
     }
 
     @Test
