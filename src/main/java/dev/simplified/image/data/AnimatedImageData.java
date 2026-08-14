@@ -1,13 +1,13 @@
 package dev.simplified.image.data;
 
+import dev.simplified.annotations.AccessLevel;
+import dev.simplified.annotations.Getter;
+import dev.simplified.annotations.NamingStyle;
+import dev.simplified.annotations.RequiredArgsConstructor;
 import dev.simplified.collection.Concurrent;
 import dev.simplified.collection.ConcurrentList;
 import dev.simplified.image.ImageData;
 import dev.simplified.image.pixel.PixelBuffer;
-import lombok.AccessLevel;
-import lombok.Getter;
-import lombok.RequiredArgsConstructor;
-import lombok.experimental.Accessors;
 import org.jetbrains.annotations.NotNull;
 
 /**
@@ -19,7 +19,7 @@ public class AnimatedImageData implements ImageData {
 
     private final int width;
     private final int height;
-    @Accessors(fluent = true)
+    @Getter(style = NamingStyle.FLUENT)
     private final boolean hasAlpha;
     private final @NotNull ConcurrentList<ImageFrame> frames;
     private final int loopCount;

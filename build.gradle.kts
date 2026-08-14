@@ -18,8 +18,8 @@ repositories {
 
 dependencies {
     // Simplified Libraries
-    api("com.github.simplified-dev:collections") { version { strictly("652c22d") } }
-    api("com.github.simplified-dev:utils") { version { strictly("7c2feb7") } }
+    api("com.github.simplified-dev:collections") { version { strictly("23f01b6") } }
+    api("com.github.simplified-dev:utils") { version { strictly("381e317") } }
 
     // JetBrains Annotations
     api(libs.annotations)
@@ -27,11 +27,12 @@ dependencies {
     // Logging
     api(libs.log4j2.api)
 
-    // Lombok Annotations
-    compileOnly(libs.lombok)
-    annotationProcessor(libs.lombok)
-    testCompileOnly(libs.lombok)
-    testAnnotationProcessor(libs.lombok)
+    // Simplified Annotations
+    // implementation rather than compileOnly: the @ClassBuilder-generated build() calls
+    // dev.simplified.classbuilder.validate.BuildFlagValidator, which has to be on the runtime path.
+    implementation(libs.simplified.annotations)
+    annotationProcessor(libs.simplified.annotations)
+    testAnnotationProcessor(libs.simplified.annotations)
 
     // Tests
     testImplementation(libs.hamcrest)

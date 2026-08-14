@@ -1,5 +1,7 @@
 package dev.simplified.image.codec.gif;
 
+import dev.simplified.annotations.Cleanup;
+import dev.simplified.annotations.SilentThrows;
 import dev.simplified.collection.Concurrent;
 import dev.simplified.collection.ConcurrentList;
 import dev.simplified.image.ImageData;
@@ -14,8 +16,6 @@ import dev.simplified.image.data.StaticImageData;
 import dev.simplified.image.exception.ImageDecodeException;
 import dev.simplified.image.pixel.PixelBuffer;
 import dev.simplified.util.StringUtil;
-import lombok.Cleanup;
-import lombok.SneakyThrows;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -42,7 +42,7 @@ public class GifImageReader implements ImageReader {
     }
 
     @Override
-    @SneakyThrows
+    @SilentThrows
     public @NotNull ImageData read(byte @NotNull [] data, @Nullable ImageReadOptions options) {
         @Cleanup ImageInputStream stream = ImageIO.createImageInputStream(new ByteArrayInputStream(data));
         javax.imageio.ImageReader reader = ImageIO.getImageReadersByFormatName("gif").next();

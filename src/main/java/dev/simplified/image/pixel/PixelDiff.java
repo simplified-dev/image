@@ -1,6 +1,6 @@
 package dev.simplified.image.pixel;
 
-import lombok.experimental.UtilityClass;
+import dev.simplified.annotations.UtilityClass;
 import org.jetbrains.annotations.NotNull;
 
 /**

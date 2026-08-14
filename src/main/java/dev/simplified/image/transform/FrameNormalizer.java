@@ -1,12 +1,11 @@
 package dev.simplified.image.transform;
 
+import dev.simplified.annotations.UtilityClass;
 import dev.simplified.collection.Concurrent;
 import dev.simplified.collection.ConcurrentList;
 import dev.simplified.image.data.AnimatedImageData;
 import dev.simplified.image.data.ImageFrame;
 import dev.simplified.image.pixel.PixelBuffer;
-import lombok.AccessLevel;
-import lombok.NoArgsConstructor;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -20,7 +19,7 @@ import java.awt.image.BufferedImage;
  * have identical dimensions. This utility resizes and positions frames onto a
  * common canvas with configurable fit strategies.
  */
-@NoArgsConstructor(access = AccessLevel.PRIVATE)
+@UtilityClass
 public final class FrameNormalizer {
 
     /**

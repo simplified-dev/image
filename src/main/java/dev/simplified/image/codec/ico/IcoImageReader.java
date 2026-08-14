@@ -1,5 +1,6 @@
 package dev.simplified.image.codec.ico;
 
+import dev.simplified.annotations.SilentThrows;
 import dev.simplified.image.ImageData;
 import dev.simplified.image.ImageFormat;
 import dev.simplified.image.codec.ImageReadOptions;
@@ -7,7 +8,6 @@ import dev.simplified.image.codec.ImageReader;
 import dev.simplified.image.data.StaticImageData;
 import dev.simplified.image.exception.ImageDecodeException;
 import dev.simplified.image.pixel.PixelBuffer;
-import lombok.SneakyThrows;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -37,7 +37,7 @@ public class IcoImageReader implements ImageReader {
     }
 
     @Override
-    @SneakyThrows
+    @SilentThrows
     public @NotNull ImageData read(byte @NotNull [] data, @Nullable ImageReadOptions options) {
         if (data.length < 6)
             throw new ImageDecodeException("ICO data too short: '%d' bytes", data.length);

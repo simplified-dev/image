@@ -1,8 +1,8 @@
 package dev.simplified.image.pixel;
 
-import lombok.AccessLevel;
-import lombok.AllArgsConstructor;
-import lombok.experimental.UtilityClass;
+import dev.simplified.annotations.AccessLevel;
+import dev.simplified.annotations.AllArgsConstructor;
+import dev.simplified.annotations.UtilityClass;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 

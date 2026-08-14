@@ -1,12 +1,12 @@
 package dev.simplified.image.codec.bmp;
 
+import dev.simplified.annotations.Cleanup;
+import dev.simplified.annotations.SilentThrows;
 import dev.simplified.image.ImageData;
 import dev.simplified.image.ImageFormat;
 import dev.simplified.image.codec.ImageWriteOptions;
 import dev.simplified.image.codec.ImageWriter;
 import dev.simplified.util.io.ByteArrayDataOutput;
-import lombok.Cleanup;
-import lombok.SneakyThrows;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -25,7 +25,7 @@ public class BmpImageWriter implements ImageWriter {
     }
 
     @Override
-    @SneakyThrows
+    @SilentThrows
     public byte @NotNull [] write(@NotNull ImageData data, @Nullable ImageWriteOptions options) {
         // BMP does not support alpha - always convert to RGB
         BufferedImage argb = data.toBufferedImage();

@@ -1,12 +1,10 @@
 package dev.simplified.image;
 
 
+import dev.simplified.annotations.Getter;
+import dev.simplified.annotations.SilentThrows;
 import dev.simplified.collection.Concurrent;
 import dev.simplified.collection.ConcurrentList;
-import dev.simplified.image.data.AnimatedImageData;
-import dev.simplified.image.data.ImageFrame;
-import dev.simplified.image.data.StaticImageData;
-import dev.simplified.image.pixel.PixelBuffer;
 import dev.simplified.image.codec.ImageReadOptions;
 import dev.simplified.image.codec.ImageReader;
 import dev.simplified.image.codec.ImageWriteOptions;
@@ -15,10 +13,10 @@ import dev.simplified.image.codec.bmp.BmpImageReader;
 import dev.simplified.image.codec.bmp.BmpImageWriter;
 import dev.simplified.image.codec.gif.GifImageReader;
 import dev.simplified.image.codec.gif.GifImageWriter;
-import dev.simplified.image.codec.jpeg.JpegImageReader;
-import dev.simplified.image.codec.jpeg.JpegImageWriter;
 import dev.simplified.image.codec.ico.IcoImageReader;
 import dev.simplified.image.codec.ico.IcoImageWriter;
+import dev.simplified.image.codec.jpeg.JpegImageReader;
+import dev.simplified.image.codec.jpeg.JpegImageWriter;
 import dev.simplified.image.codec.png.PngImageReader;
 import dev.simplified.image.codec.png.PngImageWriter;
 import dev.simplified.image.codec.pnm.PnmImageReader;
@@ -31,14 +29,16 @@ import dev.simplified.image.codec.tiff.TiffImageReader;
 import dev.simplified.image.codec.tiff.TiffImageWriter;
 import dev.simplified.image.codec.webp.WebPImageReader;
 import dev.simplified.image.codec.webp.WebPImageWriter;
+import dev.simplified.image.data.AnimatedImageData;
+import dev.simplified.image.data.ImageFrame;
+import dev.simplified.image.data.StaticImageData;
 import dev.simplified.image.exception.ImageDecodeException;
 import dev.simplified.image.exception.ImageException;
 import dev.simplified.image.exception.UnsupportedFormatException;
-import dev.simplified.util.io.ByteArrayDataOutput;
+import dev.simplified.image.pixel.PixelBuffer;
 import dev.simplified.util.StringUtil;
 import dev.simplified.util.SystemUtil;
-import lombok.Getter;
-import lombok.SneakyThrows;
+import dev.simplified.util.io.ByteArrayDataOutput;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -186,7 +186,7 @@ public class ImageFactory {
      * @return the decoded image data
      * @throws ImageException if reading or decoding fails
      */
-    @SneakyThrows
+    @SilentThrows
     public @NotNull ImageData fromFile(@NotNull File file) {
         return this.fromByteArray(Files.readAllBytes(file.toPath()));
     }
@@ -214,7 +214,7 @@ public class ImageFactory {
      * @return the decoded image data
      * @throws ImageException if reading or decoding fails
      */
-    @SneakyThrows
+    @SilentThrows
     public @NotNull ImageData fromStream(@NotNull InputStream inputStream) {
         ByteArrayDataOutput buffer = new ByteArrayDataOutput();
         inputStream.transferTo(buffer);
@@ -228,7 +228,7 @@ public class ImageFactory {
      * @return the decoded image data
      * @throws ImageException if reading or decoding fails
      */
-    @SneakyThrows
+    @SilentThrows
     public @NotNull ImageData fromUrl(@NotNull URL url) {
         try (InputStream stream = url.openStream()) {
             return this.fromStream(stream);
@@ -326,7 +326,7 @@ public class ImageFactory {
      * @param options format-specific write options, or null for defaults
      * @throws ImageException if encoding fails
      */
-    @SneakyThrows
+    @SilentThrows
     public void toFile(@NotNull ImageData data, @NotNull ImageFormat format, @NotNull File file, @Nullable ImageWriteOptions options) {
         Files.write(file.toPath(), this.toByteArray(data, format, options));
     }
@@ -339,7 +339,7 @@ public class ImageFactory {
      * @param outputStream the target output stream
      * @throws ImageException if encoding fails
      */
-    @SneakyThrows
+    @SilentThrows
     public void toStream(@NotNull ImageData data, @NotNull ImageFormat format, @NotNull OutputStream outputStream) {
         outputStream.write(this.toByteArray(data, format));
     }
@@ -363,7 +363,7 @@ public class ImageFactory {
      * @return a list of decoded image data in the same order as the input files
      * @throws ImageException if any file fails to decode
      */
-    @SneakyThrows
+    @SilentThrows
     public @NotNull ConcurrentList<ImageData> fromFiles(@NotNull ConcurrentList<File> files) {
         var futures = files.stream()
             .map(file -> CompletableFuture.supplyAsync(() -> this.fromFile(file), java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()))

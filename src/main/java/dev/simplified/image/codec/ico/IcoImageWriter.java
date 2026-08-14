@@ -1,5 +1,7 @@
 package dev.simplified.image.codec.ico;
 
+import dev.simplified.annotations.Cleanup;
+import dev.simplified.annotations.SilentThrows;
 import dev.simplified.image.ImageData;
 import dev.simplified.image.ImageFormat;
 import dev.simplified.image.codec.ImageWriteOptions;
@@ -8,8 +10,6 @@ import dev.simplified.image.codec.png.PngImageWriter;
 import dev.simplified.image.data.AnimatedImageData;
 import dev.simplified.image.data.StaticImageData;
 import dev.simplified.util.io.ByteArrayDataOutput;
-import lombok.Cleanup;
-import lombok.SneakyThrows;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -34,7 +34,7 @@ public class IcoImageWriter implements ImageWriter {
     }
 
     @Override
-    @SneakyThrows
+    @SilentThrows
     public byte @NotNull [] write(@NotNull ImageData data, @Nullable ImageWriteOptions options) {
         var frame = data.getFrames().getFirst();
         int width = frame.width();

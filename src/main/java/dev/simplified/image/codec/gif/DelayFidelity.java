@@ -1,7 +1,7 @@
 package dev.simplified.image.codec.gif;
 
-import lombok.Getter;
-import lombok.RequiredArgsConstructor;
+import dev.simplified.annotations.Getter;
+import dev.simplified.annotations.RequiredArgsConstructor;
 
 /**
  * How faithfully emitted frame delays follow the source timing when a schedule asks for finer
