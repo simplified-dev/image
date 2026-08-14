@@ -1,16 +1,16 @@
 package dev.simplified.image;
 
+import dev.simplified.annotations.EnumLookup;
+import dev.simplified.annotations.Getter;
+import dev.simplified.annotations.RequiredArgsConstructor;
 import dev.simplified.image.exception.UnsupportedFormatException;
-import lombok.Getter;
-import lombok.RequiredArgsConstructor;
 import org.jetbrains.annotations.NotNull;
-
-import java.util.Arrays;
 
 /**
  * Supported image formats with magic byte detection and animation capability metadata.
  */
 @Getter
+@EnumLookup
 @RequiredArgsConstructor
 public enum ImageFormat {
 
@@ -36,7 +36,7 @@ public enum ImageFormat {
      * @throws UnsupportedFormatException if no known format matches the data
      */
     public static @NotNull ImageFormat detect(byte @NotNull [] data) {
-        return Arrays.stream(values())
+        return stream()
             .filter(format -> format.matches(data))
             .findFirst()
             .orElseThrow(() -> new UnsupportedFormatException("Unable to detect image format from magic bytes"));

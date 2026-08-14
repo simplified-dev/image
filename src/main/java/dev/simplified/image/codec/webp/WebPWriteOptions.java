@@ -1,9 +1,9 @@
 package dev.simplified.image.codec.webp;
 
+import dev.simplified.annotations.AccessLevel;
+import dev.simplified.annotations.Getter;
+import dev.simplified.annotations.RequiredArgsConstructor;
 import dev.simplified.image.codec.ImageWriteOptions;
-import lombok.AccessLevel;
-import lombok.Getter;
-import lombok.RequiredArgsConstructor;
 import org.jetbrains.annotations.NotNull;
 
 /**

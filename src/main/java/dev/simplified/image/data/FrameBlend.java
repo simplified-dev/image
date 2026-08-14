@@ -1,13 +1,16 @@
 package dev.simplified.image.data;
 
-import lombok.Getter;
-import lombok.RequiredArgsConstructor;
+import dev.simplified.annotations.EnumLookup;
+import dev.simplified.annotations.Getter;
+import dev.simplified.annotations.KeyField;
+import dev.simplified.annotations.RequiredArgsConstructor;
 import org.jetbrains.annotations.NotNull;
 
 /**
  * How a frame is composited onto the canvas when rendered.
  */
 @Getter
+@EnumLookup
 @RequiredArgsConstructor
 public enum FrameBlend {
 
@@ -21,16 +24,7 @@ public enum FrameBlend {
      */
     OVER(1);
 
-    private static final @NotNull FrameBlend[] BY_VALUE;
-
-    static {
-        FrameBlend[] values = values();
-        int max = 0;
-        for (FrameBlend b : values) max = Math.max(max, b.value);
-        BY_VALUE = new FrameBlend[max + 1];
-        for (FrameBlend b : values) BY_VALUE[b.value] = b;
-    }
-
+    @KeyField(strictKeys = true)
     private final int value;
 
     /**
@@ -40,8 +34,7 @@ public enum FrameBlend {
      * @return the matching blend mode, or {@link #SOURCE} if unrecognized
      */
     public static @NotNull FrameBlend of(int value) {
-        if (value < 0 || value >= BY_VALUE.length) return SOURCE;
-        return BY_VALUE[value];
+        return findByValue(value).orElse(SOURCE);
     }
 
 }

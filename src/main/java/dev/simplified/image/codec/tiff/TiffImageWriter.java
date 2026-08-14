@@ -1,5 +1,7 @@
 package dev.simplified.image.codec.tiff;
 
+import dev.simplified.annotations.Cleanup;
+import dev.simplified.annotations.SilentThrows;
 import dev.simplified.image.ImageData;
 import dev.simplified.image.ImageFormat;
 import dev.simplified.image.codec.ImageWriteOptions;
@@ -9,16 +11,14 @@ import dev.simplified.image.data.ImageFrame;
 import dev.simplified.image.data.StaticImageData;
 import dev.simplified.image.exception.ImageEncodeException;
 import dev.simplified.util.io.ByteArrayDataOutput;
-import lombok.Cleanup;
-import lombok.SneakyThrows;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
-import java.awt.image.BufferedImage;
 import javax.imageio.IIOImage;
 import javax.imageio.ImageIO;
 import javax.imageio.ImageWriteParam;
 import javax.imageio.stream.ImageOutputStream;
+import java.awt.image.BufferedImage;
 
 /**
  * Writes TIFF images (single- and multi-page) via {@link ImageIO}'s baseline TIFF plugin.
@@ -36,7 +36,7 @@ public class TiffImageWriter implements ImageWriter {
     }
 
     @Override
-    @SneakyThrows
+    @SilentThrows
     public byte @NotNull [] write(@NotNull ImageData data, @Nullable ImageWriteOptions options) {
         TiffWriteOptions.Compression compression = TiffWriteOptions.Compression.DEFLATE;
 

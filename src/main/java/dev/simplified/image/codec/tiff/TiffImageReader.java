@@ -1,5 +1,7 @@
 package dev.simplified.image.codec.tiff;
 
+import dev.simplified.annotations.Cleanup;
+import dev.simplified.annotations.SilentThrows;
 import dev.simplified.collection.Concurrent;
 import dev.simplified.collection.ConcurrentList;
 import dev.simplified.image.ImageData;
@@ -13,8 +15,6 @@ import dev.simplified.image.data.ImageFrame;
 import dev.simplified.image.data.StaticImageData;
 import dev.simplified.image.exception.ImageDecodeException;
 import dev.simplified.image.pixel.PixelBuffer;
-import lombok.Cleanup;
-import lombok.SneakyThrows;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -45,7 +45,7 @@ public class TiffImageReader implements ImageReader {
     }
 
     @Override
-    @SneakyThrows
+    @SilentThrows
     public @NotNull ImageData read(byte @NotNull [] data, @Nullable ImageReadOptions options) {
         @Cleanup ImageInputStream stream = ImageIO.createImageInputStream(new ByteArrayInputStream(data));
         var readers = ImageIO.getImageReadersByFormatName("tiff");

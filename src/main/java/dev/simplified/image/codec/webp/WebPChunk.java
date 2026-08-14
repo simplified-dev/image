@@ -1,11 +1,11 @@
 package dev.simplified.image.codec.webp;
 
-import lombok.Getter;
-import lombok.RequiredArgsConstructor;
+import dev.simplified.annotations.EnumLookup;
+import dev.simplified.annotations.Getter;
+import dev.simplified.annotations.KeyField;
+import dev.simplified.annotations.RequiredArgsConstructor;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
-
-import java.util.Arrays;
 
 /**
  * A parsed RIFF chunk consisting of a type identifier and payload reference.
@@ -34,6 +34,7 @@ public record WebPChunk(@Nullable Type type,
      * WebP RIFF chunk types identified by their four-character code (FourCC).
      */
     @Getter
+    @EnumLookup
     @RequiredArgsConstructor
     public enum Type {
 
@@ -47,20 +48,8 @@ public record WebPChunk(@Nullable Type type,
         EXIF("EXIF"),
         XMP("XMP ");
 
+        @KeyField(strictKeys = true)
         private final @NotNull String fourCC;
-
-        /**
-         * Returns the chunk type matching the given FourCC string.
-         *
-         * @param fourCC the four-character code
-         * @return the matching chunk type, or {@code null} if unrecognized
-         */
-        public static @Nullable Type of(@NotNull String fourCC) {
-            return Arrays.stream(values())
-                .filter(type -> type.getFourCC().equals(fourCC))
-                .findFirst()
-                .orElse(null);
-        }
 
     }
 

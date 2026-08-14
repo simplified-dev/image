@@ -1,20 +1,21 @@
 package dev.simplified.image.codec.tiff;
 
+import dev.simplified.annotations.ClassBuilder;
+import dev.simplified.annotations.SetterNames;
 import dev.simplified.image.codec.ImageWriteOptions;
 import org.jetbrains.annotations.NotNull;
 
 /**
  * TIFF-specific encoding options selecting the compression scheme applied to each page.
+ *
+ * @param compression the compression scheme applied to each page, {@link Compression#DEFLATE} when
+ *     left unset
  */
+@ClassBuilder(setters = @SetterNames(set = "with{}"))
 public record TiffWriteOptions(@NotNull Compression compression) implements ImageWriteOptions {
 
-    /**
-     * Returns a new builder for TIFF write options.
-     *
-     * @return a new builder instance
-     */
-    public static @NotNull Builder builder() {
-        return new Builder();
+    public TiffWriteOptions {
+        if (compression == null) compression = Compression.DEFLATE;
     }
 
     /**
@@ -42,30 +43,6 @@ public record TiffWriteOptions(@NotNull Compression compression) implements Imag
          * Apple PackBits byte-level RLE. Weakest compression but universally supported.
          */
         PACKBITS
-
-    }
-
-    /**
-     * Builds {@link TiffWriteOptions} instances.
-     */
-    public static class Builder {
-
-        private Compression compression = Compression.DEFLATE;
-
-        /**
-         * Sets the compression scheme.
-         *
-         * @param compression the compression scheme to apply
-         * @return this builder for chaining
-         */
-        public @NotNull Builder withCompression(@NotNull Compression compression) {
-            this.compression = compression;
-            return this;
-        }
-
-        public @NotNull TiffWriteOptions build() {
-            return new TiffWriteOptions(this.compression);
-        }
 
     }
 

@@ -1,7 +1,8 @@
 package dev.simplified.image.pixel;
 
-import lombok.Getter;
-import lombok.experimental.Accessors;
+import dev.simplified.annotations.EqualsAndHashCode;
+import dev.simplified.annotations.Getter;
+import dev.simplified.annotations.NamingStyle;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -37,8 +38,8 @@ import java.util.stream.IntStream;
  * Without the flag, those methods fall back to a bit-equivalent scalar path - no other action is
  * required to use this library.
  */
-@Getter
-@Accessors(fluent = true)
+@Getter(style = NamingStyle.FLUENT)
+@EqualsAndHashCode(identity = EqualsAndHashCode.Identity.INSTANCE_OF, exclude = "mask")
 public class PixelBuffer {
 
     /**
@@ -46,9 +47,6 @@ public class PixelBuffer {
      * Below this, the fork-join overhead dominates the per-row work.
      */
     private static final int MIN_PARALLEL_ROWS = 64;
-
-    /** Packed ARGB pixel data in row-major order, of length {@code width * height}. */
-    private final int @NotNull [] data;
 
     /** Buffer width in pixels. */
     private final int width;
@@ -58,6 +56,9 @@ public class PixelBuffer {
 
     /** Whether the alpha channel carries meaningful data. */
     private final boolean hasAlpha;
+
+    /** Packed ARGB pixel data in row-major order, of length {@code width * height}. */
+    private final int @NotNull [] data;
 
     /**
      * Optional per-pixel coverage mask owned by this buffer - auxiliary render metadata, excluded from
@@ -892,39 +893,6 @@ public class PixelBuffer {
     public @NotNull PixelBuffer clearMask() {
         this.mask = Optional.empty();
         return this;
-    }
-
-    // --- value semantics ---
-
-    /**
-     * Compares this buffer with another for deep pixel equality.
-     *
-     * @param o the object to compare
-     * @return {@code true} if the other object is a pixel buffer with the same dimensions, alpha
-     *     flag, and pixel contents
-     */
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) return true;
-        if (!(o instanceof PixelBuffer other)) return false;
-        return this.width == other.width
-            && this.height == other.height
-            && this.hasAlpha == other.hasAlpha
-            && Arrays.equals(this.data, other.data);
-    }
-
-    /**
-     * Computes a hash code consistent with {@link #equals(Object)}.
-     *
-     * @return a hash derived from the dimensions, alpha flag, and pixel contents
-     */
-    @Override
-    public int hashCode() {
-        int h = Integer.hashCode(this.width);
-        h = 31 * h + Integer.hashCode(this.height);
-        h = 31 * h + Boolean.hashCode(this.hasAlpha);
-        h = 31 * h + Arrays.hashCode(this.data);
-        return h;
     }
 
     // --- private helpers ---

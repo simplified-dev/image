@@ -53,7 +53,7 @@ public final class RiffContainer {
             if (payloadOffset + chunkSize > data.length)
                 break;
 
-            WebPChunk.Type type = WebPChunk.Type.of(fourCC);
+            WebPChunk.Type type = WebPChunk.Type.ofFourCC(fourCC);
             chunks.add(new WebPChunk(type, fourCC, data, payloadOffset, chunkSize));
 
             // Advance past payload + word-alignment padding

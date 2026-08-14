@@ -1,17 +1,16 @@
 package dev.simplified.image.data;
 
-import dev.simplified.collection.Concurrent;
-import dev.simplified.collection.ConcurrentMap;
-import lombok.Getter;
-import lombok.RequiredArgsConstructor;
+import dev.simplified.annotations.EnumLookup;
+import dev.simplified.annotations.Getter;
+import dev.simplified.annotations.KeyField;
+import dev.simplified.annotations.RequiredArgsConstructor;
 import org.jetbrains.annotations.NotNull;
-
-import java.util.Locale;
 
 /**
  * The action to take with the canvas after a frame is displayed.
  */
 @Getter
+@EnumLookup
 @RequiredArgsConstructor
 public enum FrameDisposal {
 
@@ -35,21 +34,9 @@ public enum FrameDisposal {
      */
     RESTORE_TO_PREVIOUS(3, "restoreToPrevious");
 
-    private static final @NotNull FrameDisposal[] BY_VALUE;
-    private static final @NotNull ConcurrentMap<String, FrameDisposal> BY_METHOD;
-
-    static {
-        FrameDisposal[] values = values();
-        int max = 0;
-        for (FrameDisposal d : values) max = Math.max(max, d.value);
-        BY_VALUE = new FrameDisposal[max + 1];
-        for (FrameDisposal d : values) BY_VALUE[d.value] = d;
-
-        BY_METHOD = Concurrent.newMap();
-        for (FrameDisposal d : values) BY_METHOD.put(d.method.toLowerCase(Locale.ROOT), d);
-    }
-
+    @KeyField(strictKeys = true)
     private final int value;
+    @KeyField(strictKeys = true)
     private final @NotNull String method;
 
     /**
@@ -59,18 +46,20 @@ public enum FrameDisposal {
      * @return the matching disposal method, or {@link #NONE} if unrecognized
      */
     public static @NotNull FrameDisposal of(int value) {
-        if (value < 0 || value >= BY_VALUE.length) return NONE;
-        return BY_VALUE[value];
+        return findByValue(value).orElse(NONE);
     }
 
     /**
-     * Returns the disposal method for the given string value.
+     * Returns the disposal method for the given string value, ignoring case.
      *
      * @param value the disposal method identifier
      * @return the matching disposal method, or {@link #NONE} if unrecognized
      */
     public static @NotNull FrameDisposal of(@NotNull String value) {
-        return BY_METHOD.getOrDefault(value.toLowerCase(Locale.ROOT), NONE);
+        return stream()
+            .filter(disposal -> disposal.method.equalsIgnoreCase(value))
+            .findFirst()
+            .orElse(NONE);
     }
 
 }
