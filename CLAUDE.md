@@ -39,6 +39,6 @@ VP8 lossy tests shell out to Python `webp` package (libwebp bindings) for round-
 
 - Java 21 toolchain (`build.gradle.kts`)
 - Internal deps: Simplified-Dev `collections`, `utils`, `reflection` (all pulled via JitPack)
-- External deps: Log4j2, Lombok, JetBrains annotations
+- External deps: Log4j2, Simplified Annotations, JetBrains annotations
 - Tests: JUnit 5 + Hamcrest
 - 60 source classes, 8 test classes

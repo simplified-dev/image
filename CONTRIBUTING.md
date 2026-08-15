@@ -68,8 +68,8 @@ All development is based on the `master` branch.
 ### Code Style
 
 - Follow standard Java conventions and the existing patterns in the codebase.
-- Use [Lombok](https://projectlombok.org/) annotations where the project
-  already does (e.g., `@Getter`, `@RequiredArgsConstructor`).
+- Use [Simplified Annotations](https://github.com/simplified-dev/annotations)
+  where the project already does (e.g., `@Getter`, `@RequiredArgsConstructor`).
 - Use [JetBrains annotations](https://github.com/JetBrains/java-annotations)
   (`@NotNull`, `@Nullable`) for nullability contracts.
 - Keep methods short and focused. Prefer clear names over comments.
