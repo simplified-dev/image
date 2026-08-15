@@ -28,10 +28,9 @@ dependencies {
     api(libs.log4j2.api)
 
     // Simplified Annotations
-    // implementation rather than compileOnly: the @ClassBuilder-generated build() calls
-    // dev.simplified.classbuilder.validate.BuildFlagValidator, which has to be on the runtime path.
-    implementation(libs.simplified.annotations)
+    compileOnly(libs.simplified.annotations)
     annotationProcessor(libs.simplified.annotations)
+    testCompileOnly(libs.simplified.annotations)
     testAnnotationProcessor(libs.simplified.annotations)
 
     // Tests
