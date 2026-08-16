@@ -36,7 +36,7 @@ public enum FrameDisposal {
 
     @KeyField(strictKeys = true)
     private final int value;
-    @KeyField(strictKeys = true)
+    @KeyField(strictKeys = true, ignoreCase = true)
     private final @NotNull String method;
 
     /**
@@ -56,10 +56,7 @@ public enum FrameDisposal {
      * @return the matching disposal method, or {@link #NONE} if unrecognized
      */
     public static @NotNull FrameDisposal of(@NotNull String value) {
-        return stream()
-            .filter(disposal -> disposal.method.equalsIgnoreCase(value))
-            .findFirst()
-            .orElse(NONE);
+        return findByMethod(value).orElse(NONE);
     }
 
 }
