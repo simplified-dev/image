@@ -26,6 +26,22 @@ Line 20 says the encoder is keyframe-only 16x16 intra with no B_PRED and no inte
 - Type: **GAP**
 - Status: **OPEN**
 
+## WebP write options cannot force infinite looping over a finite count
+`WebPImageWriter` reads a loop count of 0 in `WebPWriteOptions` as "unset" and falls back to the image's own loop count. `withLoopCount(0)`, which means infinite, is therefore ignored whenever the `AnimatedImageData` carries a finite count.
+
+- Affected: `src/main/java/dev/simplified/image/codec/webp/WebPImageWriter.java:61-63`
+- Severity: **LOW**
+- Type: **BUG**
+- Status: **OPEN**
+
+## GIF writer ignores the image's loop count whenever options are passed
+When `GifWriteOptions` are supplied, `GifImageWriter` takes the loop count only from the options, whose default of 0 means infinite. A finite-loop GIF re-encoded with options, for example to set transparency, loops forever. The WebP writer applies the opposite precedence.
+
+- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:59-68`
+- Severity: **LOW**
+- Type: **BUG**
+- Status: **OPEN**
+
 ## Four libwebp oracle tests pass instead of skipping when the oracle is missing
 Each ends with `if (x == null) return;` when Python or the `webp` package is unavailable, so a run without the oracle reports PASSED for checks that never ran.
 
