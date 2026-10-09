@@ -18,6 +18,30 @@ Defects present in the current tree and not yet fixed, most severe first. Each e
 - Type: **BUG**
 - Status: **OPEN**
 
+## GIF writer misreads frames of different sizes and drops frame offsets
+`flattenAllFrames` packs every frame's pixels back to back, but the write loop reads frame i at `i * frameStride`, where `frameStride` is the largest frame's area, so an animation whose frames differ in size is written from the wrong slices and the last one overruns the array: frames of 4x4, 2x2 and 2x2 throw `ArrayIndexOutOfBoundsException: Index 32 out of bounds for length 24`. `configureFrameMetadata` writes only the GraphicControlExtension and never the ImageDescriptor's `imageLeftPosition` / `imageTopPosition`, so every frame is written at the origin. A GIF this library decodes - partial frames at offsets - therefore cannot be re-encoded: it throws, or, where its partial frames happen to share one size, it is written with every frame moved to the top-left corner. HIGH once a caller re-encodes decoded GIFs.
+
+- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:96-119` (`write`, the `frameStride` read), `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:144` (`flattenAllFrames`), `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:521-539` (`configureFrameMetadata`)
+- Severity: **MEDIUM**
+- Type: **BUG**
+- Status: **OPEN**
+
+## GIF reader marks every frame SOURCE and sizes the canvas from the first frame
+`GifImageReader` builds every frame with `FrameBlend.SOURCE`, but a GIF frame's transparent index means "leave the pixel beneath", which is `OVER`, so a consumer that composites by the blend flag punches a hole wherever a later frame is transparent. It also never reads the logical screen descriptor and builds the `AnimatedImageData` with no width or height, so the canvas takes the first frame's size, and a GIF whose first frame does not span its screen loses whatever later frames draw outside that rectangle. A consumer compositing the timeline has to ignore the flag to draw a decoded GIF correctly. HIGH once a consumer composites decoded GIFs by the flags.
+
+- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:107`, `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:115-118`
+- Severity: **MEDIUM**
+- Type: **BUG**
+- Status: **OPEN**
+
+## WebP reader keeps each frame's disposal and blend on frames it has already composed
+`readExtended` composites every ANMF frame onto the canvas - applying its blend and the prior frame's disposal - and emits the whole canvas at offset 0, but tags that full picture with the frame's original `disposal` and `blend`. A consumer that honours the flags composites each frame a second time: an `OVER` frame is blended over itself, and a `RESTORE_TO_BACKGROUND` frame clears a rectangle of a picture that is already whole. A composed frame carries no blend or disposal of its own to apply. HIGH once a consumer composites decoded WebPs by the flags.
+
+- Affected: `src/main/java/dev/simplified/image/codec/webp/WebPImageReader.java:244` (`readExtended`)
+- Severity: **MEDIUM**
+- Type: **BUG**
+- Status: **OPEN**
+
 ## CLAUDE.md "VP8 encoder state" describes an outdated codec
 Line 20 says the encoder is keyframe-only 16x16 intra with no B_PRED and no inter frames, but it ships B_PRED, P-frames with golden/altref references, SPLITMV, R-D mode selection, trellis quantization and segmentation. It also cites libwebp `src/enc/tree_enc.c` for tables that `VP8Tables` takes from `src/dec/tree_dec.c`. Line 22 says the decoder still carries fixed-width 11-bit coefficient shortcuts pending a spec-compliant rewrite; that rewrite has landed. Anyone planning or sizing work against this paragraph undercounts the VP8 codec.
 
