@@ -144,6 +144,42 @@ class PixelBufferTest {
     }
 
     @Test
+    @DisplayName("blitScaled PREMULTIPLIED onto a fresh buffer agrees with resize NEAREST for a translucent source")
+    void blitScaledPremultipliedMatchesResizeNearest() {
+        PixelBuffer render = PixelBuffer.create(6, 6);
+        for (int y = 0; y < 6; y++)
+            for (int x = 0; x < 6; x++)
+                render.setPixel(x, y, ColorMath.blend(ColorMath.pack(20 + 40 * x, 0xFF, 8 * y, 0x80), ColorMath.TRANSPARENT, BlendMode.NORMAL));
+
+        for (int size : new int[]{ 3, 6, 12 }) {
+            PixelBuffer laid = PixelBuffer.create(size, size);
+            laid.blitScaled(render, 0, 0, size, size, BlendMode.PREMULTIPLIED);
+            assertArrayEquals(render.resize(size, size, Resample.NEAREST).data(), laid.data());
+        }
+
+        PixelBuffer darkened = PixelBuffer.create(6, 6);
+        darkened.blitScaled(render, 0, 0, 6, 6);
+        assertThat(darkened.getPixel(5, 0), not(equalTo(render.getPixel(5, 0))));
+    }
+
+    @Test
+    @DisplayName("blit PREMULTIPLIED opaque source matches generic blend result")
+    void blitPremultipliedOpaqueFastPathMatchesGeneric() {
+        PixelBuffer src = gradient(4, 4);
+        PixelBuffer opaqueSrc = PixelBuffer.of(src.data().clone(), 4, 4, false);
+
+        PixelBuffer fast = PixelBuffer.create(8, 8);
+        fast.fill(0x80204060);
+        fast.blit(opaqueSrc, 2, 2, BlendMode.PREMULTIPLIED);
+
+        PixelBuffer generic = PixelBuffer.create(8, 8);
+        generic.fill(0x80204060);
+        generic.blit(src, 2, 2, BlendMode.PREMULTIPLIED);
+
+        assertThat(fast, equalTo(generic));
+    }
+
+    @Test
     @DisplayName("resize BILINEAR returns requested dimensions")
     void resizeBilinearDimensions() {
         PixelBuffer a = gradient(8, 8);

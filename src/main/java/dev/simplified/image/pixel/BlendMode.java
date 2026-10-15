@@ -29,6 +29,23 @@ public enum BlendMode {
     REPLACE,
 
     /**
+     * Source-over for a source whose colour already carries its alpha. The result equals
+     * {@code src + dst * (1 - src.a)} per colour channel, clamped to byte range, and
+     * {@code src.a + dst.a * (1 - src.a)} for alpha.
+     * <p>
+     * This is how one finished image is laid over another. An image drawn with {@link #NORMAL}
+     * onto a transparent surface holds every colour already scaled by its alpha, so laying it down
+     * with {@link #NORMAL} scales it a second time and darkens each partially transparent pixel.
+     * This mode lays such an image over a transparent pixel unchanged, and over an opaque pixel it
+     * gives what {@link #NORMAL} gives drawing the image's own source there directly, to within one
+     * unit of rounding.
+     * <p>
+     * It agrees with {@link #NORMAL} on every source whose alpha is {@code 0} or {@code 255}, so the
+     * two can differ only where the source carries partial alpha.
+     */
+    PREMULTIPLIED,
+
+    /**
      * Additive blend, clamped to byte range. The result equals
      * {@code min(255, src + dst)} per channel.
      */
