@@ -3,6 +3,7 @@ package dev.simplified.image;
 import dev.simplified.image.data.AnimatedImageData;
 import dev.simplified.image.data.ImageFrame;
 import dev.simplified.image.data.StaticImageData;
+import dev.simplified.image.pixel.BlendMode;
 import dev.simplified.image.pixel.PixelBuffer;
 import org.jetbrains.annotations.NotNull;
 
@@ -12,7 +13,9 @@ import org.jetbrains.annotations.NotNull;
  * render visible without an external image editor).
  * <p>
  * {@link #composite(ImageData)} applies the fill as the very last step - the finished frame is
- * blitted over a freshly filled background buffer so source-over alpha stays correct. A
+ * laid over a freshly filled background buffer with {@link BlendMode#PREMULTIPLIED}, because a
+ * finished render's colours already carry their alpha. A partially transparent pixel therefore
+ * shows the fill through it as it would had the render been drawn over the fill directly. A
  * {@link #TRANSPARENT} background is a no-op and leaves output byte-identical to the input.
  */
 public sealed interface Background permits Background.Solid, Background.Checkerboard {
@@ -69,9 +72,9 @@ public sealed interface Background permits Background.Solid, Background.Checkerb
     void fill(@NotNull PixelBuffer target);
 
     /**
-     * Composites {@code image} over this background, applied as the very last step so source-over
-     * alpha stays correct. Each frame is blitted onto a freshly filled background buffer of the
-     * same size; per-frame timing and metadata are preserved. A {@linkplain #isTransparent()
+     * Composites {@code image} over this background, applied as the very last step. Each frame is
+     * laid with {@link BlendMode#PREMULTIPLIED} onto a freshly filled background buffer of the same
+     * size; per-frame timing and metadata are preserved. A {@linkplain #isTransparent()
      * transparent} background returns {@code image} unchanged.
      *
      * @param image the finished render
@@ -94,12 +97,12 @@ public sealed interface Background permits Background.Solid, Background.Checkerb
 
     /**
      * Returns a new buffer the size of {@code rendered} with this background filled underneath and
-     * {@code rendered} composited on top (source-over).
+     * {@code rendered} laid on top with {@link BlendMode#PREMULTIPLIED}.
      */
     private @NotNull PixelBuffer over(@NotNull PixelBuffer rendered) {
         PixelBuffer out = PixelBuffer.create(rendered.width(), rendered.height());
         this.fill(out);
-        out.blit(rendered, 0, 0);
+        out.blit(rendered, 0, 0, BlendMode.PREMULTIPLIED);
         return out;
     }
 

@@ -90,6 +90,64 @@ class ColorMathTest {
     }
 
     @Test
+    @DisplayName("blend NORMAL darkens a pixel drawn over transparent a second time")
+    void blendNormalRedrawDarkens() {
+        int drawn = ColorMath.blend(0x80FFFFFF, ColorMath.TRANSPARENT, BlendMode.NORMAL);
+        assertThat(drawn, equalTo(0x80808080));
+        assertThat(ColorMath.blend(drawn, ColorMath.TRANSPARENT, BlendMode.NORMAL), equalTo(0x80404040));
+    }
+
+    @Test
+    @DisplayName("blend PREMULTIPLIED lays a pixel drawn over transparent back over transparent unchanged")
+    void blendPremultipliedOverTransparentIsIdentity() {
+        for (int rgb : new int[]{ 0xFFFFFF, 0x123456, 0xFF8000 }) {
+            for (int alpha = 1; alpha < 255; alpha++) {
+                int drawn = ColorMath.blend(ColorMath.withAlpha(rgb, alpha), ColorMath.TRANSPARENT, BlendMode.NORMAL);
+                assertThat(ColorMath.blend(drawn, ColorMath.TRANSPARENT, BlendMode.PREMULTIPLIED), equalTo(drawn));
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("blend PREMULTIPLIED over an opaque pixel matches drawing the source there directly within one unit")
+    void blendPremultipliedMatchesDirectDraw() {
+        int[] destinations = { 0xFF000000, 0xFFFFFFFF, 0xFF204060, 0xFFABCDEF };
+        for (int rgb : new int[]{ 0xFFFFFF, 0x123456, 0xFF8000 }) {
+            for (int alpha = 1; alpha < 255; alpha++) {
+                int src = ColorMath.withAlpha(rgb, alpha);
+                int drawn = ColorMath.blend(src, ColorMath.TRANSPARENT, BlendMode.NORMAL);
+
+                for (int dst : destinations) {
+                    int direct = ColorMath.blend(src, dst, BlendMode.NORMAL);
+                    int laid = ColorMath.blend(drawn, dst, BlendMode.PREMULTIPLIED);
+                    assertThat(ColorMath.alpha(laid), equalTo(0xFF));
+                    assertThat(Math.abs(ColorMath.red(laid) - ColorMath.red(direct)), lessThanOrEqualTo(1));
+                    assertThat(Math.abs(ColorMath.green(laid) - ColorMath.green(direct)), lessThanOrEqualTo(1));
+                    assertThat(Math.abs(ColorMath.blue(laid) - ColorMath.blue(direct)), lessThanOrEqualTo(1));
+                }
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("blend PREMULTIPLIED agrees with NORMAL at zero and full source alpha")
+    void blendPremultipliedAgreesWithNormalAtTheEnds() {
+        int dst = 0x80ABCDEF;
+        assertThat(ColorMath.blend(0xFF123456, dst, BlendMode.PREMULTIPLIED),
+            equalTo(ColorMath.blend(0xFF123456, dst, BlendMode.NORMAL)));
+        assertThat(ColorMath.blend(0x00FFFFFF, dst, BlendMode.PREMULTIPLIED),
+            equalTo(ColorMath.blend(0x00FFFFFF, dst, BlendMode.NORMAL)));
+    }
+
+    @Test
+    @DisplayName("blend PREMULTIPLIED accumulates alpha and clamps a colour that exceeds it")
+    void blendPremultipliedAccumulatesAndClamps() {
+        // 0x40 + 0x40 * (1 - 128/255) = 95.9, and 128 + 128 * (1 - 128/255) = 191.7
+        assertThat(ColorMath.blend(0x80404040, 0x80404040, BlendMode.PREMULTIPLIED), equalTo(0xC0606060));
+        assertThat(ColorMath.blend(0x80FFFFFF, 0xFFFFFFFF, BlendMode.PREMULTIPLIED), equalTo(0xFFFFFFFF));
+    }
+
+    @Test
     @DisplayName("blend MULTIPLY darkens towards black for mid-gray src")
     void blendMultiplyDarkens() {
         int src = 0xFF808080;

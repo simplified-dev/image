@@ -593,9 +593,9 @@ public class PixelBuffer {
      * Composites the source buffer onto this buffer at the given origin using the specified blend
      * mode. Out-of-bounds pixels are silently clipped.
      * <p>
-     * Fast paths are taken when {@code mode} is {@link BlendMode#NORMAL}: opaque sources use a
-     * per-row {@link System#arraycopy}; alpha sources inline the fully-opaque and fully-transparent
-     * short-circuits.
+     * Fast paths are taken when {@code mode} is {@link BlendMode#NORMAL} or
+     * {@link BlendMode#PREMULTIPLIED}: opaque sources use a per-row {@link System#arraycopy}; alpha
+     * sources inline the fully-opaque and fully-transparent short-circuits.
      *
      * @param source the source buffer
      * @param dx the destination x origin
@@ -610,7 +610,8 @@ public class PixelBuffer {
 
         if (srcX0 >= srcX1 || srcY0 >= srcY1) return;
 
-        if (mode == BlendMode.NORMAL && !source.hasAlpha) {
+        boolean sourceOver = mode == BlendMode.NORMAL || mode == BlendMode.PREMULTIPLIED;
+        if (sourceOver && !source.hasAlpha) {
             int rowWidth = srcX1 - srcX0;
             forEachRow(srcY0, srcY1, y -> {
                 int srcOff = y * source.width + srcX0;
@@ -620,7 +621,7 @@ public class PixelBuffer {
             return;
         }
 
-        if (mode == BlendMode.NORMAL) {
+        if (sourceOver) {
             forEachRow(srcY0, srcY1, y -> {
                 int srcRow = y * source.width;
                 int dstRow = (dy + y) * this.width + dx;
@@ -633,7 +634,7 @@ public class PixelBuffer {
                         continue;
                     }
                     int dstIdx = dstRow + x;
-                    this.data[dstIdx] = ColorMath.blend(src, this.data[dstIdx], BlendMode.NORMAL);
+                    this.data[dstIdx] = ColorMath.blend(src, this.data[dstIdx], mode);
                 }
             });
             return;
@@ -662,6 +663,22 @@ public class PixelBuffer {
      * @param dh the destination height
      */
     public void blitScaled(@NotNull PixelBuffer source, int dx, int dy, int dw, int dh) {
+        blitScaled(source, dx, dy, dw, dh, BlendMode.NORMAL);
+    }
+
+    /**
+     * Composites the source buffer onto this buffer at the given origin, rescaling to the specified
+     * width and height using nearest-neighbor sampling and the specified blend mode. Out-of-bounds
+     * pixels are silently clipped.
+     *
+     * @param source the source buffer
+     * @param dx the destination x origin
+     * @param dy the destination y origin
+     * @param dw the destination width
+     * @param dh the destination height
+     * @param mode the blend mode to use for compositing
+     */
+    public void blitScaled(@NotNull PixelBuffer source, int dx, int dy, int dw, int dh, @NotNull BlendMode mode) {
         int x0 = Math.max(0, -dx);
         int y0 = Math.max(0, -dy);
         int x1 = Math.min(dw, this.width - dx);
@@ -678,7 +695,7 @@ public class PixelBuffer {
                 int src = source.data[sy * source.width + sx];
                 if (ColorMath.alpha(src) == 0) continue;
                 int dstIdx = dstRow + dx + x;
-                this.data[dstIdx] = ColorMath.blend(src, this.data[dstIdx], BlendMode.NORMAL);
+                this.data[dstIdx] = ColorMath.blend(src, this.data[dstIdx], mode);
             }
         });
     }

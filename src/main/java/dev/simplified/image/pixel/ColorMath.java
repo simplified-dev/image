@@ -157,6 +157,7 @@ public class ColorMath {
         return switch (mode) {
             case NORMAL -> blendNormal(src, dst);
             case REPLACE -> src;
+            case PREMULTIPLIED -> blendPremultiplied(src, dst);
             case ADD -> blendAdd(src, dst);
             case MULTIPLY -> blendMultiply(src, dst);
             case OVERLAY -> blendOverlay(src, dst);
@@ -242,6 +243,20 @@ public class ColorMath {
         int g = Math.round(green(src) * srcA + green(dst) * invSrcA);
         int b = Math.round(blue(src) * srcA + blue(dst) * invSrcA);
         int a = Math.round(sa + da * invSrcA);
+        return pack(a, r, g, b);
+    }
+
+    private static int blendPremultiplied(int src, int dst) {
+        int sa = alpha(src);
+        if (sa == 0xFF) return src;
+        if (sa == 0) return dst;
+
+        float invSrcA = 1f - sa / 255f;
+
+        int r = Math.min(255, red(src) + Math.round(red(dst) * invSrcA));
+        int g = Math.min(255, green(src) + Math.round(green(dst) * invSrcA));
+        int b = Math.min(255, blue(src) + Math.round(blue(dst) * invSrcA));
+        int a = Math.round(sa + alpha(dst) * invSrcA);
         return pack(a, r, g, b);
     }
 

@@ -3,6 +3,8 @@ package dev.simplified.image;
 import dev.simplified.image.data.AnimatedImageData;
 import dev.simplified.image.data.ImageFrame;
 import dev.simplified.image.data.StaticImageData;
+import dev.simplified.image.pixel.BlendMode;
+import dev.simplified.image.pixel.ColorMath;
 import dev.simplified.image.pixel.PixelBuffer;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -56,6 +58,19 @@ class BackgroundTest {
         PixelBuffer result = out.toPixelBuffer();
         assertThat(result.getPixel(0, 0), is(0xFFFF0000));
         assertThat(result.getPixel(1, 0), is(0xFF0000FF));
+    }
+
+    @Test
+    @DisplayName("composite shows the fill through a translucent render as drawing it over the fill would")
+    void compositesTranslucentRenderAsDrawnOverFill() {
+        int source = 0x80FFFFFF;
+        int fill = 0xFF204060;
+        PixelBuffer rendered = PixelBuffer.create(1, 1);
+        rendered.setPixel(0, 0, ColorMath.blend(source, ColorMath.TRANSPARENT, BlendMode.NORMAL));
+
+        PixelBuffer result = Background.solid(fill).composite(StaticImageData.of(rendered)).toPixelBuffer();
+        assertThat(result.getPixel(0, 0), is(0xFF90A0B0));
+        assertThat(result.getPixel(0, 0), is(ColorMath.blend(source, fill, BlendMode.NORMAL)));
     }
 
     @Test
