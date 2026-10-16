@@ -189,6 +189,45 @@ class PixelBufferTest {
     }
 
     @Test
+    @DisplayName("resize BILINEAR keeps an opaque white picture opaque white at every size")
+    void resizeBilinearKeepsOpaqueWhite() {
+        // Four taps whose weights sum to one in float can land a hair under 255; rounding keeps them
+        // there, where truncating would leave 254.
+        for (int size = 2; size <= 12; size++) {
+            PixelBuffer white = PixelBuffer.create(size, size);
+            white.fill(0xFFFFFFFF);
+
+            for (int target = 1; target <= 24; target++)
+                for (int pixel : white.resize(target, target, Resample.BILINEAR).data())
+                    assertThat("%d to %d".formatted(size, target), pixel, equalTo(0xFFFFFFFF));
+        }
+    }
+
+    @Test
+    @DisplayName("resize BILINEAR reads past an edge as the edge pixel")
+    void resizeBilinearClampsToTheEdgePixel() {
+        // A ramp over four columns, doubled: the outermost outputs sit a quarter pixel past the first
+        // and last columns, so each is that column exactly rather than a mix shifted one inward.
+        PixelBuffer ramp = PixelBuffer.create(4, 1);
+        for (int x = 0; x < 4; x++)
+            ramp.setPixel(x, 0, ColorMath.pack(255, 0x40 * x, 0, 0));
+
+        PixelBuffer wide = ramp.resize(8, 1, Resample.BILINEAR);
+        assertThat(ColorMath.red(wide.getPixel(0, 0)), equalTo(0x00));
+        assertThat(ColorMath.red(wide.getPixel(7, 0)), equalTo(0xC0));
+    }
+
+    @Test
+    @DisplayName("resize BILINEAR samples a one-pixel-wide source as its one column")
+    void resizeBilinearAcceptsAOnePixelWideSource() {
+        PixelBuffer column = PixelBuffer.create(1, 3);
+        column.fill(0xFF336699);
+
+        for (int pixel : column.resize(4, 6, Resample.BILINEAR).data())
+            assertThat(pixel, equalTo(0xFF336699));
+    }
+
+    @Test
     @DisplayName("resize rejects non-positive dimensions")
     void resizeRejectsInvalidDimensions() {
         PixelBuffer a = PixelBuffer.create(4, 4);

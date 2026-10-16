@@ -352,6 +352,10 @@ public class PixelBuffer {
      * <p>
      * {@link Resample#NEAREST} and {@link Resample#BILINEAR} sample directly from the pixel array;
      * {@link Resample#BICUBIC} delegates to {@link Graphics2D} with high-quality hints.
+     * <p>
+     * {@link Resample#BILINEAR} mixes every channel as it is held and rounds each once, which is
+     * correct for {@link AlphaMode#PREMULTIPLIED} pixels; a {@link AlphaMode#STRAIGHT} pixel beside
+     * a transparent one takes on part of the transparent pixel's colour.
      *
      * @param w the target width
      * @param h the target height
@@ -390,10 +394,14 @@ public class PixelBuffer {
                     result[outRow + x] = this.data[sy * this.width + sx];
                 }
             } else {
+                float[] sample = new float[4];
                 float srcY = ((y + 0.5f) * this.height) / h - 0.5f;
                 for (int x = 0; x < w; x++) {
                     float srcX = ((x + 0.5f) * this.width) / w - 0.5f;
-                    result[outRow + x] = sampleBilinear(this.data, srcX, srcY);
+                    this.sampleBilinear(this.data, srcX, srcY, false, sample, 0);
+                    result[outRow + x] = ColorMath.pack(
+                        channel(sample[0], 255), channel(sample[1], 255), channel(sample[2], 255), channel(sample[3], 255)
+                    );
                 }
             }
         });
@@ -764,19 +772,52 @@ public class PixelBuffer {
     // --- filters ---
 
     /**
-     * Applies FXAA post-processing in place, smoothing aliased edges.
+     * Applies FXAA post-processing in place to pixels holding straight colour, smoothing aliased
+     * edges.
      * <p>
-     * Uses luma-based edge detection with bilinear sampling along detected edge directions.
-     * Processing is parallelized across scanlines. The one-pixel border is left unmodified.
+     * Equivalent to {@link #applyFxaa(AlphaMode)} with {@link AlphaMode#STRAIGHT}, the convention a
+     * decoded image holds.
      */
     public void applyFxaa() {
+        this.applyFxaa(AlphaMode.STRAIGHT);
+    }
+
+    /**
+     * Applies FXAA post-processing in place to pixels held in the given alpha convention, smoothing
+     * aliased edges.
+     * <p>
+     * Uses luma-based edge detection with bilinear sampling along detected edge directions.
+     * Processing is parallelized across scanlines. The one-pixel border is left unmodified, and so is
+     * every pixel whose neighbourhood falls under the contrast threshold, byte for byte.
+     * <p>
+     * A smoothed pixel is the mean of two bilinear samples taken along the edge. Both mix colour in
+     * proportion to alpha, so a transparent neighbour takes its share of the mix with no coverage and
+     * no colour - it dilutes the coverage and leaves the colour the coverage carries untouched - and
+     * the mean is written back in the convention the pixels arrived in, each channel rounded once.
+     * <p>
+     * Edge detection reads the luma of each pixel's colour carried by its alpha in either convention.
+     * A premultiplied pixel holds that colour rounded, which at low alpha can turn the direction a
+     * smoothed pixel is sampled along, so the two conventions agree on one picture only to within
+     * that rounding. A buffer whose alpha carries no data is read as opaque.
+     *
+     * @param alphaMode the convention this buffer's pixels are held in
+     */
+    public void applyFxaa(@NotNull AlphaMode alphaMode) {
+        boolean straight = switch (alphaMode) {
+            case STRAIGHT -> true;
+            case PREMULTIPLIED -> false;
+        };
         int[] temp = this.data.clone();
+        if (!this.hasAlpha)
+            Arrays.setAll(temp, i -> temp[i] | 0xFF000000);
 
         final float fxaaReduceMin = 1.0f / 128.0f;
         final float fxaaReduceMul = 1.0f / 4.0f;
         final float fxaaSpanMax = 8.0f;
 
         IntStream.range(1, this.height - 1).parallel().forEach(y -> {
+            float[] samples = new float[8];
+
             for (int x = 1; x < this.width - 1; x++) {
                 int rgbNw = temp[(y - 1) * this.width + (x - 1)];
                 int rgbNe = temp[(y - 1) * this.width + (x + 1)];
@@ -784,11 +825,11 @@ public class PixelBuffer {
                 int rgbSe = temp[(y + 1) * this.width + (x + 1)];
                 int rgbM = temp[y * this.width + x];
 
-                float lumaNw = ColorMath.luma(rgbNw);
-                float lumaNe = ColorMath.luma(rgbNe);
-                float lumaSw = ColorMath.luma(rgbSw);
-                float lumaSe = ColorMath.luma(rgbSe);
-                float lumaM = ColorMath.luma(rgbM);
+                float lumaNw = edgeLuma(rgbNw, alphaMode);
+                float lumaNe = edgeLuma(rgbNe, alphaMode);
+                float lumaSw = edgeLuma(rgbSw, alphaMode);
+                float lumaSe = edgeLuma(rgbSe, alphaMode);
+                float lumaM = edgeLuma(rgbM, alphaMode);
 
                 float lumaMin = Math.min(lumaM, Math.min(Math.min(lumaNw, lumaNe), Math.min(lumaSw, lumaSe)));
                 float lumaMax = Math.max(lumaM, Math.max(Math.max(lumaNw, lumaNe), Math.max(lumaSw, lumaSe)));
@@ -810,39 +851,78 @@ public class PixelBuffer {
                 dirX = Math.clamp(dirX * rcpDirMin, -fxaaSpanMax, fxaaSpanMax);
                 dirY = Math.clamp(dirY * rcpDirMin, -fxaaSpanMax, fxaaSpanMax);
 
-                int sample1 = sampleBilinear(temp,
+                this.sampleBilinear(temp,
                     x + dirX * (1.0f / 3.0f - 0.5f),
-                    y + dirY * (1.0f / 3.0f - 0.5f));
-                int sample2 = sampleBilinear(temp,
+                    y + dirY * (1.0f / 3.0f - 0.5f),
+                    straight, samples, 0);
+                this.sampleBilinear(temp,
                     x + dirX * (2.0f / 3.0f - 0.5f),
-                    y + dirY * (2.0f / 3.0f - 0.5f));
+                    y + dirY * (2.0f / 3.0f - 0.5f),
+                    straight, samples, 4);
 
-                int s1a = (sample1 >> 24) & 0xFF;
-                int s1r = (sample1 >> 16) & 0xFF;
-                int s1g = (sample1 >> 8) & 0xFF;
-                int s1b = sample1 & 0xFF;
-
-                int s2a = (sample2 >> 24) & 0xFF;
-                int s2r = (sample2 >> 16) & 0xFF;
-                int s2g = (sample2 >> 8) & 0xFF;
-                int s2b = sample2 & 0xFF;
-
-                float r = (s1r * s1a + s2r * s2a) * 0.5f;
-                float g = (s1g * s1a + s2g * s2a) * 0.5f;
-                float b = (s1b * s1a + s2b * s2a) * 0.5f;
-                float a = (s1a + s2a) * 0.5f;
-
-                if (a > 0) {
-                    int ri = Math.clamp((int) (r / a), 0, 255);
-                    int gi = Math.clamp((int) (g / a), 0, 255);
-                    int bi = Math.clamp((int) (b / a), 0, 255);
-                    int ai = Math.clamp((int) a, 0, 255);
-                    this.data[y * this.width + x] = (ai << 24) | (ri << 16) | (gi << 8) | bi;
-                } else {
-                    this.data[y * this.width + x] = 0;
-                }
+                // Each sample holds a coverage and the colour that coverage carries, so their mean is
+                // the pixel's coverage and its colour as it is carried - the premultiplied value.
+                this.data[y * this.width + x] = packSample(
+                    (samples[0] + samples[4]) * 0.5f,
+                    (samples[1] + samples[5]) * 0.5f,
+                    (samples[2] + samples[6]) * 0.5f,
+                    (samples[3] + samples[7]) * 0.5f,
+                    alphaMode
+                );
             }
         });
+    }
+
+    /**
+     * Computes the luma FXAA's edge test reads: a pixel's colour carried by its alpha, which a
+     * straight pixel is scaled to and a premultiplied pixel holds already.
+     *
+     * @param argb the packed ARGB pixel
+     * @param alphaMode the convention the pixel is held in
+     * @return the luma in {@code [0, 255]}
+     */
+    private static float edgeLuma(int argb, @NotNull AlphaMode alphaMode) {
+        return switch (alphaMode) {
+            case STRAIGHT -> ColorMath.luma(argb);
+            case PREMULTIPLIED -> ColorMath.luma(argb | 0xFF000000);
+        };
+    }
+
+    /**
+     * Packs a filtered sample into a pixel of the given convention, rounding each channel once. A
+     * premultiplied pixel takes the carried colour as it is, held at or under its alpha; a straight
+     * pixel takes it divided by the unrounded coverage. A sample that rounds to no coverage packs
+     * to transparent black.
+     *
+     * @param a the sample's coverage, in {@code [0, 255]}
+     * @param r the red the coverage carries, in {@code [0, a]}
+     * @param g the green the coverage carries, in {@code [0, a]}
+     * @param b the blue the coverage carries, in {@code [0, a]}
+     * @param alphaMode the convention to pack into
+     * @return the packed ARGB pixel
+     */
+    private static int packSample(float a, float r, float g, float b, @NotNull AlphaMode alphaMode) {
+        int alpha = channel(a, 255);
+        if (alpha == 0) return 0;
+
+        return switch (alphaMode) {
+            case STRAIGHT -> {
+                float scale = 255f / a;
+                yield ColorMath.pack(alpha, channel(r * scale, 255), channel(g * scale, 255), channel(b * scale, 255));
+            }
+            case PREMULTIPLIED -> ColorMath.pack(alpha, channel(r, alpha), channel(g, alpha), channel(b, alpha));
+        };
+    }
+
+    /**
+     * Rounds an unrounded channel value half up and holds it in {@code [0, max]}.
+     *
+     * @param value the channel value
+     * @param max the largest value the channel may take
+     * @return the rounded channel
+     */
+    private static int channel(float value, int max) {
+        return Math.clamp(Math.round(value), 0, max);
     }
 
     // --- conversion ---
@@ -935,40 +1015,58 @@ public class PixelBuffer {
         }
     }
 
-    private int sampleBilinear(int @NotNull [] source, float x, float y) {
-        int ix = (int) Math.floor(x);
-        int iy = (int) Math.floor(y);
-        float fx = x - ix;
-        float fy = y - iy;
+    /**
+     * Samples {@code source} bilinearly at a point, writing alpha and the three colour channels -
+     * each in {@code [0, 255]} and unrounded - into {@code out} from {@code offset}, in that order.
+     * <p>
+     * A tap past an edge reads the edge pixel and keeps the point's own weights, so every tap reads a
+     * pixel inside the buffer and a one-pixel-wide source samples as its one column. When
+     * {@code weightByAlpha} is set each tap's colour is scaled by its alpha before the mix, which
+     * straight colour needs for a transparent tap to add no colour, and the colour written is the
+     * colour the coverage carries; otherwise every channel mixes as it is held.
+     *
+     * @param source the pixels to sample, laid out as this buffer's
+     * @param x the horizontal sample position, in pixels
+     * @param y the vertical sample position, in pixels
+     * @param weightByAlpha whether each tap's colour is scaled by its alpha before the mix
+     * @param out the array receiving alpha, red, green and blue
+     * @param offset the index in {@code out} the four channels start at
+     */
+    private void sampleBilinear(int @NotNull [] source, float x, float y, boolean weightByAlpha, float @NotNull [] out, int offset) {
+        int floorX = (int) Math.floor(x);
+        int floorY = (int) Math.floor(y);
+        float fx = x - floorX;
+        float fy = y - floorY;
 
-        ix = Math.clamp(ix, 0, this.width - 2);
-        iy = Math.clamp(iy, 0, this.height - 2);
+        int x0 = Math.clamp(floorX, 0, this.width - 1);
+        int x1 = Math.clamp(floorX + 1, 0, this.width - 1);
+        int row0 = Math.clamp(floorY, 0, this.height - 1) * this.width;
+        int row1 = Math.clamp(floorY + 1, 0, this.height - 1) * this.width;
 
-        int c00 = source[iy * this.width + ix];
-        int c10 = source[iy * this.width + ix + 1];
-        int c01 = source[(iy + 1) * this.width + ix];
-        int c11 = source[(iy + 1) * this.width + ix + 1];
+        Arrays.fill(out, offset, offset + 4, 0f);
+        accumulateTap(source[row0 + x0], (1 - fx) * (1 - fy), weightByAlpha, out, offset);
+        accumulateTap(source[row0 + x1], fx * (1 - fy), weightByAlpha, out, offset);
+        accumulateTap(source[row1 + x0], (1 - fx) * fy, weightByAlpha, out, offset);
+        accumulateTap(source[row1 + x1], fx * fy, weightByAlpha, out, offset);
+    }
 
-        float w00 = (1 - fx) * (1 - fy);
-        float w10 = fx * (1 - fy);
-        float w01 = (1 - fx) * fy;
-        float w11 = fx * fy;
+    /**
+     * Adds one bilinear tap's share to a sample being accumulated.
+     *
+     * @param argb the tap's packed ARGB pixel
+     * @param weight the tap's bilinear weight
+     * @param weightByAlpha whether the tap's colour is scaled by its alpha
+     * @param out the array accumulating alpha, red, green and blue
+     * @param offset the index in {@code out} the four channels start at
+     */
+    private static void accumulateTap(int argb, float weight, boolean weightByAlpha, float @NotNull [] out, int offset) {
+        int alpha = ColorMath.alpha(argb);
+        float colourWeight = weightByAlpha ? weight * alpha / 255f : weight;
 
-        float r = ((c00 >> 16) & 0xFF) * w00 + ((c10 >> 16) & 0xFF) * w10
-            + ((c01 >> 16) & 0xFF) * w01 + ((c11 >> 16) & 0xFF) * w11;
-        float g = ((c00 >> 8) & 0xFF) * w00 + ((c10 >> 8) & 0xFF) * w10
-            + ((c01 >> 8) & 0xFF) * w01 + ((c11 >> 8) & 0xFF) * w11;
-        float b = (c00 & 0xFF) * w00 + (c10 & 0xFF) * w10
-            + (c01 & 0xFF) * w01 + (c11 & 0xFF) * w11;
-        float a = ((c00 >> 24) & 0xFF) * w00 + ((c10 >> 24) & 0xFF) * w10
-            + ((c01 >> 24) & 0xFF) * w01 + ((c11 >> 24) & 0xFF) * w11;
-
-        int ri = Math.clamp((int) r, 0, 255);
-        int gi = Math.clamp((int) g, 0, 255);
-        int bi = Math.clamp((int) b, 0, 255);
-        int ai = Math.clamp((int) a, 0, 255);
-
-        return (ai << 24) | (ri << 16) | (gi << 8) | bi;
+        out[offset] += weight * alpha;
+        out[offset + 1] += colourWeight * ColorMath.red(argb);
+        out[offset + 2] += colourWeight * ColorMath.green(argb);
+        out[offset + 3] += colourWeight * ColorMath.blue(argb);
     }
 
 }
