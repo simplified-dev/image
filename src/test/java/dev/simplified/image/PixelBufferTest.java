@@ -8,6 +8,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.awt.*;
+import java.util.Random;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.*;
@@ -15,6 +16,29 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class PixelBufferTest {
+
+    /**
+     * Source width, source height, destination width, destination height, destination origin, target
+     * width and target height of each scaled blit held to the frozen per-pixel loop: a 16x
+     * magnification, a halving, magnifications by 100 / 16 and 13 / 7, a shrink by 4 / 9, a
+     * one-to-one copy, an origin left of and above the target that starts the blit part way through a
+     * magnified texel, a destination wider than the target clipped on both sides, an origin that clips
+     * the right and bottom, a magnification tall enough for its rows to run in parallel, and a
+     * destination so wide that each column's product overflows an int and wraps.
+     */
+    private static final int[][] SCALED_BLITS = {
+        { 16, 16, 256, 256, 0, 0, 256, 256 },
+        { 512, 512, 256, 256, 0, 0, 256, 256 },
+        { 16, 16, 100, 100, 0, 0, 100, 100 },
+        { 7, 7, 13, 13, 0, 0, 13, 13 },
+        { 9, 9, 4, 4, 1, 1, 6, 6 },
+        { 13, 11, 13, 11, 2, -3, 20, 20 },
+        { 16, 16, 64, 48, -9, -5, 40, 40 },
+        { 16, 8, 300, 40, -37, 3, 200, 50 },
+        { 16, 16, 256, 256, 100, 120, 256, 256 },
+        { 5, 3, 64, 70, -3, -1, 70, 80 },
+        { 50000, 2, 100000, 2, -60000, -1, 10, 1 }
+    };
 
     private static PixelBuffer gradient(int w, int h) {
         int[] data = new int[w * h];
@@ -160,6 +184,70 @@ class PixelBufferTest {
         PixelBuffer darkened = PixelBuffer.create(6, 6);
         darkened.blitScaled(render, 0, 0, 6, 6);
         assertThat(darkened.getPixel(5, 0), not(equalTo(render.getPixel(5, 0))));
+    }
+
+    @Test
+    @DisplayName("blitScaled lays down what a frozen per-pixel copy of its loop lays down")
+    void blitScaledMatchesTheFrozenLoop() {
+        int seed = 0;
+
+        for (int[] blit : SCALED_BLITS) {
+            int srcW = blit[0], srcH = blit[1], dw = blit[2], dh = blit[3], dx = blit[4], dy = blit[5], width = blit[6], height = blit[7];
+            int[] drawn = texels(srcW, srcH, ++seed);
+            int[] backdrop = texels(width, height, ++seed);
+
+            for (boolean hasAlpha : new boolean[]{ true, false })
+                for (BlendMode mode : BlendMode.values()) {
+                    String label = "%dx%d -> %dx%d at (%d, %d) onto %dx%d, hasAlpha %s, %s"
+                        .formatted(srcW, srcH, dw, dh, dx, dy, width, height, hasAlpha, mode);
+                    PixelBuffer source = PixelBuffer.of(drawn.clone(), srcW, srcH, hasAlpha);
+
+                    PixelBuffer expected = PixelBuffer.of(backdrop.clone(), width, height);
+                    frozenBlitScaled(expected, source, dx, dy, dw, dh, mode);
+
+                    PixelBuffer actual = PixelBuffer.of(backdrop.clone(), width, height);
+                    actual.blitScaled(source, dx, dy, dw, dh, mode);
+
+                    assertArrayEquals(expected.data(), actual.data(), label);
+                    assertArrayEquals(drawn, source.data(), label + " left its source as drawn");
+                }
+        }
+    }
+
+    @Test
+    @DisplayName("blitScaled of a buffer onto itself reads each texel after every write ahead of it in its row")
+    void blitScaledOntoItselfMatchesTheFrozenLoop() {
+        // Doubling from the origin, the first pixel of row 0 writes the texel the second pixel reads,
+        // so that texel is held translucent to make the write change it in every mode but REPLACE.
+        int[] drawn = texels(24, 20, 1);
+        drawn[0] = 0x80C08040;
+
+        for (BlendMode mode : BlendMode.values()) {
+            PixelBuffer expected = PixelBuffer.of(drawn.clone(), 24, 20);
+            frozenBlitScaled(expected, expected, 0, 0, 48, 40, mode);
+
+            PixelBuffer actual = PixelBuffer.of(drawn.clone(), 24, 20);
+            actual.blitScaled(actual, 0, 0, 48, 40, mode);
+
+            assertArrayEquals(expected.data(), actual.data(), mode.name());
+        }
+    }
+
+    @Test
+    @DisplayName("blitScaled reads no blend mode over a source whose every texel has no alpha")
+    void blitScaledReadsNoModeOverATransparentSource() {
+        int[] drawn = texels(16, 16, 2);
+        for (int i = 0; i < drawn.length; i++)
+            drawn[i] &= 0x00FFFFFF;
+
+        PixelBuffer source = PixelBuffer.of(drawn, 16, 16);
+        int[] backdrop = texels(64, 64, 3);
+
+        for (int size : new int[]{ 8, 16, 64 }) {
+            PixelBuffer target = PixelBuffer.of(backdrop.clone(), 64, 64);
+            target.blitScaled(source, 0, 0, size, size, null);
+            assertArrayEquals(backdrop, target.data(), "%d to %d".formatted(16, size));
+        }
     }
 
     @Test
@@ -331,6 +419,69 @@ class PixelBufferTest {
         assertThat(a, equalTo(b));
         assertThat(a.hashCode(), equalTo(b.hashCode()));
         assertThat(a, not(equalTo(c)));
+    }
+
+    /**
+     * Draws random texels in four even shares: no alpha over colour channels that still hold bits,
+     * full alpha, and two shares of alpha drawn from 1 to 254.
+     *
+     * @param width the picture width
+     * @param height the picture height
+     * @param seed the random seed
+     * @return the pixels
+     */
+    private static int[] texels(int width, int height, int seed) {
+        Random random = new Random(seed);
+        int[] pixels = new int[width * height];
+
+        for (int i = 0; i < pixels.length; i++) {
+            int rgb = random.nextInt() & 0x00FFFFFF;
+            int alpha = switch (random.nextInt(4)) {
+                case 0 -> 0;
+                case 1 -> 0xFF;
+                default -> 1 + random.nextInt(254);
+            };
+            pixels[i] = alpha << 24 | rgb;
+        }
+
+        return pixels;
+    }
+
+    /**
+     * A frozen copy of the scaled blit as it stood computing each source column with its own integer
+     * divide: the clip, the row and column products in int arithmetic, rows in order, every pixel
+     * reading its texel afresh, alpha 0 skipped and every other texel blended.
+     *
+     * @param target the buffer composited onto
+     * @param source the buffer composited
+     * @param dx the destination x origin
+     * @param dy the destination y origin
+     * @param dw the destination width
+     * @param dh the destination height
+     * @param mode the blend mode
+     */
+    private static void frozenBlitScaled(PixelBuffer target, PixelBuffer source, int dx, int dy, int dw, int dh, BlendMode mode) {
+        int[] data = target.data();
+        int[] pixels = source.data();
+        int x0 = Math.max(0, -dx);
+        int y0 = Math.max(0, -dy);
+        int x1 = Math.min(dw, target.width() - dx);
+        int y1 = Math.min(dh, target.height() - dy);
+
+        if (x0 >= x1 || y0 >= y1) return;
+
+        for (int y = y0; y < y1; y++) {
+            int dstRow = (dy + y) * target.width();
+            int sy = (y * source.height()) / dh;
+
+            for (int x = x0; x < x1; x++) {
+                int sx = (x * source.width()) / dw;
+                int src = pixels[sy * source.width() + sx];
+                if (ColorMath.alpha(src) == 0) continue;
+                int dstIdx = dstRow + dx + x;
+                data[dstIdx] = ColorMath.blend(src, data[dstIdx], mode);
+            }
+        }
     }
 
 }

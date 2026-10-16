@@ -700,12 +700,14 @@ public class PixelBuffer {
 
         if (x0 >= x1 || y0 >= y1) return;
 
+        int[] columns = sourceColumns(x0, x1, source.width, dw);
+
         forEachRow(y0, y1, y -> {
             int dstRow = (dy + y) * this.width;
             int sy = (y * source.height) / dh;
 
             for (int x = x0; x < x1; x++) {
-                int sx = (x * source.width) / dw;
+                int sx = columns[x - x0];
                 int src = source.data[sy * source.width + sx];
                 if (ColorMath.alpha(src) == 0) continue;
                 int dstIdx = dstRow + dx + x;
@@ -748,6 +750,7 @@ public class PixelBuffer {
         int srcW = source.width;
         int srcH = source.height;
         boolean forceAlpha = !source.hasAlpha;
+        int[] columns = sourceColumns(x0, x1, srcW, dw);
 
         forEachRow(y0, y1, y -> {
             float[] samples = new float[8];
@@ -756,7 +759,7 @@ public class PixelBuffer {
             boolean interiorRow = sy >= 1 && sy <= srcH - 2;
 
             for (int x = x0; x < x1; x++) {
-                int sx = (x * srcW) / dw;
+                int sx = columns[x - x0];
                 int src = pixels[sy * srcW + sx];
                 if (interiorRow && sx >= 1 && sx <= srcW - 2) {
                     long filtered = fxaaPixel(pixels, srcW, srcH, forceAlpha, sx, sy, alphaMode, samples);
@@ -1106,6 +1109,28 @@ public class PixelBuffer {
             for (int y = start; y < end; y++)
                 body.accept(y);
         }
+    }
+
+    /**
+     * Computes the source column a nearest-neighbour rescale to {@code dw} columns reads at each
+     * destination column in {@code [x0, x1)}, as {@code (x * sourceWidth) / dw} in int arithmetic,
+     * wrapping where the product overflows.
+     * <p>
+     * The table is built once per composite and only read by its row tasks.
+     *
+     * @param x0 the first destination column, inclusive
+     * @param x1 the last destination column, exclusive
+     * @param sourceWidth the source width
+     * @param dw the destination width, positive
+     * @return the source column of each destination column {@code x}, at index {@code x - x0}
+     */
+    private static int @NotNull [] sourceColumns(int x0, int x1, int sourceWidth, int dw) {
+        int[] columns = new int[x1 - x0];
+
+        for (int x = x0; x < x1; x++)
+            columns[x - x0] = (x * sourceWidth) / dw;
+
+        return columns;
     }
 
     /**
