@@ -37,7 +37,8 @@ class PixelBufferFxaaTest {
      * Source width, source height, destination width, destination height and destination origin of
      * each scaled composite: whole factors of 2, 3 and 4 on frames that are not square, a clipped
      * origin, a factor that is not whole, an upscale that reaches the source's last row and column,
-     * and sources too narrow or too short for FXAA to filter anything.
+     * sources too narrow or too short for FXAA to filter anything, and a halving tall enough for its
+     * rows to split across the pool.
      */
     private static final int[][] GEOMETRIES = {
         { 74, 46, 37, 23, 0, 0 },
@@ -49,7 +50,8 @@ class PixelBufferFxaaTest {
         { 2, 40, 1, 20, 0, 0 },
         { 40, 2, 20, 1, 0, 0 },
         { 2, 2, 1, 1, 0, 0 },
-        { 3, 3, 3, 3, 0, 0 }
+        { 3, 3, 3, 3, 0, 0 },
+        { 256, 192, 128, 96, 0, 0 }
     };
 
     /** Width of each picture the neighbourhood test draws. */
@@ -61,7 +63,8 @@ class PixelBufferFxaaTest {
     /**
      * Field, island and checkerboard partner of each picture the neighbourhood test draws: opaque,
      * islands on a flat field, translucent, a transparent island holding colour bits, a transparent
-     * field holding colour bits, and premultiplied colour above its alpha.
+     * field holding colour bits, premultiplied colour above its alpha, and one colour at three alphas,
+     * whose neighbourhoods differ in the alpha byte alone.
      */
     private static final int[][] PALETTES = {
         { 0xFF303030, 0xFFE0E0E0, 0xFF2060C0 },
@@ -69,7 +72,8 @@ class PixelBufferFxaaTest {
         { 0x80406080, 0x80F0E0C0, 0x40C02020 },
         { 0xFFC0A060, 0x00FFFFFF, 0x00000000 },
         { 0x00FFFFFF, 0xFFC0A060, 0x0000FF00 },
-        { 0x40303030, 0x40FFFFFF, 0x40102030 }
+        { 0x40303030, 0x40FFFFFF, 0x40102030 },
+        { 0xFFFFE070, 0x80FFE070, 0x20FFE070 }
     };
 
     /**

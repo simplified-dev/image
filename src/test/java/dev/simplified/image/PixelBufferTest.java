@@ -1,5 +1,6 @@
 package dev.simplified.image;
 
+import dev.simplified.image.pixel.AlphaMode;
 import dev.simplified.image.pixel.BlendMode;
 import dev.simplified.image.pixel.ColorMath;
 import dev.simplified.image.pixel.PixelBuffer;
@@ -8,11 +9,13 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.awt.*;
+import java.util.Arrays;
 import java.util.Random;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.*;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class PixelBufferTest {
@@ -189,30 +192,34 @@ class PixelBufferTest {
     }
 
     @Test
-    @DisplayName("blitScaled lays down what a frozen per-pixel copy of its loop lays down")
+    @DisplayName("blitScaled lays down what a frozen per-pixel copy of its loop lays down, over random and transparent targets")
     void blitScaledMatchesTheFrozenLoop() {
+        // Each geometry is drawn over random texels and over a fresh transparent target, the backdrop
+        // most composites land on, so a run filled from what the target holds rather than from the
+        // texel alone differs from the frozen loop.
         int seed = 0;
 
         for (int[] blit : SCALED_BLITS) {
             int srcW = blit[0], srcH = blit[1], dw = blit[2], dh = blit[3], dx = blit[4], dy = blit[5], width = blit[6], height = blit[7];
             int[] drawn = texels(srcW, srcH, ++seed);
-            int[] backdrop = texels(width, height, ++seed);
+            int[] random = texels(width, height, ++seed);
 
-            for (boolean hasAlpha : new boolean[]{ true, false })
-                for (BlendMode mode : BlendMode.values()) {
-                    String label = "%dx%d -> %dx%d at (%d, %d) onto %dx%d, hasAlpha %s, %s"
-                        .formatted(srcW, srcH, dw, dh, dx, dy, width, height, hasAlpha, mode);
-                    PixelBuffer source = PixelBuffer.of(drawn.clone(), srcW, srcH, hasAlpha);
+            for (int[] backdrop : new int[][]{ random, new int[width * height] })
+                for (boolean hasAlpha : new boolean[]{ true, false })
+                    for (BlendMode mode : BlendMode.values()) {
+                        String label = "%dx%d -> %dx%d at (%d, %d) onto %dx%d %s, hasAlpha %s, %s"
+                            .formatted(srcW, srcH, dw, dh, dx, dy, width, height, backdrop == random ? "random" : "transparent", hasAlpha, mode);
+                        PixelBuffer source = PixelBuffer.of(drawn.clone(), srcW, srcH, hasAlpha);
 
-                    PixelBuffer expected = PixelBuffer.of(backdrop.clone(), width, height);
-                    frozenBlitScaled(expected, source, dx, dy, dw, dh, mode);
+                        PixelBuffer expected = PixelBuffer.of(backdrop.clone(), width, height);
+                        frozenBlitScaled(expected, source, dx, dy, dw, dh, mode);
 
-                    PixelBuffer actual = PixelBuffer.of(backdrop.clone(), width, height);
-                    actual.blitScaled(source, dx, dy, dw, dh, mode);
+                        PixelBuffer actual = PixelBuffer.of(backdrop.clone(), width, height);
+                        actual.blitScaled(source, dx, dy, dw, dh, mode);
 
-                    assertArrayEquals(expected.data(), actual.data(), label);
-                    assertArrayEquals(drawn, source.data(), label + " left its source as drawn");
-                }
+                        assertArrayEquals(expected.data(), actual.data(), label);
+                        assertArrayEquals(drawn, source.data(), label + " left its source as drawn");
+                    }
         }
     }
 
@@ -249,6 +256,41 @@ class PixelBufferTest {
             PixelBuffer target = PixelBuffer.of(backdrop.clone(), 64, 64);
             target.blitScaled(source, 0, 0, size, size, null);
             assertArrayEquals(backdrop, target.data(), "%d to %d".formatted(16, size));
+        }
+    }
+
+    @Test
+    @DisplayName("blitScaled and blitScaledFxaa return silently and leave the target as it was at a destination of no width or no height")
+    void scaledBlitsOfNoSizeLeaveTheTarget() {
+        // Origin and size of each composite: no width, a negative width, no width from an origin left
+        // of the target, a negative width and height from an origin left of and above it, no height,
+        // no height from an origin above it, and a negative height. Where the clipped columns run
+        // backwards a column table sized from them could not be built.
+        int[][] sizes = {
+            { 0, 0, 0, 16 },
+            { 0, 0, -5, 8 },
+            { -4, 0, 0, 16 },
+            { -4, -3, -6, -2 },
+            { 0, 0, 16, 0 },
+            { 3, -2, 16, 0 },
+            { 0, 0, 16, -7 }
+        };
+        PixelBuffer source = PixelBuffer.of(texels(16, 16, 4), 16, 16);
+        int[] backdrop = texels(32, 32, 5);
+
+        for (int[] size : sizes) {
+            int dx = size[0], dy = size[1], dw = size[2], dh = size[3];
+
+            for (BlendMode mode : BlendMode.values()) {
+                String label = "%dx%d at (%d, %d), %s".formatted(dw, dh, dx, dy, mode);
+                PixelBuffer target = PixelBuffer.of(backdrop.clone(), 32, 32);
+
+                assertDoesNotThrow(() -> target.blitScaled(source, dx, dy, dw, dh, mode), label);
+                for (AlphaMode alphaMode : AlphaMode.values())
+                    assertDoesNotThrow(() -> target.blitScaledFxaa(source, dx, dy, dw, dh, mode, alphaMode), label + ", " + alphaMode);
+
+                assertArrayEquals(backdrop, target.data(), label);
+            }
         }
     }
 
@@ -315,6 +357,28 @@ class PixelBufferTest {
 
         for (int pixel : column.resize(4, 6, Resample.BILINEAR).data())
             assertThat(pixel, equalTo(0xFF336699));
+    }
+
+    @Test
+    @DisplayName("resize BILINEAR mixes the alpha bytes a buffer without alpha holds, as a frozen copy of its loop does")
+    void resizeBilinearMixesTheAlphaABufferWithoutAlphaHolds() {
+        // The texels hold alpha 0 over colour bits, partial alpha and full alpha. A resize that read
+        // a buffer without alpha as opaque, as FXAA does, would write 0xFF wherever they mix.
+        int seed = 40;
+
+        for (int[] size : new int[][]{ { 7, 5, 16, 11 }, { 16, 16, 9, 6 }, { 1, 4, 3, 8 }, { 12, 70, 5, 66 } }) {
+            int width = size[0], height = size[1], w = size[2], h = size[3];
+            String label = "%dx%d to %dx%d".formatted(width, height, w, h);
+            int[] drawn = texels(width, height, ++seed);
+
+            PixelBuffer withoutAlpha = PixelBuffer.of(drawn.clone(), width, height, false);
+            PixelBuffer resized = withoutAlpha.resize(w, h, Resample.BILINEAR);
+            int[] expected = frozenResizeBilinear(drawn, width, height, w, h);
+
+            assertArrayEquals(expected, resized.data(), label);
+            assertThat(label + " carries no alpha", resized.hasAlpha(), is(false));
+            assertThat(label + " holds alpha under 0xFF", Arrays.stream(expected).anyMatch(pixel -> ColorMath.alpha(pixel) < 0xFF), is(true));
+        }
     }
 
     @Test
@@ -450,9 +514,10 @@ class PixelBufferTest {
     }
 
     /**
-     * A frozen copy of the scaled blit as it stood computing each source column with its own integer
-     * divide: the clip, the row and column products in int arithmetic, rows in order, every pixel
-     * reading its texel afresh, alpha 0 skipped and every other texel blended.
+     * Composites {@code source} onto {@code target} exactly as the scaled blit did when it computed
+     * each source column with its own integer divide: the clip, the row and column products in int
+     * arithmetic, rows in order, every pixel reading its texel afresh, alpha 0 skipped and every
+     * other texel blended.
      *
      * @param target the buffer composited onto
      * @param source the buffer composited
@@ -484,6 +549,76 @@ class PixelBufferTest {
                 data[dstIdx] = ColorMath.blend(src, data[dstIdx], mode);
             }
         }
+    }
+
+    /**
+     * Resizes {@code data} bilinearly exactly as resize did while its sampler read the buffer's own
+     * size: each output pixel's centre mapped into the source, the four taps around it clamped to the
+     * edge, every channel - alpha included - mixed as it is held whatever the buffer says its alpha
+     * carries, and each channel rounded once.
+     *
+     * @param data the pixels to resize, left unmodified
+     * @param width the source width
+     * @param height the source height
+     * @param w the resized width
+     * @param h the resized height
+     * @return the resized pixels
+     */
+    private static int[] frozenResizeBilinear(int[] data, int width, int height, int w, int h) {
+        int[] result = new int[w * h];
+        float[] sample = new float[4];
+
+        for (int y = 0; y < h; y++) {
+            float srcY = ((y + 0.5f) * height) / h - 0.5f;
+
+            for (int x = 0; x < w; x++) {
+                float srcX = ((x + 0.5f) * width) / w - 0.5f;
+                int floorX = (int) Math.floor(srcX);
+                int floorY = (int) Math.floor(srcY);
+                float fx = srcX - floorX;
+                float fy = srcY - floorY;
+
+                int x0 = Math.clamp(floorX, 0, width - 1);
+                int x1 = Math.clamp(floorX + 1, 0, width - 1);
+                int row0 = Math.clamp(floorY, 0, height - 1) * width;
+                int row1 = Math.clamp(floorY + 1, 0, height - 1) * width;
+
+                Arrays.fill(sample, 0f);
+                accumulateTap(data[row0 + x0], (1 - fx) * (1 - fy), sample);
+                accumulateTap(data[row0 + x1], fx * (1 - fy), sample);
+                accumulateTap(data[row1 + x0], (1 - fx) * fy, sample);
+                accumulateTap(data[row1 + x1], fx * fy, sample);
+
+                result[y * w + x] = ColorMath.pack(channel(sample[0]), channel(sample[1]), channel(sample[2]), channel(sample[3]));
+            }
+        }
+
+        return result;
+    }
+
+    /**
+     * Adds one bilinear tap's share of every channel, each as it is held, to a sample being
+     * accumulated.
+     *
+     * @param argb the tap's packed ARGB pixel
+     * @param weight the tap's bilinear weight
+     * @param sample the array accumulating alpha, red, green and blue
+     */
+    private static void accumulateTap(int argb, float weight, float[] sample) {
+        sample[0] += weight * ColorMath.alpha(argb);
+        sample[1] += weight * ColorMath.red(argb);
+        sample[2] += weight * ColorMath.green(argb);
+        sample[3] += weight * ColorMath.blue(argb);
+    }
+
+    /**
+     * Rounds a channel value half up and holds it in {@code [0, 255]}.
+     *
+     * @param value the channel value
+     * @return the rounded channel
+     */
+    private static int channel(float value) {
+        return Math.clamp(Math.round(value), 0, 255);
     }
 
 }
