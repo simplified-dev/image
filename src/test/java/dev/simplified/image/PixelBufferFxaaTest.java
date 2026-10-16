@@ -8,6 +8,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.util.Arrays;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Random;
 
 import static org.hamcrest.MatcherAssert.assertThat;
@@ -48,6 +50,26 @@ class PixelBufferFxaaTest {
         { 40, 2, 20, 1, 0, 0 },
         { 2, 2, 1, 1, 0, 0 },
         { 3, 3, 3, 3, 0, 0 }
+    };
+
+    /** Width of each picture the neighbourhood test draws. */
+    private static final int STENCIL_WIDTH = 23;
+
+    /** Height of each picture the neighbourhood test draws. */
+    private static final int STENCIL_HEIGHT = 19;
+
+    /**
+     * Field, island and checkerboard partner of each picture the neighbourhood test draws: opaque,
+     * islands on a flat field, translucent, a transparent island holding colour bits, a transparent
+     * field holding colour bits, and premultiplied colour above its alpha.
+     */
+    private static final int[][] PALETTES = {
+        { 0xFF303030, 0xFFE0E0E0, 0xFF2060C0 },
+        { 0xFF303030, 0xFFE0E0E0, 0xFF303030 },
+        { 0x80406080, 0x80F0E0C0, 0x40C02020 },
+        { 0xFFC0A060, 0x00FFFFFF, 0x00000000 },
+        { 0x00FFFFFF, 0xFFC0A060, 0x0000FF00 },
+        { 0x40303030, 0x40FFFFFF, 0x40102030 }
     };
 
     /**
@@ -286,6 +308,94 @@ class PixelBufferFxaaTest {
         assertThat("the frozen filter smoothed something", smoothed, is(greaterThan(0)));
     }
 
+    @Test
+    @DisplayName("FXAA in place skips only a neighbourhood of one value, writing what the frozen filter writes everywhere else")
+    void fxaaInPlaceSkipsOnlyANeighbourhoodOfOneValue() {
+        // Four corners equal with a different centre, or a centre and three corners equal with the
+        // fourth different, are filtered wherever their contrast clears the threshold; an island
+        // makes both, the second on each of its four corners. A buffer whose alpha carries no data
+        // keeps the alpha bits it holds wherever nothing is filtered.
+        Map<String, int[]> pictures = new LinkedHashMap<>();
+
+        for (int[] palette : PALETTES) {
+            String colours = "%08X/%08X/%08X".formatted(palette[0], palette[1], palette[2]);
+            pictures.put("islands " + colours, islands(palette[0], palette[1], palette[2]));
+            pictures.put("inverted islands " + colours, islands(palette[1], palette[0], palette[2]));
+            pictures.put("flat %08X".formatted(palette[0]), flat(palette[0]));
+        }
+
+        pictures.put("translucent ramp", ramp());
+        int smoothed = 0;
+
+        for (Map.Entry<String, int[]> picture : pictures.entrySet()) {
+            int[] drawn = picture.getValue();
+
+            for (boolean hasAlpha : new boolean[]{ true, false })
+                for (AlphaMode alphaMode : AlphaMode.values()) {
+                    PixelBuffer buffer = PixelBuffer.of(drawn.clone(), STENCIL_WIDTH, STENCIL_HEIGHT, hasAlpha);
+                    buffer.applyFxaa(alphaMode);
+                    int[] expected = FrozenFxaa.apply(drawn, STENCIL_WIDTH, STENCIL_HEIGHT, hasAlpha, alphaMode);
+
+                    assertArrayEquals(expected, buffer.data(), "%s, hasAlpha %s, %s"
+                        .formatted(picture.getKey(), hasAlpha, alphaMode));
+                    if (!Arrays.equals(drawn, expected)) smoothed++;
+                }
+        }
+
+        assertThat("the frozen filter smoothed something", smoothed, is(greaterThan(0)));
+    }
+
+    /**
+     * Draws a checkerboard of a field and its partner with single-pixel islands on the field's
+     * squares, four apart each way. An island's neighbourhood differs from the field at its centre
+     * alone, and each of its diagonal neighbours' at the one corner the island sits on, while the
+     * partner squares give the bilinear samples a second value to mix in. Every other neighbourhood
+     * holds one value.
+     *
+     * @param field the pixel on the squares the islands sit among
+     * @param island the pixel each island holds
+     * @param partner the pixel on the other squares
+     * @return the pixels, {@link #STENCIL_WIDTH} by {@link #STENCIL_HEIGHT}
+     */
+    private static int[] islands(int field, int island, int partner) {
+        int[] pixels = new int[STENCIL_WIDTH * STENCIL_HEIGHT];
+
+        for (int y = 0; y < STENCIL_HEIGHT; y++)
+            for (int x = 0; x < STENCIL_WIDTH; x++)
+                pixels[y * STENCIL_WIDTH + x] = x % 4 == 2 && y % 4 == 2 ? island : (x + y) % 2 == 0 ? field : partner;
+
+        return pixels;
+    }
+
+    /**
+     * Draws one pixel everywhere.
+     *
+     * @param pixel the pixel
+     * @return the pixels, {@link #STENCIL_WIDTH} by {@link #STENCIL_HEIGHT}
+     */
+    private static int[] flat(int pixel) {
+        int[] pixels = new int[STENCIL_WIDTH * STENCIL_HEIGHT];
+        Arrays.fill(pixels, pixel);
+        return pixels;
+    }
+
+    /**
+     * Draws translucent pixels whose alpha and colour channels step by a few units between
+     * neighbours, so no two neighbouring pixels hold one value and the contrast between them stays
+     * mostly under the threshold.
+     *
+     * @return the pixels, {@link #STENCIL_WIDTH} by {@link #STENCIL_HEIGHT}
+     */
+    private static int[] ramp() {
+        int[] pixels = new int[STENCIL_WIDTH * STENCIL_HEIGHT];
+
+        for (int y = 0; y < STENCIL_HEIGHT; y++)
+            for (int x = 0; x < STENCIL_WIDTH; x++)
+                pixels[y * STENCIL_WIDTH + x] = ColorMath.pack(0x90 + (x + y) % 3, 100 + x % 5, 120 + y % 4, 140 + (x * y) % 3);
+
+        return pixels;
+    }
+
     /**
      * Draws random pixels of random alpha, a fifth of them with no alpha over colour channels that
      * still hold bits.
@@ -333,9 +443,10 @@ class PixelBufferFxaaTest {
 
     /**
      * A frozen copy of FXAA in place as it stood before its per-pixel body was shared with the scaled
-     * composite: the whole source cloned and forced opaque up front when its alpha carries no data, the
-     * float operations in their order, the bilinear taps clamped and strided by the buffer's own
-     * size, and the luma the edge test reads.
+     * composite, and before a neighbourhood of one value was skipped ahead of its lumas: the whole
+     * source cloned and forced opaque up front when its alpha carries no data, the edge test run on
+     * every interior pixel, the float operations in their order, the bilinear taps clamped and strided
+     * by the buffer's own size, and the luma the edge test reads.
      */
     private static final class FrozenFxaa {
 

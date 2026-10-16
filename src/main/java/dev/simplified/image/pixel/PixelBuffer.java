@@ -882,6 +882,10 @@ public class PixelBuffer {
      * {@code source}, or answers {@link #UNFILTERED} when the neighbourhood falls under the contrast
      * threshold and the pixel stays as it is.
      * <p>
+     * A neighbourhood whose five edge-test reads hold one value answers {@link #UNFILTERED} before any
+     * luma is computed: its contrast is zero, under a threshold that never drops below its positive
+     * floor, so the edge test would leave it unfiltered too.
+     * <p>
      * Every read strides and clamps by the {@code width} and {@code height} passed in, the source's
      * own. When {@code forceAlpha} is set each of the thirteen reads - the five the edge test takes
      * and the eight bilinear taps - is read as opaque, for a source whose alpha carries no data.
@@ -908,6 +912,9 @@ public class PixelBuffer {
         int rgbSw = source[(y + 1) * width + (x - 1)] | fill;
         int rgbSe = source[(y + 1) * width + (x + 1)] | fill;
         int rgbM = source[y * width + x] | fill;
+
+        if (rgbNw == rgbM && rgbNe == rgbM && rgbSw == rgbM && rgbSe == rgbM)
+            return UNFILTERED;
 
         float lumaNw = edgeLuma(rgbNw, alphaMode);
         float lumaNe = edgeLuma(rgbNe, alphaMode);
