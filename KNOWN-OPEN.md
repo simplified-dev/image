@@ -50,6 +50,22 @@ Line 20 says the encoder is keyframe-only 16x16 intra with no B_PRED and no inte
 - Type: **GAP**
 - Status: **OPEN**
 
+## Encoders read every buffer as straight colour, so a premultiplied buffer has no encode path
+`toBufferedImage` declares its pixels straight (`ColorModel.getRGBdefault()`, raster not premultiplied), and `GifImageWriter.flattenAllFrames` composites each pixel over the background as straight colour. A buffer holding premultiplied colour - anything drawn with source-over onto a transparent surface, which is what asset-renderer hands out - is therefore written with its colour already scaled by alpha, and a viewer or the GIF flatten scales it again: every partly transparent pixel lands darker than it was drawn, a translucent subject whole and an anti-aliased edge as a dark fringe. A caller can convert first with `unpremultiplyAlpha`, which floors (see below); no encoder takes an `AlphaMode`. asset-renderer's PNG and GIF output carries this today. HIGH once a consumer shows a translucent render visibly darker.
+
+- Affected: `src/main/java/dev/simplified/image/pixel/PixelBuffer.java:1086-1098` (`toBufferedImage`), `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:144-182` (`flattenAllFrames`)
+- Severity: **MEDIUM**
+- Type: **GAP**
+- Status: **OPEN**
+
+## No downscale averages: `blitScaled` decimates
+`blitScaled` and `blitScaledFxaa` map each destination pixel to one source pixel (`x * sw / dw`, read from the column table `sourceColumns` builds) and offer no other filter, and `resize` offers `NEAREST`, a 2x2 `BILINEAR` with no prefilter, and AWT `BICUBIC`. The library's one box filter, `PixelMask.downsample`, is boolean. A supersampled render scaled down through either composite keeps one sample of each block and discards the rest, so the supersampling averages nothing, and a `BILINEAR` downscale beyond 2x aliases the same way. asset-renderer's `RasterPass` scales down through `blitScaledFxaa` when it anti-aliases and through `blitScaled` when it does not: FXAA smooths the hi-res pixels the scale-down samples, and the scale-down still keeps one sample per block - a decimation of a filtered source. What such a caller needs is an area-averaging downsample of premultiplied colour.
+
+- Affected: `src/main/java/dev/simplified/image/pixel/PixelBuffer.java:682-755` (`blitScaled`), `src/main/java/dev/simplified/image/pixel/PixelBuffer.java:780-815` (`blitScaledFxaa`), `src/main/java/dev/simplified/image/pixel/PixelBuffer.java:1208-1215` (`sourceColumns`), `src/main/java/dev/simplified/image/pixel/PixelBuffer.java:375-419` (`resize`), `src/main/java/dev/simplified/image/pixel/PixelMask.java:90` (`downsample`)
+- Severity: **MEDIUM**
+- Type: **GAP**
+- Status: **OPEN**
+
 ## WebP write options cannot force infinite looping over a finite count
 `WebPImageWriter` reads a loop count of 0 in `WebPWriteOptions` as "unset" and falls back to the image's own loop count. `withLoopCount(0)`, which means infinite, is therefore ignored whenever the `AnimatedImageData` carries a finite count.
 
@@ -176,4 +192,52 @@ Four class headers describe shipped features as absent or future work: `VP8Encod
 - Affected: `src/main/java/dev/simplified/image/codec/webp/lossy/VP8Encoder.java:10-13`, `src/main/java/dev/simplified/image/codec/webp/lossy/VP8Decoder.java:19-21`, `src/main/java/dev/simplified/image/codec/webp/lossless/VP8LEncoder.java:22-24`, `src/main/java/dev/simplified/image/codec/webp/lossy/VP8TokenDecoder.java:9-11`
 - Severity: **LOW**
 - Type: **GAP**
+- Status: **OPEN**
+
+## `resize` takes no alpha convention, and its two smoothing filters assume opposite ones
+`BILINEAR` mixes every channel as it is held, which is correct for premultiplied colour and darkens a straight pixel beside a transparent one toward the transparent pixel's colour. `BICUBIC` draws through AWT with the raster declared straight, which is correct for straight colour and weights a premultiplied buffer by alpha twice. A caller cannot say which it holds, and switching filter switches the convention assumed. Nothing in the workspace resizes with either today. `resize(w, h, Resample, AlphaMode)` would route the bilinear sampler's alpha weighting and declare the AWT raster premultiplied where asked.
+
+- Affected: `src/main/java/dev/simplified/image/pixel/PixelBuffer.java:375-419` (`resize`)
+- Severity: **LOW**
+- Type: **GAP**
+- Status: **OPEN**
+
+## FXAA's absolute thresholds are 0-to-1 luma constants read against a 0-to-255 luma
+`fxaaPixel`, the per-pixel body `applyFxaa` and `blitScaledFxaa` share, skips a neighbourhood whose contrast is under `max(0.0156, lumaMax * 0.0312)` and floors its direction reduction at `1/128`. Those are FXAA's values for luma in `[0, 1]`, but the luma here is in `[0, 255]`, so both floors are effectively inert: the relative threshold decides every case above near-black, and the direction floor never binds there. Not checked against a reference shader; changing either moves every FXAA output.
+
+- Affected: `src/main/java/dev/simplified/image/pixel/PixelBuffer.java:950-951`, `src/main/java/dev/simplified/image/pixel/PixelBuffer.java:975`, `src/main/java/dev/simplified/image/pixel/PixelBuffer.java:981-984` (`fxaaPixel`)
+- Severity: **LOW**
+- Type: **RISK**
+- Status: **OPEN**
+
+## `unpremultiplyAlpha` floors while `premultiplyAlpha` rounds half up
+The division back truncates, so a premultiply-then-unpremultiply round trip is biased low; `PixelBufferTest`'s round-trip case allows a drift of 2. A caller converting a premultiplied buffer to straight before encoding loses up to a level per channel at low alpha.
+
+- Affected: `src/main/java/dev/simplified/image/pixel/PixelBuffer.java:579-593` (`unpremultiplyAlpha`), `src/main/java/dev/simplified/image/pixel/PixelVector.java:50` (`premultiply`)
+- Severity: **LOW**
+- Type: **RISK**
+- Status: **OPEN**
+
+## `Resample.NEAREST` promises the centre-closest pixel; `resize` takes the top-left one
+The javadoc says nearest picks the source pixel whose centre is closest to the sampled location, but `resize` maps `sx = x * W / w`, the top-left of each footprint, as `blitScaled` does: for a 3x downscale, output 1 reads source 3 where the centre-closest is 4.
+
+- Affected: `src/main/java/dev/simplified/image/pixel/Resample.java:25-30`, `src/main/java/dev/simplified/image/pixel/PixelBuffer.java:400`, `:402` (`resize`)
+- Severity: **LOW**
+- Type: **GAP**
+- Status: **OPEN**
+
+## `resize(BICUBIC)` always reports `hasAlpha = true`
+`NEAREST` and `BILINEAR` keep the source's `hasAlpha`; `BICUBIC` wraps a `TYPE_INT_ARGB` image, so an opaque buffer comes back flagged as carrying alpha and loses `blit`'s opaque fast path.
+
+- Affected: `src/main/java/dev/simplified/image/pixel/PixelBuffer.java:381`, `:392` (`resize`)
+- Severity: **LOW**
+- Type: **BUG**
+- Status: **OPEN**
+
+## `PixelGraphics.drawImage`'s rectangle and transform forms overwrite instead of compositing
+The source/destination-rectangle form and the `AffineTransform` form write every pixel with alpha above zero through `setPixelSafe`: a partly transparent pixel replaces the destination instead of blending over it, a flipped rectangle loses its flip to the min corners, and the clip is ignored. The `(img, x, y)` and `(img, x, y, w, h)` forms blend with `BlendMode.NORMAL`. No workspace consumer calls the two forms today.
+
+- Affected: `src/main/java/dev/simplified/image/pixel/PixelGraphics.java:694-718`, `src/main/java/dev/simplified/image/pixel/PixelGraphics.java:726-752`
+- Severity: **LOW**
+- Type: **BUG**
 - Status: **OPEN**
