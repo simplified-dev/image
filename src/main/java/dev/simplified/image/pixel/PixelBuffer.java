@@ -702,16 +702,51 @@ public class PixelBuffer {
 
         int[] columns = sourceColumns(x0, x1, source.width, dw);
 
+        if (source.width >= dw) {
+            forEachRow(y0, y1, y -> {
+                int dstRow = (dy + y) * this.width;
+                int sy = (y * source.height) / dh;
+
+                for (int x = x0; x < x1; x++) {
+                    int sx = columns[x - x0];
+                    int src = source.data[sy * source.width + sx];
+                    if (ColorMath.alpha(src) == 0) continue;
+                    int dstIdx = dstRow + dx + x;
+                    this.data[dstIdx] = ColorMath.blend(src, this.data[dstIdx], mode);
+                }
+            });
+            return;
+        }
+
+        // Magnifying, each run of columns reading one texel is decided once from that texel's own
+        // alpha: skipped at 0, filled where the blend answers the texel whatever lies beneath it, and
+        // otherwise blended pixel by pixel, each pixel reading the texel afresh because a source may
+        // hold this buffer's pixel array.
         forEachRow(y0, y1, y -> {
             int dstRow = (dy + y) * this.width;
             int sy = (y * source.height) / dh;
 
-            for (int x = x0; x < x1; x++) {
+            for (int x = x0, end; x < x1; x = end) {
                 int sx = columns[x - x0];
-                int src = source.data[sy * source.width + sx];
-                if (ColorMath.alpha(src) == 0) continue;
-                int dstIdx = dstRow + dx + x;
-                this.data[dstIdx] = ColorMath.blend(src, this.data[dstIdx], mode);
+                end = x + 1;
+                while (end < x1 && columns[end - x0] == sx) end++;
+
+                int srcIdx = sy * source.width + sx;
+                int src = source.data[srcIdx];
+                int sa = ColorMath.alpha(src);
+                if (sa == 0) continue;
+
+                if (mode == BlendMode.REPLACE || sa == 0xFF && (mode == BlendMode.NORMAL || mode == BlendMode.PREMULTIPLIED)) {
+                    Arrays.fill(this.data, dstRow + dx + x, dstRow + dx + end, src);
+                    continue;
+                }
+
+                for (int i = x; i < end; i++) {
+                    int texel = source.data[srcIdx];
+                    if (ColorMath.alpha(texel) == 0) continue;
+                    int dstIdx = dstRow + dx + i;
+                    this.data[dstIdx] = ColorMath.blend(texel, this.data[dstIdx], mode);
+                }
             }
         });
     }

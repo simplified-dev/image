@@ -21,10 +21,11 @@ class PixelBufferTest {
      * Source width, source height, destination width, destination height, destination origin, target
      * width and target height of each scaled blit held to the frozen per-pixel loop: a 16x
      * magnification, a halving, magnifications by 100 / 16 and 13 / 7, a shrink by 4 / 9, a
-     * one-to-one copy, an origin left of and above the target that starts the blit part way through a
-     * magnified texel, a destination wider than the target clipped on both sides, an origin that clips
-     * the right and bottom, a magnification tall enough for its rows to run in parallel, and a
-     * destination so wide that each column's product overflows an int and wraps.
+     * one-to-one copy and a shrink by 2 / 5 from origins left of the target, an origin left of and
+     * above the target that starts the blit part way through a magnified texel, a destination wider
+     * than the target clipped on both sides, an origin that clips the right and bottom, a
+     * magnification tall enough for its rows to run in parallel, and a destination so wide that each
+     * column's product overflows an int and wraps.
      */
     private static final int[][] SCALED_BLITS = {
         { 16, 16, 256, 256, 0, 0, 256, 256 },
@@ -32,7 +33,8 @@ class PixelBufferTest {
         { 16, 16, 100, 100, 0, 0, 100, 100 },
         { 7, 7, 13, 13, 0, 0, 13, 13 },
         { 9, 9, 4, 4, 1, 1, 6, 6 },
-        { 13, 11, 13, 11, 2, -3, 20, 20 },
+        { 13, 11, 13, 11, -2, -3, 20, 20 },
+        { 30, 20, 12, 8, -5, 2, 6, 10 },
         { 16, 16, 64, 48, -9, -5, 40, 40 },
         { 16, 8, 300, 40, -37, 3, 200, 50 },
         { 16, 16, 256, 256, 100, 120, 256, 256 },
