@@ -44,9 +44,10 @@ import java.util.stream.IntStream;
 public class PixelBuffer {
 
     /**
-     * Minimum row count before a row loop called from outside a fork-join pool dispatches its rows to
-     * the common fork-join pool. Below this, the fork-join overhead dominates the per-row work. A row
-     * loop called on a fork-join worker runs its rows on that worker whatever their count.
+     * Minimum row count before a row loop splits its rows across a fork-join pool. Below this, the
+     * fork-join overhead dominates the per-row work. {@link #forEachRow} splits only when called off
+     * every pool, and called on a fork-join worker runs its rows on that worker whatever their count;
+     * {@link #forEachRowAcrossPool} splits wherever it is called.
      */
     private static final int MIN_PARALLEL_ROWS = 64;
 
@@ -762,6 +763,10 @@ public class PixelBuffer {
      * {@link #blitScaled(PixelBuffer, int, int, int, int, BlendMode)} lays down, filtering only the
      * source pixels the rescale reads: each one is the pixel FXAA writes there, read from the
      * unfiltered source, so a downscale filters a fraction of the source and never copies it.
+     * <p>
+     * A composite of many rows splits them across a fork-join pool - the calling worker's own when it
+     * is called on one - so a single composite handed to a pool still spreads its filtering over the
+     * pool's workers.
      *
      * @param source the source buffer, holding a pixel array other than this buffer's
      * @param dx the destination x origin
@@ -789,7 +794,7 @@ public class PixelBuffer {
         boolean forceAlpha = !source.hasAlpha;
         int[] columns = sourceColumns(x0, x1, srcW, dw);
 
-        forEachRow(y0, y1, y -> {
+        forEachRowAcrossPool(y0, y1, y -> {
             float[] samples = new float[8];
             int dstRow = (dy + y) * this.width;
             int sy = (y * srcH) / dh;
@@ -1130,14 +1135,15 @@ public class PixelBuffer {
     /**
      * Iterates rows in {@code [start, end)}, dispatching to the common fork-join pool when the range
      * covers at least {@link #MIN_PARALLEL_ROWS} rows and the calling thread is not a fork-join
-     * worker, and otherwise running every row on the calling thread in ascending order. A caller
-     * already running as one of many tasks on a pool worker keeps its rows to itself rather than
-     * forking them into the pool it is part of.
+     * worker, and otherwise running every row on the calling thread in ascending order. A call on
+     * any fork-join worker, of any pool, runs its rows itself, whether it is its pool's only task or
+     * one of many, so a single operation handed to a pool runs its rows on one thread. A row loop
+     * whose rows repay a fork there runs through {@link #forEachRowAcrossPool} instead.
      * <p>
-     * Each body writes only the target pixels its own row owns and reads only a source no row
-     * writes, so the rows commute and either schedule writes the same bytes. A composite whose
-     * source holds the target's own pixel array breaks that: {@code blit(this, ...)}, or a
-     * {@link PixelGraphics} drawing the target's own {@link #toBufferedImage()}, whose array
+     * Each body reads and writes only the target pixels its own index owns, and otherwise reads only
+     * a source no body writes, so the bodies commute and either schedule writes the same bytes. A
+     * composite whose source holds the target's own pixel array breaks that: {@code blit(this, ...)},
+     * or a {@link PixelGraphics} drawing the target's own {@link #toBufferedImage()}, whose array
      * {@link #wrap(BufferedImage)} shares rather than copies, reads pixels other rows write, and
      * writes bytes that depend on the order its rows run in under either schedule.
      *
@@ -1149,6 +1155,34 @@ public class PixelBuffer {
         int count = end - start;
 
         if (count >= MIN_PARALLEL_ROWS && !ForkJoinTask.inForkJoinPool()) {
+            IntStream.range(start, end)
+                .parallel()
+                .forEach(body);
+        } else {
+            for (int y = start; y < end; y++)
+                body.accept(y);
+        }
+    }
+
+    /**
+     * Iterates rows in {@code [start, end)}, splitting them across a fork-join pool when the range
+     * covers at least {@link #MIN_PARALLEL_ROWS} rows - the calling worker's own pool when it is
+     * called on one, the common pool otherwise - and otherwise running every row on the calling
+     * thread in ascending order.
+     * <p>
+     * A row loop whose rows each carry work enough to repay a fork wherever it is called runs through
+     * this rather than {@link #forEachRow}, so a single call on a pool worker spreads its rows over
+     * the pool's workers. Each body is held to the footprint {@link #forEachRow} states, and any
+     * scratch a body writes is its own, allocated per row.
+     *
+     * @param start the first row index, inclusive
+     * @param end the last row index, exclusive
+     * @param body the per-row action
+     */
+    static void forEachRowAcrossPool(int start, int end, @NotNull IntConsumer body) {
+        int count = end - start;
+
+        if (count >= MIN_PARALLEL_ROWS) {
             IntStream.range(start, end)
                 .parallel()
                 .forEach(body);

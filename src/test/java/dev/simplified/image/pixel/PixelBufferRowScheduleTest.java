@@ -28,10 +28,11 @@ import static org.hamcrest.Matchers.sameInstance;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 
 /**
- * Holds the row loop every pixel operation runs through to its schedule: called on a fork-join worker
- * it runs every row on that worker in ascending order, called off the pool it hands a range of at
- * least {@value #THRESHOLD} rows to the pool and keeps a shorter one on the caller, and every
- * operation writes the same bytes on a worker as off the pool.
+ * Holds the two row loops pixel operations run through to their schedules: the shared loop called on
+ * a fork-join worker runs every row on that worker in ascending order, and called off the pool hands
+ * a range of at least {@value #THRESHOLD} rows to the pool and keeps a shorter one on the caller; the
+ * loop that splits across the pool hands such a range to the pool from a worker as well, and keeps a
+ * shorter one on that worker; and every operation writes the same bytes on a worker as off the pool.
  */
 class PixelBufferRowScheduleTest {
 
@@ -116,6 +117,49 @@ class PixelBufferRowScheduleTest {
     }
 
     @Test
+    @DisplayName("rows split across the pool from a fork-join worker reach its other workers from the threshold and stay on the caller below it")
+    void rowsSplitAcrossThePoolFromAWorkerReachItsOtherWorkers() throws Exception {
+        int below = THRESHOLD - 1;
+        Thread[] ranOn = new Thread[below];
+        int[] order = new int[below];
+        AtomicInteger next = new AtomicInteger();
+
+        Thread caller = onPoolWorker(() -> {
+            PixelBuffer.forEachRowAcrossPool(0, below, y -> {
+                ranOn[y] = Thread.currentThread();
+                order[next.getAndIncrement()] = y;
+            });
+            return Thread.currentThread();
+        });
+
+        for (int y = 0; y < below; y++)
+            assertThat("row %d of %d ran on the calling worker".formatted(y, below), ranOn[y], is(sameInstance(caller)));
+
+        assertArrayEquals(IntStream.range(0, below).toArray(), order, "rows below the threshold in ascending order");
+
+        // The calling worker holds its first row until another worker has run one, or for ten seconds
+        // where none does.
+        Set<Thread> threads = ConcurrentHashMap.newKeySet();
+        CountDownLatch workerRan = new CountDownLatch(1);
+        AtomicBoolean held = new AtomicBoolean();
+
+        Thread self = onPoolWorker(() -> {
+            Thread worker = Thread.currentThread();
+            PixelBuffer.forEachRowAcrossPool(0, THRESHOLD, y -> {
+                threads.add(Thread.currentThread());
+                if (Thread.currentThread() != worker)
+                    workerRan.countDown();
+                else if (held.compareAndSet(false, true))
+                    awaitWorker(workerRan);
+            });
+            return worker;
+        });
+
+        assertThat("%d rows reached another pool worker".formatted(THRESHOLD),
+            threads.stream().anyMatch(thread -> thread != self && thread instanceof ForkJoinWorkerThread), is(true));
+    }
+
+    @Test
     @DisplayName("every row operation and FXAA write the same bytes on a fork-join worker as off the pool")
     void everyRowOperationWritesTheSameBytesOnAWorker() throws Exception {
         Map<String, UnaryOperator<PixelBuffer>> operations = operations();
@@ -131,7 +175,7 @@ class PixelBufferRowScheduleTest {
     }
 
     /**
-     * Builds every operation that runs its rows through the row loop, each covering at least
+     * Builds every operation that runs its rows through either row loop, each covering at least
      * {@value #THRESHOLD} rows of it, plus FXAA in place in both conventions. Each takes its own copy
      * of the picture and answers the buffer it wrote.
      *
@@ -169,9 +213,10 @@ class PixelBufferRowScheduleTest {
             operations.put("blitScaled shrinking " + mode, inPlace(buffer -> buffer.blitScaled(large, 3, 10, 90, 120, mode)));
             operations.put("blitScaled magnifying " + mode, inPlace(buffer -> buffer.blitScaled(small, -7, 5, 120, 130, mode)));
 
-            for (AlphaMode alphaMode : AlphaMode.values())
+            for (AlphaMode alphaMode : AlphaMode.values()) {
                 operations.put("blitScaledFxaa %s %s".formatted(mode, alphaMode),
                     inPlace(buffer -> buffer.blitScaledFxaa(filtered, 2, 4, 80, 70, mode, alphaMode)));
+            }
         }
 
         for (AlphaMode alphaMode : AlphaMode.values())
