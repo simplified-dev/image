@@ -34,7 +34,7 @@ Pure-Java multi-format image codec library with full VP8/VP8L WebP encoding and 
 - **Frame interpolation** - `AnimatedImageData` supports time-based frame lookup with per-pixel linear interpolation and bilinear sampling for smooth animation playback
 - **Auto-format detection** - `ImageFactory` identifies formats from magic bytes and routes to the correct codec automatically
 - **Multiple I/O sources** - Read from and write to byte arrays, files, streams, URLs, Base64, `BufferedImage`, and classpath resources
-- **FXAA anti-aliasing** - `PixelBuffer` applies per-pixel FXAA with parallel scanline processing and luma-based edge detection
+- **FXAA anti-aliasing** - `PixelBuffer` applies per-pixel FXAA with parallel scanline processing and luma-based edge detection, to straight or premultiplied colour
 - **Pure Java** - No native dependencies, JNI bindings, or platform-specific code
 - **JitPack distribution** - Add as a Gradle dependency with no manual installation
 
@@ -189,6 +189,7 @@ factory.toFiles(images, ImageFormat.PNG, outputFiles);
 ### Pixel Manipulation
 
 ```java
+import dev.simplified.image.pixel.AlphaMode;
 import dev.simplified.image.pixel.PixelBuffer;
 
 PixelBuffer buffer = image.toPixelBuffer();
@@ -197,8 +198,13 @@ PixelBuffer buffer = image.toPixelBuffer();
 int argb = buffer.getPixel(x, y);
 buffer.setPixel(x, y, 0xFFFF0000); // solid red
 
-// Apply FXAA anti-aliasing (parallel scanline processing).
+// Apply FXAA anti-aliasing (parallel scanline processing) to straight colour, as a decoded image holds.
 buffer.applyFxaa();
+
+// A buffer drawn onto transparency with BlendMode.NORMAL holds its colour already scaled by alpha; say so.
+PixelBuffer render = PixelBuffer.create(256, 256);
+render.blit(buffer, 0, 0);
+render.applyFxaa(AlphaMode.PREMULTIPLIED);
 ```
 
 ## Supported Formats
