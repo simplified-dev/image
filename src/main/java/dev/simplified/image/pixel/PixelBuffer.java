@@ -18,6 +18,7 @@ import java.awt.image.Raster;
 import java.awt.image.SinglePixelPackedSampleModel;
 import java.util.Arrays;
 import java.util.Optional;
+import java.util.concurrent.ForkJoinTask;
 import java.util.function.IntConsumer;
 import java.util.stream.IntStream;
 
@@ -43,8 +44,9 @@ import java.util.stream.IntStream;
 public class PixelBuffer {
 
     /**
-     * Minimum row count before row-parallel loops dispatch to the common fork-join pool.
-     * Below this, the fork-join overhead dominates the per-row work.
+     * Minimum row count before a row loop called from outside a fork-join pool dispatches its rows to
+     * the common fork-join pool. Below this, the fork-join overhead dominates the per-row work. A row
+     * loop called on a fork-join worker runs its rows on that worker whatever their count.
      */
     private static final int MIN_PARALLEL_ROWS = 64;
 
@@ -1127,7 +1129,17 @@ public class PixelBuffer {
 
     /**
      * Iterates rows in {@code [start, end)}, dispatching to the common fork-join pool when the range
-     * covers at least {@link #MIN_PARALLEL_ROWS} rows and running sequentially otherwise.
+     * covers at least {@link #MIN_PARALLEL_ROWS} rows and the calling thread is not a fork-join
+     * worker, and otherwise running every row on the calling thread in ascending order. A caller
+     * already running as one of many tasks on a pool worker keeps its rows to itself rather than
+     * forking them into the pool it is part of.
+     * <p>
+     * Each body writes only the target pixels its own row owns and reads only a source no row
+     * writes, so the rows commute and either schedule writes the same bytes. A composite whose
+     * source holds the target's own pixel array breaks that: {@code blit(this, ...)}, or a
+     * {@link PixelGraphics} drawing the target's own {@link #toBufferedImage()}, whose array
+     * {@link #wrap(BufferedImage)} shares rather than copies, reads pixels other rows write, and
+     * writes bytes that depend on the order its rows run in under either schedule.
      *
      * @param start the first row index, inclusive
      * @param end the last row index, exclusive
@@ -1136,7 +1148,7 @@ public class PixelBuffer {
     static void forEachRow(int start, int end, @NotNull IntConsumer body) {
         int count = end - start;
 
-        if (count >= MIN_PARALLEL_ROWS) {
+        if (count >= MIN_PARALLEL_ROWS && !ForkJoinTask.inForkJoinPool()) {
             IntStream.range(start, end)
                 .parallel()
                 .forEach(body);
