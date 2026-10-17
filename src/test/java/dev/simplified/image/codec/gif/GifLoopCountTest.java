@@ -37,11 +37,7 @@ class GifLoopCountTest {
     private static final int RED = 0xFFFF0000;
     private static final int BLUE = 0xFF0000FF;
 
-    /**
-     * The side of a fixture frame: ImageIO's GIF reader, which {@link GifImageReader} decodes
-     * through, decodes the rows of an interlaced frame shorter than eight rows wrongly, and this
-     * writer interlaces every frame.
-     */
+    /** The side of a fixture frame. */
     private static final int SIZE = 8;
 
     // ──── what the writer declares ────

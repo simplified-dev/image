@@ -5,6 +5,7 @@ import org.jetbrains.annotations.NotNull;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.IntConsumer;
 
 /**
  * Walks the block structure of an encoded GIF, so a test reads what a writer declared out of the
@@ -37,6 +38,22 @@ final class GifBlocks {
                 offsets.add(introducer);
         });
         return offsets;
+    }
+
+    /**
+     * Returns whether each image descriptor declares its frame interlaced, in file order.
+     * <p>
+     * The descriptor is laid out {@code 2C [left] [top] [width] [height] [packed]}, each position and
+     * size two bytes, and bit {@code 0x40} of its packed field is the interlace flag.
+     *
+     * @param gif the encoded GIF
+     * @return the interlace flag of each image descriptor
+     * @throws IllegalStateException if the walk meets a block it does not know
+     */
+    static @NotNull List<Boolean> interlaceFlags(byte @NotNull [] gif) {
+        List<Boolean> flags = new ArrayList<>();
+        walk(gif, (label, introducer) -> { }, packed -> flags.add((gif[packed] & 0x40) != 0));
+        return flags;
     }
 
     /**
@@ -130,6 +147,19 @@ final class GifBlocks {
      * @throws IllegalStateException if the walk meets a block it does not know
      */
     private static void walkExtensions(byte @NotNull [] gif, @NotNull ExtensionVisitor visitor) {
+        walk(gif, visitor, packed -> { });
+    }
+
+    /**
+     * Walks the block structure of a GIF, handing every extension and every image descriptor to a
+     * visitor.
+     *
+     * @param gif the encoded GIF
+     * @param extensions what receives each extension's label and the offset of its introducer
+     * @param descriptors what receives the offset of each image descriptor's packed field
+     * @throws IllegalStateException if the walk meets a block it does not know
+     */
+    private static void walk(byte @NotNull [] gif, @NotNull ExtensionVisitor extensions, @NotNull IntConsumer descriptors) {
         int position = 6; // header: "GIF89a"
 
         int screenPacked = gif[position + 4] & 0xFF;
@@ -145,13 +175,14 @@ final class GifBlocks {
 
             if (block == 0x21) { // extension
                 int label = gif[position++] & 0xFF;
-                visitor.visit(label, position - 2);
+                extensions.visit(label, position - 2);
                 position = skipSubBlocks(gif, position);
                 continue;
             }
 
             if (block == 0x2C) { // image descriptor
                 position += 8; // left, top, width, height
+                descriptors.accept(position);
                 int imagePacked = gif[position++] & 0xFF;
                 if ((imagePacked & 0x80) != 0)
                     position += colorTableBytes(imagePacked);

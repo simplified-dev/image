@@ -45,11 +45,7 @@ class GifDisposalTest {
     /** The options every played fixture is written with: a transparent palette slot. */
     private static final GifWriteOptions TRANSPARENT = GifWriteOptions.builder().isTransparent().build();
 
-    /**
-     * The side of a decoded fixture: ImageIO's GIF reader, which {@link GifImageReader} decodes
-     * through, decodes the rows of an interlaced frame shorter than eight rows wrongly, and this
-     * writer interlaces every frame.
-     */
+    /** The side of a decoded fixture. */
     private static final int SIZE = 8;
 
     // ──── declared disposal ────

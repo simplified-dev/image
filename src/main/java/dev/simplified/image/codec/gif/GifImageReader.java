@@ -25,7 +25,11 @@ import javax.imageio.ImageIO;
 import javax.imageio.metadata.IIOMetadata;
 import javax.imageio.metadata.IIOMetadataNode;
 import javax.imageio.stream.ImageInputStream;
+import java.awt.image.BufferedImage;
+import java.awt.image.WritableRaster;
 import java.io.ByteArrayInputStream;
+import java.util.BitSet;
+import java.util.stream.IntStream;
 
 /**
  * Reads GIF images (static and animated) via {@link ImageIO}, extracting per-frame
@@ -39,9 +43,37 @@ import java.io.ByteArrayInputStream;
  * GIF has no blend flag: every frame is laid over what the previous frame's disposal left, a pixel
  * at the transparent index showing what lies beneath, so every frame is read
  * {@link FrameBlend#OVER}.
+ * <p>
+ * An interlaced frame stores its rows in four passes, starting at rows 0, 4, 2 and 1. ImageIO starts
+ * each pass at its first row without checking that the frame has that row, so in a frame of 4 rows
+ * or fewer, where the pass starting at row 4 holds none, it decodes the next stored row as row 4 and
+ * discards it, and leaves another row unwritten. Such a frame is handed to ImageIO with its
+ * interlace flag cleared, so ImageIO reads its rows in the order they are stored, and its rows are
+ * then moved to the rows they belong to. ImageIO reads every other frame as it stands.
  */
 @ApiStatus.Internal
 public class GifImageReader implements ImageReader {
+
+    /**
+     * The bit of an image descriptor's packed field that declares its frame interlaced.
+     */
+    private static final int INTERLACE_FLAG = 0x40;
+
+    /**
+     * The tallest interlaced frame ImageIO misplaces rows of, the pass starting at row 4 holding
+     * none of its rows.
+     */
+    private static final int MAX_MISREAD_HEIGHT = 4;
+
+    /**
+     * The first row of each interlace pass.
+     */
+    private static final int[] PASS_START = { 0, 4, 2, 1 };
+
+    /**
+     * The rows between one row of an interlace pass and the next.
+     */
+    private static final int[] PASS_STEP = { 8, 8, 4, 2 };
 
     @Override
     public @NotNull ImageFormat getFormat() {
@@ -56,7 +88,27 @@ public class GifImageReader implements ImageReader {
     @Override
     @SilentThrows
     public @NotNull ImageData read(byte @NotNull [] data, @Nullable ImageReadOptions options) {
-        @Cleanup ImageInputStream stream = ImageIO.createImageInputStream(new ByteArrayInputStream(data));
+        // Each interlaced frame ImageIO misplaces rows of is handed over declared sequential, and its
+        // rows are moved where they belong once it is read.
+        int[] descriptors = imageDescriptorFlags(data);
+        BitSet storedOrder = new BitSet();
+        byte[] source = data;
+
+        for (int i = 0; i < descriptors.length; i++) {
+            int flags = descriptors[i];
+            int height = (data[flags - 2] & 0xFF) | ((data[flags - 1] & 0xFF) << 8);
+
+            if ((data[flags] & INTERLACE_FLAG) == 0 || height > MAX_MISREAD_HEIGHT)
+                continue;
+
+            if (source == data)
+                source = data.clone();
+
+            source[flags] &= ~INTERLACE_FLAG;
+            storedOrder.set(i);
+        }
+
+        @Cleanup ImageInputStream stream = ImageIO.createImageInputStream(new ByteArrayInputStream(source));
         javax.imageio.ImageReader reader = ImageIO.getImageReadersByFormatName("gif").next();
         reader.setInput(stream);
 
@@ -72,7 +124,10 @@ public class GifImageReader implements ImageReader {
         int canvasHeight = screenDimension(screen, "logicalScreenHeight");
 
         for (int i = 0; i < frameCount; i++) {
-            var image = reader.read(i);
+            BufferedImage image = reader.read(i);
+            if (storedOrder.get(i))
+                deinterlace(image);
+
             IIOMetadata metadata = reader.getImageMetadata(i);
 
             int delayMs = 100;
@@ -184,6 +239,113 @@ public class GifImageReader implements ImageReader {
         PixelBuffer canvas = PixelBuffer.create(width, height);
         canvas.setPixels(frame.offsetX(), frame.offsetY(), frame.width(), frame.height(), frame.pixels().data(), 0, frame.width());
         return canvas;
+    }
+
+    /**
+     * Finds the packed field of every image descriptor in a GIF, in file order.
+     * <p>
+     * The blocks are walked as ImageIO walks them to count frames: an extension's label and
+     * sub-blocks are skipped, so are the sub-blocks of a block it does not know, and a trailer, a
+     * zero byte or the end of the data ends the walk. The descriptor at index {@code i} is
+     * therefore the one ImageIO reads as frame {@code i}.
+     *
+     * @param gif the encoded GIF
+     * @return the offset of each image descriptor's packed field, which follows its two-byte height
+     */
+    private static int @NotNull [] imageDescriptorFlags(byte @NotNull [] gif) {
+        IntStream.Builder flags = IntStream.builder();
+
+        if (gif.length < 13)
+            return flags.build().toArray();
+
+        int position = 13; // header and logical screen descriptor
+        int screenFlags = gif[10] & 0xFF;
+        if ((screenFlags & 0x80) != 0)
+            position += colorTableBytes(screenFlags);
+
+        while (position < gif.length) {
+            int block = gif[position++] & 0xFF;
+
+            if (block == 0x3B || block == 0x00) // the trailer, or a zero byte ImageIO reads as the end
+                break;
+
+            if (block == 0x21) { // extension: a label, then sub-blocks
+                position = skipSubBlocks(gif, position + 1);
+                continue;
+            }
+
+            if (block != 0x2C) { // a block ImageIO does not know: sub-blocks
+                position = skipSubBlocks(gif, position);
+                continue;
+            }
+
+            int descriptorFlags = position + 8; // after left, top, width and height
+            if (descriptorFlags >= gif.length)
+                break;
+
+            flags.add(descriptorFlags);
+            position = descriptorFlags + 1;
+            if ((gif[descriptorFlags] & 0x80) != 0)
+                position += colorTableBytes(gif[descriptorFlags] & 0xFF);
+
+            position = skipSubBlocks(gif, position + 1); // after the LZW minimum code size
+        }
+
+        return flags.build().toArray();
+    }
+
+    /**
+     * Measures a colour table from the packed field that declares it.
+     *
+     * @param flags a logical screen or image descriptor's packed field
+     * @return the bytes of the table it declares
+     */
+    private static int colorTableBytes(int flags) {
+        return 3 * (1 << ((flags & 0x07) + 1));
+    }
+
+    /**
+     * Skips a run of sub-blocks, each a length byte and that many bytes, ended by a zero length.
+     *
+     * @param gif the encoded GIF
+     * @param position the offset of the first sub-block's length
+     * @return the offset after the terminating zero, or one at or past the end of the data
+     */
+    private static int skipSubBlocks(byte @NotNull [] gif, int position) {
+        while (position < gif.length) {
+            int length = gif[position] & 0xFF;
+            position += length + 1;
+
+            if (length == 0)
+                break;
+        }
+
+        return position;
+    }
+
+    /**
+     * Moves the rows of a frame read in the order an interlaced frame stores them to the rows they
+     * belong to.
+     * <p>
+     * The passes store rows 0, 8, 16 and on, then 4, 12, 20 and on, then 2, 6, 10 and on, then every
+     * odd row.
+     *
+     * @param image the frame, its rows in stored order
+     */
+    private static void deinterlace(@NotNull BufferedImage image) {
+        WritableRaster raster = image.getRaster();
+        int width = raster.getWidth();
+        int height = raster.getHeight();
+        Object[] stored = new Object[height];
+
+        for (int y = 0; y < height; y++)
+            stored[y] = raster.getDataElements(0, y, width, 1, null);
+
+        int next = 0;
+        for (int pass = 0; pass < PASS_START.length; pass++) {
+            for (int y = PASS_START[pass]; y < height; y += PASS_STEP[pass])
+                raster.setDataElements(0, y, width, 1, stored[next++]);
+        }
     }
 
     private static @Nullable IIOMetadataNode findNode(@NotNull IIOMetadataNode root, @NotNull String name) {

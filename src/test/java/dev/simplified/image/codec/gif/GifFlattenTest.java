@@ -34,11 +34,7 @@ class GifFlattenTest {
     /** A pixel {@link GifImageReader} decodes from the transparent palette slot. */
     private static final int CLEAR = 0x00000000;
 
-    /**
-     * The rows of a fixture: ImageIO's GIF reader, which {@link GifImageReader} decodes through,
-     * decodes the rows of an interlaced frame shorter than eight rows wrongly, and this writer
-     * interlaces every frame.
-     */
+    /** The rows of a fixture. */
     private static final int ROWS = 8;
 
     // ──── premultiplied colour over the background ────
