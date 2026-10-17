@@ -14,6 +14,7 @@ import dev.simplified.image.exception.ImageDecodeException;
 import dev.simplified.image.frame.FrameBlend;
 import dev.simplified.image.frame.FrameDisposal;
 import dev.simplified.image.frame.ImageFrame;
+import dev.simplified.image.frame.LoopCount;
 import dev.simplified.image.option.ImageReadOptions;
 import dev.simplified.util.StringUtil;
 import org.jetbrains.annotations.ApiStatus;
@@ -60,7 +61,7 @@ public class GifImageReader implements ImageReader {
             throw new ImageDecodeException("GIF contains no frames");
 
         ConcurrentList<ImageFrame> frames = Concurrent.newList();
-        int loopCount = 0;
+        LoopCount loopCount = LoopCount.Preset.NONE;
 
         for (int i = 0; i < frameCount; i++) {
             var image = reader.read(i);
@@ -102,7 +103,7 @@ public class GifImageReader implements ImageReader {
                     if (StringUtil.isNotEmpty(topAttr)) offsetY = Integer.parseInt(topAttr);
                 }
 
-                // Extract loop count from NETSCAPE2.0 extension (first frame only)
+                // Extract the loop count from the looping extension (first frame only)
                 if (i == 0) {
                     IIOMetadataNode appExts = findNode(root, "ApplicationExtensions");
                     if (appExts != null)
@@ -133,21 +134,46 @@ public class GifImageReader implements ImageReader {
         return null;
     }
 
-    private static int parseLoopCount(@NotNull IIOMetadataNode appExts) {
+    /**
+     * Reads the loop count a GIF's looping application extension declares.
+     * <p>
+     * The extension is NETSCAPE2.0, or ANIMEXTS1.0, which some encoders write in its place with the
+     * same sub-blocks; libwebp's {@code gif2webp} and Wuffs read both. Its sub-block {@code 1}
+     * counts repeats after the first play, {@code 0} repeating forever. An extension whose first
+     * sub-block is another, such as NETSCAPE2.0's buffering sub-block {@code 2}, declares no count,
+     * and a GIF that declares none plays once.
+     *
+     * @param appExts the first frame's application extensions
+     * @return the loop count declared, or {@link LoopCount.Preset#NONE} when no extension declares one
+     */
+    private static @NotNull LoopCount parseLoopCount(@NotNull IIOMetadataNode appExts) {
         for (int i = 0; i < appExts.getLength(); i++) {
             IIOMetadataNode child = (IIOMetadataNode) appExts.item(i);
-            String appId = child.getAttribute("applicationID");
-            String authCode = child.getAttribute("authenticationCode");
 
-            if ("NETSCAPE".equals(appId) && "2.0".equals(authCode)) {
-                Object userObject = child.getUserObject();
+            if (!isLoopingExtension(child.getAttribute("applicationID"), child.getAttribute("authenticationCode")))
+                continue;
 
-                if (userObject instanceof byte[] bytes && bytes.length >= 3)
-                    return (bytes[1] & 0xFF) | ((bytes[2] & 0xFF) << 8);
+            // ImageIO hands over the extension's sub-blocks joined, so the first byte is the first
+            // sub-block's id.
+            if (child.getUserObject() instanceof byte[] bytes && bytes.length >= 3 && bytes[0] == 1) {
+                int count = (bytes[1] & 0xFF) | ((bytes[2] & 0xFF) << 8);
+                return count == 0 ? LoopCount.Preset.INFINITE : LoopCount.of(count);
             }
         }
 
-        return 0;
+        return LoopCount.Preset.NONE;
+    }
+
+    /**
+     * Tests whether an application extension is one that declares a loop count.
+     *
+     * @param appId the extension's eight-character application identifier
+     * @param authCode the extension's three-character authentication code
+     * @return {@code true} for NETSCAPE2.0 and ANIMEXTS1.0
+     */
+    private static boolean isLoopingExtension(@NotNull String appId, @NotNull String authCode) {
+        return ("NETSCAPE".equals(appId) && "2.0".equals(authCode))
+            || ("ANIMEXTS".equals(appId) && "1.0".equals(authCode));
     }
 
 }

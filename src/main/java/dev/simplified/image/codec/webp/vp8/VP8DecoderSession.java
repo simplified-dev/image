@@ -17,7 +17,7 @@ import org.jetbrains.annotations.NotNull;
  * which slots change and which propagate from another slot.
  * <p>
  * For stateless single-frame decoding prefer {@link VP8Decoder#decode(byte[])},
- * which internally allocates a throwaway session.
+ * which decodes a keyframe and keeps no reference.
  *
  * @see VP8Decoder
  * @see VP8EncoderSession
@@ -26,7 +26,7 @@ import org.jetbrains.annotations.NotNull;
 @ApiStatus.Internal
 public final class VP8DecoderSession {
 
-    // ── LAST reference (legacy field names, retained for call-site stability) ──
+    // ── LAST reference ──
     /**
      * Last reconstructed luma plane, or {@code null} before the first decode.
      */

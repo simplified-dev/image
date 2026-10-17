@@ -23,6 +23,7 @@ import dev.simplified.image.codec.tiff.TiffImageWriter;
 import dev.simplified.image.exception.UnsupportedFormatException;
 import dev.simplified.image.frame.FrameNormalizer;
 import dev.simplified.image.frame.ImageFrame;
+import dev.simplified.image.frame.LoopCount;
 import dev.simplified.image.option.GifWriteOptions;
 import dev.simplified.image.option.JpegWriteOptions;
 import dev.simplified.image.option.PnmWriteOptions;
@@ -261,12 +262,12 @@ public class ImagePipelineTest {
             AnimatedImageData data = AnimatedImageData.builder()
                 .withFrame(ImageFrame.of(PixelBuffer.wrap(frame1), 100))
                 .withFrame(ImageFrame.of(PixelBuffer.wrap(frame2), 200))
-                .withLoopCount(3)
+                .withLoopCount(LoopCount.of(3))
                 .build();
 
             assertThat(data.isAnimated(), is(true));
             assertThat(data.getFrames(), hasSize(2));
-            assertThat(data.getLoopCount(), is(3));
+            assertThat(data.getLoopCount(), is(LoopCount.of(3)));
             assertThat(data.getWidth(), is(8));
             assertThat(data.getHeight(), is(8));
         }
@@ -472,18 +473,18 @@ public class ImagePipelineTest {
             AnimatedImageData animated = AnimatedImageData.builder()
                 .withFrame(ImageFrame.of(PixelBuffer.wrap(frame1), 100))
                 .withFrame(ImageFrame.of(PixelBuffer.wrap(frame2), 100))
-                .withLoopCount(5)
+                .withLoopCount(LoopCount.of(5))
                 .build();
 
             GifImageWriter writer = new GifImageWriter();
             GifImageReader reader = new GifImageReader();
 
-            GifWriteOptions options = GifWriteOptions.builder().withLoopCount(5).build();
+            GifWriteOptions options = GifWriteOptions.builder().withLoopCount(LoopCount.of(5)).build();
             byte[] encoded = writer.write(animated, options);
             ImageData decoded = reader.read(encoded);
 
             assertThat(decoded.isAnimated(), is(true));
-            assertThat(((AnimatedImageData) decoded).getLoopCount(), is(5));
+            assertThat(((AnimatedImageData) decoded).getLoopCount(), is(LoopCount.of(5)));
         }
 
     }

@@ -251,10 +251,10 @@ sealed interface VP8LTransform {
 
                     int idx = y * width + x;
                     int argb = pixels[idx];
-                    // Per libwebp ColorSpaceInverseTransform: green is treated as signed
-                    // int8 and the red-to-blue delta uses the NEWLY-RECONSTRUCTED red
-                    // (also signed). Earlier code passed these as unsigned, which round-
-                    // tripped internally but diverged from libwebp on byte values >= 128.
+                    // Green and the reconstructed red are read as signed int8, as libwebp's
+                    // ColorSpaceInverseTransform reads them, and the red-to-blue delta uses
+                    // the NEWLY-RECONSTRUCTED red. Read unsigned, a byte value >= 128 would
+                    // decode differently from libwebp.
                     int green = (byte) ((argb >> 8) & 0xFF);
                     int newRed = (((argb >> 16) & 0xFF) + colorTransformDelta(greenToRed, green)) & 0xFF;
                     int newBlue = (argb & 0xFF)

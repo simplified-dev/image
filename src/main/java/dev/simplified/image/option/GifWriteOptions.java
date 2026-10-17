@@ -2,14 +2,18 @@ package dev.simplified.image.option;
 
 import dev.simplified.annotations.Getter;
 import dev.simplified.annotations.RequiredArgsConstructor;
+import dev.simplified.image.exception.ImageEncodeException;
+import dev.simplified.image.frame.LoopCount;
 import org.jetbrains.annotations.NotNull;
 
 import java.awt.Graphics2D;
+import java.util.Optional;
 
 /**
  * GIF-specific encoding options.
  *
- * @param loopCount animation loop count ({@code 0} for infinite)
+ * @param loopCount the repeats after the first play to declare in place of the image's own, empty
+ *     to declare the image's
  * @param transparent whether one palette slot should be reserved as fully transparent
  * @param transparentColorIndex the palette slot to mark as transparent when {@code transparent} is set
  * @param backgroundRgb the RGB color to composite partial-alpha pixels onto before
@@ -25,7 +29,7 @@ import java.awt.Graphics2D;
  *     {@link DelayFidelity#PLAYABLE}.
  */
 public record GifWriteOptions(
-    int loopCount,
+    @NotNull Optional<LoopCount> loopCount,
     boolean transparent,
     int transparentColorIndex,
     int backgroundRgb,
@@ -92,7 +96,7 @@ public record GifWriteOptions(
      */
     public static class Builder {
 
-        private int loopCount = 0;
+        private @NotNull Optional<LoopCount> loopCount = Optional.empty();
         private boolean transparent = false;
         private int transparentColorIndex = 0;
         private int backgroundRgb = 0x000000;
@@ -100,13 +104,16 @@ public record GifWriteOptions(
         private DelayFidelity delayFidelity = DelayFidelity.PLAYABLE;
 
         /**
-         * Sets the animation loop count.
+         * Sets how many times the animation repeats after its first play, in place of the image's own.
+         * <p>
+         * A GIF declares at most 65535 repeats, and writing a count that repeats more often throws
+         * {@link ImageEncodeException}.
          *
-         * @param loopCount the number of times to loop (0 for infinite)
+         * @param loopCount the repeats after the first play to declare
          * @return this builder for chaining
          */
-        public @NotNull Builder withLoopCount(int loopCount) {
-            this.loopCount = loopCount;
+        public @NotNull Builder withLoopCount(@NotNull LoopCount loopCount) {
+            this.loopCount = Optional.of(loopCount);
             return this;
         }
 

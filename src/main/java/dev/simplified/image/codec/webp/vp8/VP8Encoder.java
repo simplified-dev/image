@@ -8,26 +8,30 @@ import org.jetbrains.annotations.Nullable;
 /**
  * Pure Java VP8 (WebP lossy) encoder.
  * <p>
- * <b>Status: DC_PRED 16x16 encoder.</b> Emits a single keyframe where every
- * macroblock uses 16x16 DC prediction (luma) and 8x8 DC prediction (chroma),
- * with the full VP8 transform + quantize + token-tree pipeline. V_PRED,
- * H_PRED, TM_PRED, and the B_PRED 4x4 sub-block path are future work.
+ * {@link #encode(PixelBuffer, float)} codes one keyframe on its own, and
+ * {@link #encodeWithAutoSegment(PixelBuffer, float)} one with variance-based segmentation; a sequence
+ * of inter frames is coded through a {@link VP8EncoderSession}, which carries the reference frames
+ * between calls.
  * <p>
- * Pipeline per macroblock:
- * <ol>
- *   <li>Source ARGB is converted to BT.601 YCbCr in {@link Macroblock#fromARGB}.</li>
- *   <li>16x16 luma (and 8x8 chroma) DC prediction uses the reconstructed bottom
- *       row of the MB above and right column of the MB to the left; missing
- *       neighbors default to 128.</li>
- *   <li>Residual = source - predicted is split into sixteen 4x4 sub-blocks,
- *       each forward-DCT'd.</li>
- *   <li>Luma DC coefficients are collected into a Y2 block and Walsh-Hadamard
- *       transformed; the sixteen AC-only Y blocks are quantized with {@code y1Ac}.</li>
- *   <li>Quantized coefficients are dequantized and inverse-transformed to build
- *       the reconstructed plane used by the next MB's prediction.</li>
- *   <li>Tokens are emitted through {@link VP8TokenEncoder} - Y2 first (if i16x16),
- *       then 16 Y AC blocks in raster order, then 4 U + 4 V blocks.</li>
- * </ol>
+ * A keyframe macroblock is coded one of two ways, and the lower rate-distortion score wins:
+ * <ul>
+ *   <li><b>16x16</b> - the DC, V, H or TM prediction with the least distortion plus mode cost, its
+ *       sixteen DC coefficients gathered into a Walsh-Hadamard transformed Y2 block</li>
+ *   <li><b>B_PRED</b> - each 4x4 sub-block predicted by whichever of the ten sub-block modes scores
+ *       best on distortion plus mode cost</li>
+ * </ul>
+ * Chroma takes the DC, V, H or TM 8x8 prediction the same way. Source ARGB is converted to BT.601
+ * YCbCr in {@link Macroblock#fromARGB}, residuals are forward-transformed and trellis-quantized
+ * against the frame's token costs through {@link TrellisQuantizer}, and the dequantized coefficients
+ * rebuild the reconstruction the next macroblock predicts from. Tokens go out through
+ * {@link VP8TokenEncoder} over four partitions, macroblock row {@code y} into partition
+ * {@code y & 3}, and the reconstruction is deblocked with the normal loop filter, at a level derived
+ * from the quantizer, exactly as a decoder will deblock it.
+ * <p>
+ * An inter frame predicts from the session's {@code LAST} reference only. Each macroblock takes the
+ * best rate-distortion score of ZEROMV with skip, NEAREST and NEAR with and without a residual,
+ * NEWMV from a motion search, SPLITMV, and the two intra codings, and the motion-vector, mode and
+ * token probabilities are updated from the previous frame's counts.
  *
  * @see <a href="https://datatracker.ietf.org/doc/html/rfc6386">RFC 6386</a>
  */
@@ -62,14 +66,14 @@ public final class VP8Encoder {
 
     /**
      * Probability for the {@code prob_intra} header field in P-frames. Biased low so
-     * encoding an inter-MB is cheap - our Phase 1 use case (stationary tooltip frames)
-     * has most MBs inter-skip.
+     * encoding an inter-MB is cheap - stationary content such as tooltip frames codes
+     * most MBs inter-skip.
      */
     private static final int INTER_PROB_INTRA = 32;
 
     /**
      * Probability for the {@code prob_last} header field in P-frames. 255 means "always
-     * LAST" since Phase 1 never emits GOLDEN or ALTREF references.
+     * LAST", since the encoder never predicts from GOLDEN or ALTREF.
      */
     private static final int INTER_PROB_LAST = 255;
 
@@ -178,30 +182,26 @@ public final class VP8Encoder {
         //       {@code lambdaTrellisUv} = libwebp trellis lambdas at respective
         //       quantizers.</li>
         //   <li>{@code lambdaI16} = libwebp {@code lambda_i16} ({@code 3 * q_i16^2}).
-        //       Reserved / unused in mainline libwebp (the field is populated by
-        //       {@code SetupMatrices} but never read by any scorer); carried here
-        //       for parity + future use.</li>
+        //       libwebp's {@code SetupMatrices} populates it and none of its
+        //       scorers reads it; it is held here for parity.</li>
         //   <li>{@code lambdaMode} = libwebp {@code lambda_mode}
-        //       ({@code (q_i4^2) >> 7}): used to re-score winning i16 / i4 / uv
-        //       candidates BEFORE cross-candidate comparison. 3x smaller than
-        //       {@code lambdaI4} so cross-candidate selection de-emphasises bitrate
-        //       vs distortion relative to internal per-candidate search. NOT YET
-        //       wired into this encoder's R-D enumeration - currently dead,
-        //       populated for future libwebp-parity tuning work (see plan doc
-        //       Task 14 redux).</li>
+        //       ({@code (q_i4^2) >> 7}): libwebp re-scores the winning i16 / i4 / uv
+        //       candidates with it BEFORE cross-candidate comparison, 3x smaller
+        //       than {@code lambdaI4} so cross-candidate selection de-emphasises
+        //       bitrate vs distortion relative to internal per-candidate search.
+        //       No scorer in this encoder reads it; it is held for parity.</li>
         //   <li>{@code tlambda} = libwebp {@code tlambda} gated on
         //       {@code method >= 4 && sns_strength > 0}. Our encoder has no
-        //       method / sns analog so it's always 0; field kept for parity.</li>
+        //       method / sns analog so it's always 0; held for parity.</li>
         // </ul>
         // <p>
-        // <b>Known divergence from libwebp q_i16 derivation:</b> libwebp's
+        // <b>Divergence from libwebp's q_i16 derivation:</b> libwebp's
         // {@code q_i16 = ExpandMatrix(y2Mtx, mode=1)} returns {@code y2Mtx.q[0]}
-        // which equals {@code y2Dc} in our derivation. Our existing
-        // {@code lambdaTrellisI16} formula uses {@code y2Ac} as {@code q_i16}
-        // (pre-existing divergence calibrated into current PSNR test thresholds).
-        // The new {@code lambdaI16} / {@code lambdaMode} fields use the correct
-        // libwebp {@code q_i16 = y2Dc} for parity - future tuning work decides
-        // whether to realign {@code lambdaTrellisI16} to match.
+        // which equals {@code y2Dc} in our derivation. This encoder's
+        // {@code lambdaTrellisI16} formula uses {@code y2Ac} as {@code q_i16},
+        // the value the PSNR test thresholds are calibrated against, while
+        // {@code lambdaI16} and {@code lambdaMode} use libwebp's
+        // {@code q_i16 = y2Dc}.
         int lambdaI4, lambdaUv;
         int lambdaTrellisI4, lambdaTrellisI16, lambdaTrellisUv;
         int lambdaI16, lambdaMode, tlambda;
@@ -229,10 +229,9 @@ public final class VP8Encoder {
         final int[] segLambdaTrellisI4 = new int[4];
         final int[] segLambdaTrellisI16 = new int[4];
         final int[] segLambdaTrellisUv = new int[4];
-        // libwebp-parity scaffolding - see field-declaration block javadoc above.
-        // Populated by {@link #rebuildSegmentMatrices} but not yet used by any
-        // R-D scorer. Future Task 14 work uses these to de-couple per-candidate
-        // vs cross-candidate lambda contexts.
+        // Per-segment copies of lambdaI16, lambdaMode and tlambda (see the field
+        // block above), populated by {@link #rebuildSegmentMatrices}; no R-D
+        // scorer reads them.
         final int[] segLambdaI16 = new int[4];
         final int[] segLambdaMode = new int[4];
         final int[] segTlambda = new int[4];
@@ -454,20 +453,19 @@ public final class VP8Encoder {
                 // libwebp-style quantizer-driven lambdas, per-segment. libwebp's
                 // q_i4 / q_uv are the AC-mean over q[1..15] of the respective
                 // matrix - flat AC lane in VP8 so this is simply the AC step
-                // value. Existing (pre-Task-14) formulas use q_i16 = y2Ac which
-                // diverges from libwebp's q_i16 = y2Mtx.q[0] = y2Dc; kept for
-                // backward-compat of the calibrated PSNR test thresholds.
+                // value. These formulas take q_i16 = y2Ac, which diverges from
+                // libwebp's q_i16 = y2Mtx.q[0] = y2Dc; the calibrated PSNR test
+                // thresholds rest on it.
                 int qI4 = y1Ac;
                 int qUv = uvAc;
-                int qI16 = y2Ac;                // pre-existing; used by segLambdaTrellisI16
+                int qI16 = y2Ac;                // this encoder's q_i16; used by segLambdaTrellisI16
                 segLambdaI4[seg] = Math.max(1, (3 * qI4 * qI4) >> 7);
                 segLambdaUv[seg] = Math.max(1, (3 * qUv * qUv) >> 6);
                 segLambdaTrellisI4[seg] = Math.max(1, (7 * qI4 * qI4) >> 3);
                 segLambdaTrellisI16[seg] = Math.max(1, (qI16 * qI16) >> 2);
                 segLambdaTrellisUv[seg] = Math.max(1, (qUv * qUv) << 1);
-                // libwebp-parity scaffolding. Uses libwebp's actual q_i16 = y2Dc
-                // for the new lambdaI16 / lambdaMode so future tuning has the
-                // correct base to compare against. Not yet read by any scorer.
+                // The libwebp-parity lambdas take libwebp's own q_i16 = y2Dc. No
+                // scorer reads them.
                 int qI16Libwebp = y2Dc;
                 segLambdaI16[seg] = Math.max(1, 3 * qI16Libwebp * qI16Libwebp);
                 segLambdaMode[seg] = Math.max(1, (qI4 * qI4) >> 7);
@@ -488,8 +486,7 @@ public final class VP8Encoder {
          * <p>
          * When segmentation is off every segment slot carries identical base-qi
          * values, so calls are effectively no-ops; single-segment encode paths can
-         * call this unconditionally without diverging from the pre-segmentation
-         * baseline.
+         * call this unconditionally and encode as they would without the call.
          *
          * @param segId segment ID in {@code [0, 3]}
          */
@@ -508,10 +505,8 @@ public final class VP8Encoder {
             this.lambdaTrellisI4 = segLambdaTrellisI4[segId];
             this.lambdaTrellisI16 = segLambdaTrellisI16[segId];
             this.lambdaTrellisUv = segLambdaTrellisUv[segId];
-            // libwebp-parity scaffolding swap - currently dead (no R-D site
-            // reads these), threaded through applySegment so that the moment a
-            // future tuning commit wires lambdaMode into cross-candidate R-D,
-            // per-segment values are already in place.
+            // The libwebp-parity lambdas, swapped with the rest so each holds the
+            // segment's value; no R-D site reads them.
             this.lambdaI16 = segLambdaI16[segId];
             this.lambdaMode = segLambdaMode[segId];
             this.tlambda = segTlambda[segId];
@@ -1321,9 +1316,9 @@ public final class VP8Encoder {
         e.encodeBool(0);           // uv_dc_delta_present
         e.encodeBool(0);           // uv_ac_delta_present
 
-        // Inter-frame reference-buffer management (RFC 6386 section 9.7). Phase 1 never
-        // uses GOLDEN or ALTREF, so refresh flags are 0 and copy-buffer selectors are 0
-        // (copy current LAST into the slot). Sign-bias bits are 0 (no MV flipping).
+        // Inter-frame reference-buffer management (RFC 6386 section 9.7). The encoder never
+        // predicts from GOLDEN or ALTREF, so refresh flags are 0 and copy-buffer selectors
+        // are 0 (no copy). Sign-bias bits are 0 (no MV flipping).
         if (!s.isKeyframe) {
             e.encodeBool(0);       // refresh_golden_frame
             e.encodeBool(0);       // refresh_alt_frame
@@ -1335,7 +1330,7 @@ public final class VP8Encoder {
 
         e.encodeBool(0);           // refresh_entropy_probs (keep prior-frame proba)
 
-        // Inter-only: refresh_last is always 1 for Phase 1 (we emit a fresh LAST each frame).
+        // Inter-only: refresh_last is always 1 (every frame becomes the next LAST).
         if (!s.isKeyframe)
             e.encodeBool(1);       // refresh_last
 
@@ -3871,9 +3866,9 @@ public final class VP8Encoder {
     }
 
     /**
-     * Convenience combination of {@link #trellisChroma} and {@link #emitChromaTokensFromTrellis}
-     * that preserves the pre-Phase-2e call shape used by the keyframe path and the winning
-     * inter / intra candidates. The returned {@link ChromaTrellisResult#dequant} feeds
+     * Trellis-quantizes one chroma plane and emits its tokens in one call, {@link #trellisChroma}
+     * then {@link #emitChromaTokensFromTrellis}, for the keyframe path and the winning inter /
+     * intra candidates. The returned {@link ChromaTrellisResult#dequant} feeds
      * {@link #commitChromaFromDequant}.
      *
      * @param isU {@code true} for U (context slots 4..5), {@code false} for V (slots 6..7)

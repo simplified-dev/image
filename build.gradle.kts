@@ -57,12 +57,18 @@ tasks.withType<Javadoc>().configureEach {
     (options as StandardJavadocDocletOptions).addStringOption("-add-modules", "jdk.incubator.vector")
 }
 
+// NOTICE carries the libwebp, libvpx and RFC 6386 attributions, whose licences require them to
+// travel with a binary as well as with the source. LICENSE.md is the Apache-2.0 text NOTICE points
+// to, which the licence asks a redistributor to pass on with the work.
+tasks.jar {
+    metaInf { from("NOTICE", "LICENSE.md") }
+}
+
 tasks.test {
     useJUnitPlatform()
     jvmArgs(vectorModuleArgs)
-    // Forward the libwebp-parity harness's Python-interpreter override to the
-    // test JVM so golden-reference tests can locate a Python install with the
-    // `webp` package when the default one on PATH doesn't have it. See
-    // `ConformanceHelper.startPython` for usage.
+    // Forward the libwebp oracle's Python-interpreter override to the test JVM, so
+    // `-Dvp8.pythonBin=<path>` on the Gradle command line names the interpreter
+    // tried first. See `LibwebpOracle` in the test sources for how one is chosen.
     System.getProperty("vp8.pythonBin")?.let { systemProperty("vp8.pythonBin", it) }
 }

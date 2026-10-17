@@ -7,9 +7,11 @@ import dev.simplified.image.AnimatedImageData;
 import dev.simplified.image.ImageData;
 import dev.simplified.image.ImageFormat;
 import dev.simplified.image.codec.ImageWriter;
+import dev.simplified.image.exception.ImageEncodeException;
 import dev.simplified.image.frame.FrameBlend;
 import dev.simplified.image.frame.FrameDisposal;
 import dev.simplified.image.frame.ImageFrame;
+import dev.simplified.image.frame.LoopCount;
 import dev.simplified.image.option.GifWriteOptions;
 import dev.simplified.image.option.ImageWriteOptions;
 import dev.simplified.image.pixel.AlphaMode;
@@ -36,6 +38,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.OptionalInt;
 
 /**
  * Writes GIF images (static and animated) via {@link ImageIO}, configuring
@@ -54,6 +57,11 @@ public class GifImageWriter implements ImageWriter {
      */
     private static final int MAX_PALETTE_SIZE = 256;
 
+    /**
+     * The largest repeat count a NETSCAPE2.0 application extension's 16-bit field declares.
+     */
+    private static final int MAX_NETSCAPE_COUNT = 0xFFFF;
+
     @Override
     public @NotNull ImageFormat getFormat() {
         return ImageFormat.GIF;
@@ -62,7 +70,9 @@ public class GifImageWriter implements ImageWriter {
     @Override
     @SilentThrows
     public byte @NotNull [] write(@NotNull ImageData data, @Nullable ImageWriteOptions options) {
-        int loopCount = 0;
+        // An animated image held as anything but an AnimatedImageData carries no count of its own,
+        // and repeats forever.
+        LoopCount loopCount = data instanceof AnimatedImageData animated ? animated.getLoopCount() : LoopCount.Preset.INFINITE;
         boolean transparent = false;
         int transparentColorIndex = 0;
         int backgroundRgb = 0x000000;
@@ -70,14 +80,12 @@ public class GifImageWriter implements ImageWriter {
         GifWriteOptions.DelayFidelity delayFidelity = GifWriteOptions.DelayFidelity.PLAYABLE;
 
         if (options instanceof GifWriteOptions gifOptions) {
-            loopCount = gifOptions.loopCount();
+            loopCount = gifOptions.loopCount().orElse(loopCount);
             transparent = gifOptions.transparent();
             transparentColorIndex = gifOptions.transparentColorIndex();
             backgroundRgb = gifOptions.backgroundRgb();
             alphaThreshold = gifOptions.alphaThreshold();
             delayFidelity = gifOptions.delayFidelity();
-        } else if (data instanceof AnimatedImageData animated) {
-            loopCount = animated.getLoopCount();
         }
 
         int[] delaysCs = quantizeDelays(data.getFrames(), delayFidelity);
@@ -107,6 +115,7 @@ public class GifImageWriter implements ImageWriter {
             palette.createCompatibleSampleModel(1, 1));
 
         if (data.isAnimated()) {
+            OptionalInt netscapeCount = netscapeCount(loopCount);
             writer.prepareWriteSequence(null);
             boolean firstFrame = true;
             int frameIdx = 0;
@@ -116,10 +125,12 @@ public class GifImageWriter implements ImageWriter {
 
             for (ImageFrame frame : data.getFrames()) {
                 IIOMetadata metadata = writer.getDefaultImageMetadata(specifier, param);
-                configureFrameMetadata(metadata, writtenDisposal(data.getFrames(), frameIdx), delaysCs[frameIdx], transparent, transparentColorIndex);
+                configureFrameMetadata(metadata, writtenDisposal(data.getFrames(), frameIdx, netscapeCount.isPresent()), delaysCs[frameIdx], transparent, transparentColorIndex);
 
                 if (firstFrame) {
-                    configureLoopMetadata(metadata, loopCount);
+                    if (netscapeCount.isPresent())
+                        configureLoopMetadata(metadata, netscapeCount.getAsInt());
+
                     firstFrame = false;
                 }
 
@@ -554,17 +565,20 @@ public class GifImageWriter implements ImageWriter {
      * from a clear canvas is the previous frame's disposal. A frame followed by one that blends
      * {@link FrameBlend#SOURCE} is therefore declared {@link FrameDisposal#RESTORE_TO_BACKGROUND}, and
      * a frame followed by one that blends {@link FrameBlend#OVER} is declared with its own disposal.
-     * The last frame is followed by the first, every animation written here declaring a loop count
-     * that has a player start it over. A lone frame is followed by nothing and keeps its own disposal.
+     * The last frame of an animation that repeats is followed by the first, which a player starts it
+     * over with. A frame followed by nothing - the last of an animation that never repeats, or a lone
+     * frame - keeps its own disposal.
      *
      * @param frames the animation's frames, in playback order
      * @param index the index of the frame being written
+     * @param repeats whether a player starts the animation over after its last frame
      * @return the disposal to declare for the frame
      */
-    private static @NotNull FrameDisposal writtenDisposal(@NotNull ConcurrentList<ImageFrame> frames, int index) {
+    private static @NotNull FrameDisposal writtenDisposal(@NotNull ConcurrentList<ImageFrame> frames, int index, boolean repeats) {
         ImageFrame frame = frames.get(index);
+        boolean last = index == frames.size() - 1;
 
-        if (frames.size() == 1)
+        if (frames.size() == 1 || (last && !repeats))
             return frame.disposal();
 
         ImageFrame next = frames.get((index + 1) % frames.size());
@@ -592,8 +606,33 @@ public class GifImageWriter implements ImageWriter {
         metadata.setFromTree(formatName, root);
     }
 
+    /**
+     * Resolves the count a NETSCAPE2.0 application extension declares for a loop count.
+     * <p>
+     * The extension counts repeats after the first play, {@code 0} repeating forever, and a GIF that
+     * carries none plays once, so a count that never repeats is written as no extension at all.
+     *
+     * @param loopCount the loop count to declare
+     * @return the count the extension declares, or empty to write none
+     * @throws ImageEncodeException when the count repeats more often than the extension's 16-bit
+     *     field declares
+     */
+    private static @NotNull OptionalInt netscapeCount(@NotNull LoopCount loopCount) {
+        OptionalInt repeats = loopCount.repeats();
+
+        if (repeats.isEmpty())
+            return OptionalInt.of(0);
+
+        int count = repeats.getAsInt();
+
+        if (count > MAX_NETSCAPE_COUNT)
+            throw new ImageEncodeException("Loop count '%s' repeats more than the %s times a GIF declares", loopCount, MAX_NETSCAPE_COUNT);
+
+        return count == 0 ? OptionalInt.empty() : OptionalInt.of(count);
+    }
+
     @SilentThrows
-    private static void configureLoopMetadata(@NotNull IIOMetadata metadata, int loopCount) {
+    private static void configureLoopMetadata(@NotNull IIOMetadata metadata, int netscapeCount) {
         String formatName = metadata.getNativeMetadataFormatName();
         IIOMetadataNode root = (IIOMetadataNode) metadata.getAsTree(formatName);
 
@@ -603,8 +642,8 @@ public class GifImageWriter implements ImageWriter {
         netscape.setAttribute("authenticationCode", "2.0");
         netscape.setUserObject(new byte[] {
             0x1,
-            (byte) (loopCount & 0xFF),
-            (byte) ((loopCount >> 8) & 0xFF)
+            (byte) (netscapeCount & 0xFF),
+            (byte) ((netscapeCount >> 8) & 0xFF)
         });
         appExts.appendChild(netscape);
 

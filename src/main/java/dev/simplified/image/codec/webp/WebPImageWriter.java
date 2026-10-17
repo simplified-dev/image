@@ -15,6 +15,7 @@ import dev.simplified.image.codec.webp.vp8l.VP8LEncoder;
 import dev.simplified.image.frame.FrameBlend;
 import dev.simplified.image.frame.FrameDisposal;
 import dev.simplified.image.frame.ImageFrame;
+import dev.simplified.image.frame.LoopCount;
 import dev.simplified.image.option.ImageWriteOptions;
 import dev.simplified.image.option.WebPWriteOptions;
 import dev.simplified.image.pixel.AlphaMode;
@@ -22,6 +23,7 @@ import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -30,6 +32,11 @@ import java.util.concurrent.CompletableFuture;
  */
 @ApiStatus.Internal
 public class WebPImageWriter implements ImageWriter {
+
+    /**
+     * The largest play count an {@code ANIM} chunk's 16-bit loop count field declares.
+     */
+    private static final int MAX_ANIM_LOOP_COUNT = 0xFFFF;
 
     @Override
     public @NotNull ImageFormat getFormat() {
@@ -40,7 +47,7 @@ public class WebPImageWriter implements ImageWriter {
     public byte @NotNull [] write(@NotNull ImageData data, @Nullable ImageWriteOptions options) {
         boolean lossless = true;
         float quality = 0.75f;
-        int loopCount = 0;
+        Optional<LoopCount> loopCount = Optional.empty();
         boolean multithreaded = true;
         boolean alphaCompression = true;
         boolean usePFrames = false;
@@ -66,11 +73,9 @@ public class WebPImageWriter implements ImageWriter {
         // animated image, so converting first would send an animated ImageData implemented elsewhere
         // down the animated path. An AnimatedImageData converts to an AnimatedImageData, so the cast holds.
         if (data instanceof AnimatedImageData animated) {
-            if (loopCount == 0 && animated.getLoopCount() != 0)
-                loopCount = animated.getLoopCount();
-
+            LoopCount declared = loopCount.orElse(animated.getLoopCount());
             AnimatedImageData straight = (AnimatedImageData) animated.toAlphaMode(AlphaMode.STRAIGHT);
-            return writeAnimated(straight, lossless, quality, loopCount, multithreaded, usePFrames, forceKeyframeEvery, motionSearchThreads, autoSegment, nearLossless);
+            return writeAnimated(straight, lossless, quality, declared, multithreaded, usePFrames, forceKeyframeEvery, motionSearchThreads, autoSegment, nearLossless);
         }
 
         return writeStatic(data, lossless, quality, alphaCompression, autoSegment, nearLossless);
@@ -123,7 +128,7 @@ public class WebPImageWriter implements ImageWriter {
         @NotNull AnimatedImageData data,
         boolean lossless,
         float quality,
-        int loopCount,
+        @NotNull LoopCount loopCount,
         boolean multithreaded,
         boolean usePFrames,
         int forceKeyframeEvery,
@@ -131,6 +136,7 @@ public class WebPImageWriter implements ImageWriter {
         boolean autoSegment,
         int nearLossless
     ) {
+        int animLoopCount = animLoopCount(loopCount);
         ConcurrentList<ImageFrame> frames = data.getFrames();
         boolean hasAlpha = data.hasAlpha();
         // Per-frame lossy + alpha: emit an ALPH sub-chunk before the VP8 sub-chunk.
@@ -260,7 +266,7 @@ public class WebPImageWriter implements ImageWriter {
             buildVP8XPayload(data.getWidth(), data.getHeight(), true, hasAlpha)));
 
         // ANIM
-        chunks.add(RiffContainer.createChunk(WebPChunk.Type.ANIM, buildAnimPayload(data.getBackgroundColor(), loopCount)));
+        chunks.add(RiffContainer.createChunk(WebPChunk.Type.ANIM, buildAnimPayload(data.getBackgroundColor(), animLoopCount)));
 
         // ANMF frames. When using partial frames we override the input frame's
         // disposal / blend metadata with NO_DISPOSE + NO_BLEND (flag=0x02) so
@@ -338,6 +344,22 @@ public class WebPImageWriter implements ImageWriter {
         payload[9] = (byte) ((h >> 16) & 0xFF);
 
         return payload;
+    }
+
+    /**
+     * Resolves the count an {@code ANIM} chunk declares for a loop count.
+     * <p>
+     * The chunk counts plays, the first included, and {@code 0} plays forever, so it declares one
+     * more than the repeats a finite count holds. A count that plays more often than the chunk's
+     * 16-bit field holds is declared as {@value #MAX_ANIM_LOOP_COUNT} plays, as libwebp's
+     * {@code gif2webp} declares a GIF repeating 65535 times: one play short of what it asks rather
+     * than no file at all.
+     *
+     * @param loopCount the loop count to declare
+     * @return the count the chunk declares
+     */
+    private static int animLoopCount(@NotNull LoopCount loopCount) {
+        return Math.min(loopCount.plays().orElse(0), MAX_ANIM_LOOP_COUNT);
     }
 
     private static byte @NotNull [] buildAnimPayload(int backgroundColor, int loopCount) {

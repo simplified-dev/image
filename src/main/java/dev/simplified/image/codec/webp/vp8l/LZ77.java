@@ -5,9 +5,10 @@ import org.jetbrains.annotations.NotNull;
 /**
  * LZ77 backward reference encoding and decoding for VP8L.
  * <p>
- * Uses hash-chain based matching for the encoder with a configurable
- * maximum distance window. The decoder interprets length-distance pairs
- * and copies pixel data from the already-decoded buffer.
+ * The encoder side finds matches through a hash chain over every earlier pixel, with
+ * no distance window: the search stops after 64 candidates or
+ * at a match as long as asked for. The decoder side turns length and distance symbols
+ * back into a pixel count and a linear distance, which {@link VP8LDecoder} copies from.
  */
 final class LZ77 {
 

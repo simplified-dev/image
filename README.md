@@ -24,7 +24,7 @@ Pure-Java multi-format image codec library with full VP8/VP8L WebP encoding and 
 
 ## Features
 
-- **Pure-Java VP8 and VP8L** - Lossy (VP8) and lossless (VP8L) WebP encoding and decoding with no native libraries, including the VP8 boolean range coder, VP8L Huffman + LZ77 compression with ColorCache, DCT/WHT transforms, trellis quantization, near-lossless preprocessing, and SSE-based 16x16 intra-prediction mode selection (DC/V/H/TM). The VP8 encoder emits keyframes libwebp accepts; the VP8 decoder supports the full intra-4x4 B_PRED sub-mode tree
+- **Pure-Java VP8 and VP8L** - Lossy (VP8) and lossless (VP8L) WebP encoding and decoding with no native libraries. The VP8 encoder picks each macroblock's 16x16 or 4x4 (B_PRED) intra modes by rate-distortion score, with trellis quantization and the normal loop filter, and writes keyframes libwebp decodes; opt-in P-frames add motion-compensated prediction from the previous frame, and opt-in segmentation gives detailed regions a coarser quantizer. The VP8 decoder reads keyframes and P-frames. VP8L brings LZ77 backward references, a colour cache, meta-Huffman groups, the four reversible transforms and near-lossless preprocessing
 - **Ten image formats** - Read and write BMP, GIF, ICO, JPEG, PNG, PNM, QOI, TGA, TIFF and WebP with format-specific options for quality, compression, and lossless/lossy mode
 - **Animated image support** - Multi-frame GIF and WebP with per-frame timing, loop count, background color, disposal methods (none, do not dispose, restore to background, restore to previous), blend modes (source replace, alpha-over), and partial-frame ANMF encoding that diffs consecutive frames to emit minimal sub-rectangles
 - **Parallel frame encoding** - Animated WebP encodes frames concurrently using virtual threads for significantly faster output
@@ -160,14 +160,24 @@ ImageFactory.toFile(image, ImageFormat.WEBP, outputFile,
 ### Animated Images
 
 The two forms of an image, `StaticImageData` and `AnimatedImageData`, sit beside
-`ImageData` in the root package; one frame and its disposal and blend come from
-`dev.simplified.image.frame`.
+`ImageData` in the root package; one frame and its disposal and blend, and the
+`LoopCount` an animation plays by, come from `dev.simplified.image.frame`.
+
+A `LoopCount` counts the repeats after the first play: `LoopCount.Preset.NONE`
+plays once, `ONCE` twice and `INFINITE` forever, and `LoopCount.of(n)` plays
+`n + 1` times. Each codec converts it to its container's own unit - a GIF's
+NETSCAPE2.0 block counts repeats, a WebP's `ANIM` chunk counts plays. Both hold
+at most 65535: a GIF refuses a count that repeats more often, and a WebP
+declares a count that plays more often as 65535 plays. Write options that set
+no loop count declare the image's own.
 
 ```java
 import dev.simplified.image.AnimatedImageData;
 import dev.simplified.image.ImageFactory;
 import dev.simplified.image.ImageFormat;
 import dev.simplified.image.frame.ImageFrame;
+import dev.simplified.image.frame.LoopCount;
+import dev.simplified.image.option.GifWriteOptions;
 import dev.simplified.image.option.WebPWriteOptions;
 
 // Read any animated format (GIF, WebP) - auto-detected.
@@ -180,6 +190,10 @@ for (ImageFrame frame : animated.getFrames()) {
 // Re-encode as animated WebP; frames encoded in parallel by default.
 ImageFactory.toFile(animated, ImageFormat.WEBP, outputFile,
     WebPWriteOptions.builder().isLossless(false).withQuality(0.9f).build());
+
+// Re-encode as a GIF that plays twice, one repeat after the first play.
+ImageFactory.toFile(animated, ImageFormat.GIF, outputFile,
+    GifWriteOptions.builder().withLoopCount(LoopCount.Preset.ONCE).build());
 ```
 
 ### Batch Processing
@@ -247,7 +261,7 @@ src/main/java/dev/simplified/image/
 ├── StaticImageData.java        # a single image
 ├── AnimatedImageData.java      # timed frames, loop count and canvas
 ├── PixelBuffer.java            # zero-copy ARGB pixels, with package-private SIMD kernels beside it
-├── frame/                      # ImageFrame, FrameBlend, FrameDisposal, FrameNormalizer, FitMode
+├── frame/                      # ImageFrame, FrameBlend, FrameDisposal, LoopCount, FrameNormalizer, FitMode
 ├── pixel/                      # ColorMath, BlendMode, AlphaMode, Background, PixelGraphics, PixelMask, PixelDiff, DiffType, Resample, PixelBufferPool
 ├── option/                     # ImageReadOptions, ImageWriteOptions and every format's *WriteOptions
 ├── exception/                  # ImageException hierarchy
@@ -310,3 +324,8 @@ guidelines, and how to submit a pull request.
 
 This project is licensed under the **Apache License 2.0** - see
 [LICENSE.md](LICENSE.md) for the full text.
+
+The WebP codecs port code and tables from [libwebp](https://chromium.googlesource.com/webm/libwebp)
+and [libvpx](https://chromium.googlesource.com/webm/libvpx), both BSD-licensed, and from RFC 6386.
+[NOTICE](NOTICE) names what each one supplies and carries their copyright notices and licence
+terms; the jar ships it under `META-INF`, beside `LICENSE.md`.

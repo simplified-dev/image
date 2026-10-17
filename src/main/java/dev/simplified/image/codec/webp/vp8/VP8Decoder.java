@@ -7,19 +7,24 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 /**
- * Pure Java VP8 (WebP lossy) keyframe decoder.
+ * Pure Java VP8 (WebP lossy) decoder.
  * <p>
  * Parses the frame/segment/filter/quant/probability headers exactly as libwebp's
  * {@code VP8GetHeaders} does, then walks the macroblock grid consuming per-MB
- * modes from the first partition and coefficients from the token partition via
+ * modes from the first partition and coefficients from the token partitions via
  * {@link VP8TokenDecoder}. Coefficients are dequantized with the
  * {@link VP8Tables#DC_Q_LOOKUP} / {@link VP8Tables#AC_Q_LOOKUP} /
- * {@link VP8Tables#AC2_Q_LOOKUP} tables, inverse-transformed, added to the
- * predicted samples, and clamped to produce the reconstructed Y/U/V planes.
+ * {@link VP8Tables#AC2_Q_LOOKUP} tables at each macroblock's segment quantizer,
+ * inverse-transformed, added to the predicted samples, and clamped to produce the
+ * reconstructed Y/U/V planes, which the simple or normal loop filter then deblocks
+ * and fancy upsampling turns into ARGB.
  * <p>
- * Supports the four 16x16 luma modes (DC, V, H, TM), B_PRED with all ten 4x4
- * sub-block modes, the four 8x8 chroma modes, and per-MB skip bits. Only
- * keyframes are supported.
+ * Keyframes decode on their own through {@link #decode(byte[])}: the four 16x16 luma
+ * modes (DC, V, H, TM), B_PRED with all ten 4x4 sub-block modes, the four 8x8 chroma
+ * modes and per-MB skip bits. Inter frames decode through a {@link VP8DecoderSession},
+ * which holds the {@code LAST}, {@code GOLDEN} and {@code ALTREF} references: every
+ * inter mode - ZEROMV, NEAREST, NEAR, NEWMV and SPLITMV - against any of the three, and
+ * intra macroblocks inside an inter frame.
  *
  * @see <a href="https://datatracker.ietf.org/doc/html/rfc6386">RFC 6386</a>
  */
@@ -86,9 +91,8 @@ public final class VP8Decoder {
      * case: golden-reference tooling that compares per-MB mode / MV choices
      * between this encoder and libwebp.
      * <p>
-     * Keyframe-only - the metadata surface doesn't make sense without a known
-     * frame classification, and P-frame decode requires a session with a
-     * reference. Session-aware metadata capture can be added later if needed.
+     * Keyframes only: a P-frame decodes against a session's reference, and this
+     * entry point takes no session.
      *
      * @param data raw VP8 keyframe payload
      * @return reconstructed pixels + per-MB metadata
@@ -767,11 +771,13 @@ public final class VP8Decoder {
     // ──────────────────────────────────────────────────────────────────────
 
     /**
-     * Parses and reconstructs one macroblock in a P-frame. Supports the two Phase 1
-     * cases: inter-skip {@code (is_inter=1, ref=LAST, mb_mode=ZEROMV, skip=1)} which
-     * copies the reference MB into the current reconstruction, and intra-in-P which
-     * follows the existing intra reconstruction path using inter-frame mode probas.
-     * Other inter modes (NEAREST/NEAR/NEW/SPLIT) throw - Phase 2 work.
+     * Parses and reconstructs one macroblock in a P-frame. An inter macroblock reads its
+     * reference frame ({@code LAST}, {@code GOLDEN} or {@code ALTREF}) and its MV mode:
+     * ZEROMV, NEAREST and NEAR take their MV from the neighbour vote, NEWMV reads it from
+     * the wire, and SPLITMV hands off to {@link #decodeSplitMv}. The prediction is then
+     * motion-compensated from that reference, with the residual added unless the
+     * macroblock is skipped. An intra macroblock follows the intra reconstruction path
+     * under the inter-frame mode probabilities.
      */
     private static void decodeInterMacroblock(
         @NotNull State s, @NotNull BooleanDecoder br, @NotNull BooleanDecoder td,
@@ -810,7 +816,7 @@ public final class VP8Decoder {
             //   1 = NEARESTMV  - MV = near.nearest_mv (no wire bits)
             //   2 = NEARMV     - MV = near.near_mv (no wire bits)
             //   3 = NEWMV      - MV read from wire
-            //   4 = SPLITMV    - out of Phase 2 scope
+            //   4 = SPLITMV    - per-sub-block MVs, decoded by decodeSplitMv
             int effInternalRow;
             int effInternalCol;
             if (mvMode == 0) {

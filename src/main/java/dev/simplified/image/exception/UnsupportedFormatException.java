@@ -1,11 +1,13 @@
 package dev.simplified.image.exception;
 
+import dev.simplified.image.ImageFactory;
 import org.intellij.lang.annotations.PrintFormat;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 /**
- * Thrown when an unrecognized image format is encountered or no reader/writer is registered for the requested format.
+ * Thrown when data matches the magic bytes of no known image format, or when the codec set built into
+ * {@link ImageFactory} holds no reader or writer for the requested format.
  */
 public class UnsupportedFormatException extends ImageException {
 

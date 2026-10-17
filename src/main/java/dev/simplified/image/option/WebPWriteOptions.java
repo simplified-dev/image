@@ -3,7 +3,10 @@ package dev.simplified.image.option;
 import dev.simplified.annotations.AccessLevel;
 import dev.simplified.annotations.Getter;
 import dev.simplified.annotations.RequiredArgsConstructor;
+import dev.simplified.image.frame.LoopCount;
 import org.jetbrains.annotations.NotNull;
+
+import java.util.Optional;
 
 /**
  * WebP-specific encoding options supporting both lossless (VP8L) and lossy (VP8) modes.
@@ -14,7 +17,11 @@ public class WebPWriteOptions implements ImageWriteOptions {
 
     private final boolean lossless;
     private final float quality;
-    private final int loopCount;
+    /**
+     * the repeats after the first play to declare in place of the image's own, empty to declare the
+     * image's
+     */
+    private final @NotNull Optional<LoopCount> loopCount;
     private final boolean multithreaded;
     private final boolean alphaCompression;
     private final boolean usePFrames;
@@ -81,7 +88,7 @@ public class WebPWriteOptions implements ImageWriteOptions {
 
         private boolean lossless = true;
         private float quality = 0.75f;
-        private int loopCount = 0;
+        private @NotNull Optional<LoopCount> loopCount = Optional.empty();
         private boolean multithreaded = true;
         private boolean alphaCompression = true;
         private boolean usePFrames = false;
@@ -122,13 +129,16 @@ public class WebPWriteOptions implements ImageWriteOptions {
         }
 
         /**
-         * Sets the animation loop count.
+         * Sets how many times the animation repeats after its first play, in place of the image's own.
+         * <p>
+         * A WebP declares plays rather than repeats, and at most 65535 of them, so a count that plays
+         * more often, such as a GIF's 65535 repeats, is written as 65535 plays.
          *
-         * @param loopCount the number of times to loop (0 for infinite)
+         * @param loopCount the repeats after the first play to declare
          * @return this builder for chaining
          */
-        public @NotNull Builder withLoopCount(int loopCount) {
-            this.loopCount = loopCount;
+        public @NotNull Builder withLoopCount(@NotNull LoopCount loopCount) {
+            this.loopCount = Optional.of(loopCount);
             return this;
         }
 

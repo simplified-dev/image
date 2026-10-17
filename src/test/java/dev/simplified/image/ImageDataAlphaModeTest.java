@@ -5,6 +5,7 @@ import dev.simplified.collection.ConcurrentList;
 import dev.simplified.image.frame.FrameBlend;
 import dev.simplified.image.frame.FrameDisposal;
 import dev.simplified.image.frame.ImageFrame;
+import dev.simplified.image.frame.LoopCount;
 import dev.simplified.image.pixel.AlphaMode;
 import org.jetbrains.annotations.NotNull;
 import org.junit.jupiter.api.DisplayName;
@@ -137,7 +138,7 @@ class ImageDataAlphaModeTest {
             .withFrame(ImageFrame.of(second, 70, 3, 0, FrameDisposal.RESTORE_TO_PREVIOUS, FrameBlend.SOURCE))
             .withWidth(12)
             .withHeight(5)
-            .withLoopCount(3)
+            .withLoopCount(LoopCount.of(3))
             .withBackgroundColor(0x80112233)
             .withAlphaMode(AlphaMode.PREMULTIPLIED)
             .build();
@@ -149,7 +150,7 @@ class ImageDataAlphaModeTest {
         assertThat(animated.getAlphaMode(), equalTo(AlphaMode.STRAIGHT));
         assertThat(animated.getWidth(), equalTo(12));
         assertThat(animated.getHeight(), equalTo(5));
-        assertThat(animated.getLoopCount(), equalTo(3));
+        assertThat(animated.getLoopCount(), equalTo(LoopCount.of(3)));
         assertThat(animated.getBackgroundColor(), equalTo(0x80112233));
         assertThat(animated.getTotalDurationMs(), equalTo(110));
         assertThat(animated.getFrames().size(), equalTo(2));

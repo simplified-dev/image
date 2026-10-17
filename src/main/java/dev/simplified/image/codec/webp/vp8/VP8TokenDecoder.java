@@ -6,8 +6,10 @@ import org.jetbrains.annotations.NotNull;
  * Inverse of {@link VP8TokenEncoder}: reads a 4x4 block of quantized DCT
  * coefficients back out of a VP8 token stream.
  * <p>
- * Intended both for round-tripping our own encoder's output and for a future
- * spec-compliant {@link VP8Decoder}. Mirrors the branching of libwebp's
+ * {@link VP8Decoder} reads every coefficient block of every frame through it, from
+ * this library's encoder and from libwebp alike. It walks the full RFC 6386 token
+ * tree - the end-of-block, zero and magnitude branches, the small values inline and
+ * the four extra-bit categories from 11 up - mirroring the branching of libwebp's
  * {@code GetCoeffsFast} in {@code src/dec/vp8_dec.c}.
  */
 final class VP8TokenDecoder {

@@ -8,20 +8,26 @@ import org.jetbrains.annotations.NotNull;
  * Pure Java VP8L (WebP lossless) encoder.
  * <p>
  * Emits a spec-compliant bitstream that reference {@code libwebp} decoders accept.
- * Supports LZ77 backward references on top of literal pixel emission: a hash-chain
- * match finder locates repeated pixel runs, and matches of length
+ * {@link #encode(PixelBuffer)} tries every combination of one reversible transform -
+ * none, the {@link VP8LTransform.ColorIndexing} palette when the source has at most 256
+ * unique colors, the spatial predictor, subtract-green or the cross-color transform -
+ * with the color cache off or at 10 bits, and with one Huffman group for the whole image
+ * or meta-Huffman groups over 256x256 tiles, and keeps the smallest output. The other
+ * overloads fix those choices.
+ * <p>
+ * Pixels are coded with LZ77 backward references on top of literal pixel emission: a
+ * hash-chain match finder locates repeated pixel runs, and matches of length
  * {@value LZ77#MIN_MATCH} or longer are emitted as length/distance symbol pairs
  * in the extended green alphabet (literal bytes at positions 0..255, length
  * codes at 256..279). Distances are mapped to libwebp's 2-D plane-code space
- * via {@link LZ77#distanceToPlaneCode} before prefix encoding.
+ * via {@link LZ77#distanceToPlaneCode} before prefix encoding. With one Huffman group, a
+ * second pass re-decides every literal, match and cache hit by dynamic programming over
+ * bit costs estimated from the first, and the cheaper of the two token streams is written.
  * <p>
- * Applies the {@link VP8LTransform.ColorIndexing} palette transform automatically when
- * the source has at most 256 unique colors: each pixel's ARGB is replaced by its
- * palette index in the green channel, sub-bit packed horizontally (1/2/4 bits per pixel
- * for palettes of 2/4/16 entries respectively), and the palette itself is emitted as
- * a delta-encoded {@code 1xN} sub-image after the transform header. Matches libwebp
- * {@code -m 3} method behaviour at a simplified feature subset: no multi-Huffman tile
- * groups, no color-cache, no predictor / cross-color / subtract-green transforms yet.
+ * The palette transform replaces each pixel's ARGB by its palette index in the green
+ * channel, sub-bit packed horizontally (1/2/4 bits per pixel for palettes of 2/4/16
+ * entries respectively), and emits the palette itself as a delta-encoded {@code 1xN}
+ * sub-image after the transform header.
  * <p>
  * The encoder uses <i>simple prefix codes</i> (is_simple = 1) for alphabets with one or
  * two distinct used symbols, and normal prefix codes with a proper Huffman tree for
@@ -69,21 +75,14 @@ public final class VP8LEncoder {
     private VP8LEncoder() { }
 
     /**
-     * Encodes {@code pixels} into a VP8L payload suitable for wrapping in a {@code VP8L}
-     * WebP chunk (via {@code RiffContainer#createChunk}).
-     *
-     * @param pixels the ARGB source buffer
-     * @return the encoded VP8L bitstream
-     */
-    /**
      * Color-cache trial sizes, in bits. 0 = cache disabled.
      */
     private static final int[] CACHE_BITS_TRIALS = { 0, 10 };
 
     /**
      * Meta-Huffman tile-size exponents the public encoder tries in addition to the
-     * single-Huffman path. {@code 0} means "don't try meta-Huffman at all" (equivalent
-     * to the previous behaviour). Picking tile_bits=8 gives 256x256 tiles, which for
+     * single-Huffman path. {@code 0} means "don't try meta-Huffman at all". Picking
+     * tile_bits=8 gives 256x256 tiles, which for
      * tooltip-sized content splits a full canvas into a handful of groups; partial
      * diff frames trivially collapse to a single-group meta-Huffman (which is strictly
      * worse than no-meta and the A/B selector rejects it). Each added trial roughly
@@ -121,9 +120,18 @@ public final class VP8LEncoder {
         CROSS_COLOR
     }
 
+    /**
+     * Encodes {@code pixels} into a VP8L payload suitable for wrapping in a {@code VP8L}
+     * WebP chunk (via {@code RiffContainer#createChunk}), keeping the smallest of every
+     * transform, color-cache and meta-Huffman combination tried.
+     *
+     * @param pixels the ARGB source buffer
+     * @return the encoded VP8L bitstream
+     */
     public static byte @NotNull [] encode(@NotNull PixelBuffer pixels) {
-        // Try every combination of (transform in {none, palette, predictor}) x
-        // (cache off / cache 10-bit) and keep the smallest output. Palette helps when a
+        // Try every transform (none, palette when eligible, predictor, subtract-green,
+        // cross-color) with the colour cache off and at 10 bits, with and without
+        // meta-Huffman, and keep the smallest. Palette helps when a
         // full-canvas image has <= 256 unique colours; predictor helps full-canvas
         // content with spatial coherence (gradients, AA edges); color cache helps
         // literal-heavy content with recurring colours the LZ77 match-finder misses.
@@ -157,14 +165,14 @@ public final class VP8LEncoder {
     /**
      * Convenience overload that encodes with a specific palette toggle and the color
      * cache disabled ({@code colorCacheBits = 0}). Exists primarily for diagnostics that
-     * want to measure the pre-cache baseline.
+     * measure output without the cache.
      */
     public static byte @NotNull [] encode(@NotNull PixelBuffer pixels, boolean usePalette) {
         return encode(pixels, usePalette, 0);
     }
 
     /**
-     * Convenience overload preserving the pre-{@link TransformMode} signature. Maps
+     * Convenience overload taking a palette toggle in place of a {@link TransformMode}. Maps
      * {@code usePalette = true} to {@link TransformMode#PALETTE} and {@code false} to
      * {@link TransformMode#NONE}.
      */
@@ -1068,19 +1076,19 @@ public final class VP8LEncoder {
         ensureDistanceNonEmpty(distFreq);
 
         // -------------------------------------------------------------------
-        //  Trace-backwards cost DP (task 8): re-decide every (literal | match)
+        //  Trace-backwards cost DP: re-decide every (literal | match)
         //  choice globally using Huffman bit costs from the initial greedy pass
         //  as a guide, then rebuild Huffman from the optimized token stream.
         // -------------------------------------------------------------------
 
-        // Phase 1: build INITIAL Huffman codes (cost estimator).
+        // Step 1: build INITIAL Huffman codes (cost estimator).
         PrefixCode greenPrefixEst = buildPrefixCode(greenFreq, MAX_HUFFMAN_BITS);
         PrefixCode redPrefixEst = buildPrefixCode(redFreq, MAX_HUFFMAN_BITS);
         PrefixCode bluePrefixEst = buildPrefixCode(blueFreq, MAX_HUFFMAN_BITS);
         PrefixCode alphaPrefixEst = buildPrefixCode(alphaFreq, MAX_HUFFMAN_BITS);
         PrefixCode distPrefixEst = buildPrefixCode(distFreq, MAX_HUFFMAN_BITS);
 
-        // Phase 2: pre-compute best match at every pixel position. The hash chain
+        // Step 2: pre-compute best match at every pixel position. The hash chain
         // is fully populated from the initial LZ77 pass so findMatch at any pos
         // finds the globally-best backward reference.
         int[] bestMatchLen = new int[pixelCount];
@@ -1093,7 +1101,7 @@ public final class VP8LEncoder {
             bestMatchDist[i] = m[1];
         }
 
-        // Phase 2b: estimate cache state. Insert every pixel (conservative:
+        // Step 2b: estimate cache state. Insert every pixel (conservative:
         // over-estimates cache availability, matching libwebp's approach).
         int[] cacheHitIdx = null;
         if (cacheSize > 0) {
@@ -1108,7 +1116,7 @@ public final class VP8LEncoder {
             }
         }
 
-        // Phase 3: DP backward. dpCost[i] = minimum estimated bits to encode
+        // Step 3: DP backward. dpCost[i] = minimum estimated bits to encode
         // pixels[i..N-1]. At each i we consider literal, cache-index, and all
         // match lengths from MIN_MATCH to bestMatchLen[i].
         long[] dpCost = new long[pixelCount + 1];
@@ -1170,7 +1178,7 @@ public final class VP8LEncoder {
             }
         }
 
-        // Phase 4: forward walk → extract DP token stream into SEPARATE arrays
+        // Step 4: forward walk → extract DP token stream into SEPARATE arrays
         // (keep greedy tokens in tokenKind/Len/Value intact for comparison).
         int dpTokenCount = 0;
         int[] dpTokenKind = new int[pixelCount];
@@ -1185,7 +1193,7 @@ public final class VP8LEncoder {
             pi = dpNext[pi];
         }
 
-        // Phase 5: compare greedy vs DP by computing each token set's bit total
+        // Step 5: compare greedy vs DP by computing each token set's bit total
         // under its OWN final Huffman. The DP's estimated cost (dpCost[0]) is always
         // optimal under the INITIAL Huffman, but the actual output size depends on
         // the REBUILT Huffman which can be worse if the DP token distribution diverges
@@ -1223,7 +1231,7 @@ public final class VP8LEncoder {
             System.arraycopy(dpTokenValue, 0, tokenValue, 0, tokenCount);
         }
 
-        // Phase 6: rebuild final frequency tables from the surviving tokens.
+        // Step 6: rebuild final frequency tables from the surviving tokens.
         // The token arrays already hold either greedy (useDp=false) or DP
         // (useDp=true) choices — no further DP iteration; the actual-cost gate
         // above is the definitive decision.

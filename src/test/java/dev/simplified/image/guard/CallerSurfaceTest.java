@@ -24,6 +24,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -59,9 +60,11 @@ import static org.hamcrest.Matchers.is;
  *   a format's package one level below {@code codec}.</li>
  *   <li><b>Shared helpers.</b> {@code codec.common} and every package below it name no format, so no
  *   format depends on another through them.</li>
- *   <li><b>Public internals.</b> Every type declared public in an internal package carries
- *   {@code @ApiStatus.Internal} and is named from another package. One that is not named elsewhere should
- *   be package-private.</li>
+ *   <li><b>Public internals.</b> Every type in an internal package that another package can reach carries
+ *   {@code @ApiStatus.Internal} and is named from another package. Reach is the type's effective
+ *   visibility: it is public, or nested and protected, and so is every type it is nested in, where a type
+ *   declared inside an interface is public whether or not it says so. One that no other package names
+ *   should not be reachable.</li>
  * </ul>
  * <p>
  * An import counts when the file's code uses it: comments, text blocks and string and character literals
@@ -139,10 +142,9 @@ class CallerSurfaceTest {
      * One type declared in an internal source.
      *
      * @param chain its simple name, preceded by the simple name of every type it is nested in
-     * @param isPublic whether the declaration carries the {@code public} keyword
      * @param isTagged whether the declaration carries the internal tag
      */
-    private record Declaration(List<String> chain, boolean isPublic, boolean isTagged) {}
+    private record Declaration(List<String> chain, boolean isTagged) {}
 
     @Test
     @DisplayName("every package is a caller or an internal one, and carries a charter")
@@ -441,27 +443,79 @@ class CallerSurfaceTest {
     }
 
     @Test
-    @DisplayName("every public internal type is tagged internal and named from another package")
+    @DisplayName("every internal type another package can reach is tagged internal and named from another package")
     void publicInternalsAreTaggedAndNamed() {
         Set<String> untagged = new TreeSet<>();
         Set<String> unnamed = new TreeSet<>();
         int found = 0;
         for (Source source : sources()) {
-            if (!relative(source.pkg()).filter(CallerSurfaceTest::isInternal).isPresent()) continue;
-            for (Declaration declaration : declarations(source)) {
-                if (!declaration.isPublic()) continue;
+            if (relative(source.pkg()).filter(CallerSurfaceTest::isInternal).isEmpty() || isCharter(source)) continue;
+            Map<List<String>, Boolean> tags = tags(source);
+            List<Class<?>> types = new ArrayList<>();
+            nest(load(source.pkg() + "." + stem(source.path())), types);
+            for (Class<?> type : types) {
+                if (!isReachable(type)) continue;
                 found++;
-                String name = source.pkg() + "." + String.join(".", declaration.chain());
-                if (!declaration.isTagged()) untagged.add(name);
-                if (!isNamedElsewhere(source.pkg(), declaration.chain())) unnamed.add(name);
+                List<String> chain = chain(type);
+                String name = source.pkg() + "." + String.join(".", chain);
+                Boolean tagged = tags.get(chain);
+                if (tagged == null)
+                    throw new IllegalStateException("No declaration of '" + name + "' was read from '" + source.path() + "'");
+                if (!tagged) untagged.add(name);
+                if (!isNamedElsewhere(source.pkg(), chain)) unnamed.add(name);
             }
         }
 
-        assertThat("no public internal type was read, so the rule held nothing", found, is(greaterThan(0)));
-        assertThat("public internal types without @ApiStatus.Internal. Java has no sub-package access, so a type "
-            + "another package calls stays public, and the tag is what tells a caller to keep out", untagged, is(empty()));
-        assertThat("public internal types no other main package names. Nothing needs them public, so they should "
-            + "be package-private", unnamed, is(empty()));
+        assertThat("no reachable internal type was read, so the rule held nothing", found, is(greaterThan(0)));
+        assertThat("internal types another package can reach without @ApiStatus.Internal. Java has no sub-package "
+            + "access, so a type another package calls stays public, and the tag is what tells a caller to keep out. "
+            + "A type declared inside an interface is public whether or not it says so", untagged, is(empty()));
+        assertThat("internal types another package can reach that no other main package names. Nothing needs them "
+            + "reachable, so they should be package-private, or nested in a type that is", unnamed, is(empty()));
+    }
+
+    /**
+     * Answers whether code in another package can name a type, by its effective visibility: it is public, or
+     * nested and protected, and so is every type it is nested in. The compiler records a type declared inside
+     * an interface as public whether or not it says so, and reflection reads that record.
+     *
+     * @param type the type
+     * @return {@code true} when every link from it out to its top-level type is reachable
+     */
+    private static boolean isReachable(Class<?> type) {
+        for (Class<?> link = type; link != null; link = link.getEnclosingClass()) {
+            int modifiers = link.getModifiers();
+            boolean nested = link.getEnclosingClass() != null;
+            if (!Modifier.isPublic(modifiers) && !(nested && Modifier.isProtected(modifiers))) return false;
+        }
+        return true;
+    }
+
+    /**
+     * Names a type by its simple name, preceded by the simple name of every type it is nested in.
+     *
+     * @param type the type
+     * @return the chain, outermost first
+     */
+    private static List<String> chain(Class<?> type) {
+        List<String> chain = new ArrayList<>();
+        for (Class<?> link = type; link != null; link = link.getEnclosingClass()) chain.addFirst(link.getSimpleName());
+        return List.copyOf(chain);
+    }
+
+    /**
+     * Reads which of a source's type declarations carry the internal tag, which reflection cannot see: the tag
+     * is kept in the class file but not at runtime. Where two declarations share a chain - a member and a local
+     * class of one name - the chain counts as tagged only when both are, so the rule errs toward failing.
+     *
+     * @param source the source
+     * @return whether each declared chain is tagged
+     */
+    private static Map<List<String>, Boolean> tags(Source source) {
+        Map<List<String>, Boolean> tags = new HashMap<>();
+        for (Declaration declaration : declarations(source))
+            tags.merge(declaration.chain(), declaration.isTagged(), Boolean::logicalAnd);
+        return tags;
     }
 
     /**
@@ -485,9 +539,7 @@ class CallerSurfaceTest {
             chain.add(matcher.group(3));
             bodies.add(new int[] { open, close });
             names.add(matcher.group(3));
-            String modifiers = matcher.group(1);
-            out.add(new Declaration(List.copyOf(chain), Pattern.compile("\\bpublic\\b").matcher(modifiers).find(),
-                TAG.matcher(modifiers).find()));
+            out.add(new Declaration(List.copyOf(chain), TAG.matcher(matcher.group(1)).find()));
         }
         return out;
     }
