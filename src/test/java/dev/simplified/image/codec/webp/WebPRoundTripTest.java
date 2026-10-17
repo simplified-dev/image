@@ -10,6 +10,7 @@ import dev.simplified.image.data.AnimatedImageData;
 import dev.simplified.image.data.FrameBlend;
 import dev.simplified.image.data.FrameDisposal;
 import dev.simplified.image.data.ImageFrame;
+import dev.simplified.image.option.WebPWriteOptions;
 import dev.simplified.image.pixel.PixelBuffer;
 import org.jetbrains.annotations.NotNull;
 import org.junit.jupiter.api.DisplayName;

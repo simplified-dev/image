@@ -1,6 +1,5 @@
-package dev.simplified.image.codec.gif;
+package dev.simplified.image.option;
 
-import dev.simplified.image.codec.ImageWriteOptions;
 import org.jetbrains.annotations.NotNull;
 
 import java.awt.Graphics2D;

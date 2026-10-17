@@ -1,6 +1,5 @@
-package dev.simplified.image.codec.png;
+package dev.simplified.image.option;
 
-import dev.simplified.image.codec.ImageWriteOptions;
 import dev.simplified.util.NumberUtil;
 import org.jetbrains.annotations.NotNull;
 

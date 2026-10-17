@@ -3,6 +3,7 @@ package dev.simplified.image.codec;
 import dev.simplified.image.ImageData;
 import dev.simplified.image.ImageFormat;
 import dev.simplified.image.exception.ImageDecodeException;
+import dev.simplified.image.option.ImageReadOptions;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 

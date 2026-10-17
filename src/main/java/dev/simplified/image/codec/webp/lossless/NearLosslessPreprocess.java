@@ -1,6 +1,6 @@
 package dev.simplified.image.codec.webp.lossless;
 
-import dev.simplified.image.codec.webp.WebPWriteOptions;
+import dev.simplified.image.option.WebPWriteOptions;
 import org.jetbrains.annotations.NotNull;
 
 /**

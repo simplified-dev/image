@@ -3,6 +3,8 @@ package dev.simplified.image.codec.gif;
 import dev.simplified.image.ImageData;
 import dev.simplified.image.data.AnimatedImageData;
 import dev.simplified.image.data.ImageFrame;
+import dev.simplified.image.option.DelayFidelity;
+import dev.simplified.image.option.GifWriteOptions;
 import dev.simplified.image.pixel.PixelBuffer;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;

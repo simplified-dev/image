@@ -1,6 +1,5 @@
-package dev.simplified.image.codec.jpeg;
+package dev.simplified.image.option;
 
-import dev.simplified.image.codec.ImageWriteOptions;
 import org.jetbrains.annotations.NotNull;
 
 /**

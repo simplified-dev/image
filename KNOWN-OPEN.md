@@ -21,7 +21,7 @@ Defects present in the current tree and not yet fixed, most severe first. Each e
 ## GIF writer misreads frames of different sizes and drops frame offsets
 `flattenAllFrames` packs every frame's pixels back to back, but the write loop reads frame i at `i * frameStride`, where `frameStride` is the largest frame's area, so an animation whose frames differ in size is written from the wrong slices and the last one overruns the array: frames of 4x4, 2x2 and 2x2 throw `ArrayIndexOutOfBoundsException: Index 32 out of bounds for length 24`. `configureFrameMetadata` writes only the GraphicControlExtension and never the ImageDescriptor's `imageLeftPosition` / `imageTopPosition`, so every frame is written at the origin. A GIF this library decodes - partial frames at offsets - therefore cannot be re-encoded: it throws, or, where its partial frames happen to share one size, it is written with every frame moved to the top-left corner. HIGH once a caller re-encodes decoded GIFs.
 
-- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:106-129` (`write`, the `frameStride` read), `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:165` (`flattenAllFrames`), `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:572-590` (`configureFrameMetadata`)
+- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:108-131` (`write`, the `frameStride` read), `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:167` (`flattenAllFrames`), `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:574-592` (`configureFrameMetadata`)
 - Severity: **MEDIUM**
 - Type: **BUG**
 - Status: **OPEN**
@@ -61,7 +61,7 @@ Line 20 says the encoder is keyframe-only 16x16 intra with no B_PRED and no inte
 ## ImageIO's GIF reader decodes interlaced frames shorter than 8 rows wrongly
 `GifImageWriter` writes every frame interlaced, because it takes ImageIO's default image metadata, whose `interlaceFlag` is TRUE. The JDK GIF reader that `GifImageReader` decodes through reads such a frame wrongly when it is shorter than 8 rows. Measured on still GIFs of alternating red and blue rows: a 2x2 frame decodes 2 pixels wrong, 3x3 6, 4x2 4 and 4x4 8; 8x8 and 16x16 decode exactly. A hand LZW decode and Pillow read the same files correctly, so the files are sound, and a short GIF this library writes does not round-trip through its own reader. Writing non-interlaced avoids it and moves every GIF's bytes. HIGH once a caller round-trips frames under 8 rows.
 
-- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:115`, `:134` (`getDefaultImageMetadata`), `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:64` (`reader.read`)
+- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:117`, `:136` (`getDefaultImageMetadata`), `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:64` (`reader.read`)
 - Severity: **MEDIUM**
 - Type: **BUG**
 - Status: **OPEN**
@@ -69,7 +69,7 @@ Line 20 says the encoder is keyframe-only 16x16 intra with no B_PRED and no inte
 ## The WebP writer's partial-frame path drops an OVER frame's blend
 When `usePartialFrames` holds - every lossless write, and every lossy write without P-frames - `WebPImageWriter` writes each ANMF chunk as do-not-dispose and do-not-blend over the region that changed. A frame tagged `FrameBlend.OVER` that is transparent where it relies on the frame beneath is therefore written as an overwrite. Measured on an animation whose frame 1 is `OVER`: written as lossless WebP (the default) the relying pixel reads `00000000`, where GIF shows `ffff0000` and lossy WebP with P-frames shows `ffff0005`. A decoded GIF, whose frames read as `OVER`, reaches it when re-encoded as lossless WebP; nothing in the workspace does that today. HIGH once a caller converts GIFs to WebP.
 
-- Affected: `src/main/java/dev/simplified/image/codec/webp/WebPImageWriter.java:155` (`usePartialFrames`), `:272-273`
+- Affected: `src/main/java/dev/simplified/image/codec/webp/WebPImageWriter.java:156` (`usePartialFrames`), `:273-274`
 - Severity: **MEDIUM**
 - Type: **BUG**
 - Status: **OPEN**
@@ -77,7 +77,7 @@ When `usePartialFrames` holds - every lossless write, and every lossy write with
 ## WebP write options cannot force infinite looping over a finite count
 `WebPImageWriter` reads a loop count of 0 in `WebPWriteOptions` as "unset" and falls back to the image's own loop count. `withLoopCount(0)`, which means infinite, is therefore ignored whenever the `AnimatedImageData` carries a finite count.
 
-- Affected: `src/main/java/dev/simplified/image/codec/webp/WebPImageWriter.java:65-67`
+- Affected: `src/main/java/dev/simplified/image/codec/webp/WebPImageWriter.java:66-68`
 - Severity: **LOW**
 - Type: **BUG**
 - Status: **OPEN**
@@ -85,7 +85,7 @@ When `usePartialFrames` holds - every lossless write, and every lossy write with
 ## GIF writer ignores the image's loop count whenever options are passed
 When `GifWriteOptions` are supplied, `GifImageWriter` takes the loop count only from the options, whose default of 0 means infinite. A finite-loop GIF re-encoded with options, for example to set transparency, loops forever. The WebP writer applies the opposite precedence.
 
-- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:69-78`
+- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:71-80`
 - Severity: **LOW**
 - Type: **BUG**
 - Status: **OPEN**
@@ -93,7 +93,7 @@ When `GifWriteOptions` are supplied, `GifImageWriter` takes the loop count only 
 ## GIF writer floors the flatten of a straight image
 `flattenAllFrames` lays a partly transparent straight pixel over the background as `(c * a + bg * (255 - a)) / 255`, an integer division, so every such pixel lands up to a level low: at worst 0.996 of a level from the exact composite over 455,168 cases (backgrounds 0, 1, 16, 127, 128, 198 and 255, every partial alpha, every straight level), where the premultiplied flatten beside it, rounded once, lands within 0.498. A straight image and its premultiplied twin therefore flatten up to a level apart. Rounding it moves the bytes of every GIF written from a straight image with partial alpha. MEDIUM once a caller holds GIF output to an exact composite.
 
-- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:201-203` (`flattenAllFrames`)
+- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:203-205` (`flattenAllFrames`)
 - Severity: **LOW**
 - Type: **BUG**
 - Status: **OPEN**
@@ -133,7 +133,7 @@ Line 36 promises that the VP8 tests abort via `TestAbortedException` when Python
 ## Python launchers fall through only on `IOException`
 Every launcher copy moves to the next interpreter candidate only when `ProcessBuilder.start()` throws, so the first candidate that launches wins even if it cannot import `webp`. The suspected trigger is a Windows Store `python3` stub; the only evidence for its behaviour is the code comment at `VP8CodecTest.java:777-786`, which says it can shadow a working install (UNVERIFIED that it launches and then fails).
 
-- Affected: `src/test/java/dev/simplified/image/codec/webp/lossy/VP8CodecTest.java:257-268`, `:777-805`, `:2251-2279`, `src/test/java/dev/simplified/image/codec/webp/WebPRoundTripTest.java:1528-1547`
+- Affected: `src/test/java/dev/simplified/image/codec/webp/lossy/VP8CodecTest.java:257-268`, `:777-805`, `:2251-2279`, `src/test/java/dev/simplified/image/codec/webp/WebPRoundTripTest.java:1529-1548`
 - Severity: **LOW**
 - Type: **RISK**
 - Status: **OPEN**
@@ -149,7 +149,7 @@ This launcher tries only `python3`, `python` and `py`, unlike the other copies, 
 ## Test file paths are spliced into Python `r'...'` literals
 The oracle scripts build `webp.load_image(r'<path>')` and `open(r'<path>')` by string concatenation, so a path containing `'` breaks the script. `Files.createTempFile` paths keep it harmless today; passing paths as argv removes it.
 
-- Affected: `src/test/java/dev/simplified/image/codec/webp/lossy/VP8CodecTest.java:229`, `:452`, `:740`, `:2162`, `:2167`, `:2198`, `src/test/java/dev/simplified/image/codec/webp/WebPRoundTripTest.java:1179`, `:1239`
+- Affected: `src/test/java/dev/simplified/image/codec/webp/lossy/VP8CodecTest.java:229`, `:452`, `:740`, `:2162`, `:2167`, `:2198`, `src/test/java/dev/simplified/image/codec/webp/WebPRoundTripTest.java:1180`, `:1240`
 - Severity: **LOW**
 - Type: **RISK**
 - Status: **OPEN**
@@ -157,7 +157,7 @@ The oracle scripts build `webp.load_image(r'<path>')` and `open(r'<path>')` by s
 ## Python launcher and PSNR helper are duplicated across test classes
 There are four copies of the interpreter launcher and three of the PSNR loop, which is how the override and fall-through behaviour above drifted apart.
 
-- Affected: `src/test/java/dev/simplified/image/codec/webp/lossy/VP8CodecTest.java:257-268`, `:777-805`, `:2251-2279`, `src/test/java/dev/simplified/image/codec/webp/WebPRoundTripTest.java:1528-1547` (launchers); `VP8CodecTest.java:399` (`computePsnr`), `:693` (`sourcePsnr`), `:2115` (`pixelPsnr`)
+- Affected: `src/test/java/dev/simplified/image/codec/webp/lossy/VP8CodecTest.java:257-268`, `:777-805`, `:2251-2279`, `src/test/java/dev/simplified/image/codec/webp/WebPRoundTripTest.java:1529-1548` (launchers); `VP8CodecTest.java:399` (`computePsnr`), `:693` (`sourcePsnr`), `:2115` (`pixelPsnr`)
 - Severity: **LOW**
 - Type: **GAP**
 - Status: **OPEN**

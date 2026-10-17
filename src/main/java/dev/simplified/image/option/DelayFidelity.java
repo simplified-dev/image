@@ -1,4 +1,4 @@
-package dev.simplified.image.codec.gif;
+package dev.simplified.image.option;
 
 import dev.simplified.annotations.Getter;
 import dev.simplified.annotations.RequiredArgsConstructor;
@@ -7,7 +7,7 @@ import dev.simplified.annotations.RequiredArgsConstructor;
  * How faithfully emitted frame delays follow the source timing when a schedule asks for finer
  * resolution than GIF's centisecond grid can express.
  * <p>
- * {@link GifImageWriter} quantizes the cumulative timeline rather than each delay on its own, so
+ * The GIF writer quantizes the cumulative timeline rather than each delay on its own, so
  * the declared total stays exact no matter how many frames there are. This setting governs the one
  * case quantizing alone cannot resolve - a frame whose share of the timeline rounds below the
  * smallest delay the audience honors - and it trades the two accuracies against each other:

@@ -1,9 +1,8 @@
-package dev.simplified.image.codec.webp;
+package dev.simplified.image.option;
 
 import dev.simplified.annotations.AccessLevel;
 import dev.simplified.annotations.Getter;
 import dev.simplified.annotations.RequiredArgsConstructor;
-import dev.simplified.image.codec.ImageWriteOptions;
 import org.jetbrains.annotations.NotNull;
 
 /**

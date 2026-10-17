@@ -23,7 +23,7 @@ The VP8 decoder handles the full intra-4x4 B_PRED sub-mode tree for reading libw
 
 ## Builders
 
-Write options use fluent builders: `WebPWriteOptions.builder().isLossless(bool).withQuality(float).isMultithreaded().withLoopCount(int).build()`. Same pattern for `GifWriteOptions`, `JpegWriteOptions`, `PngWriteOptions`.
+Write options live in `.option` and use fluent builders: `WebPWriteOptions.builder().isLossless(bool).withQuality(float).isMultithreaded().withLoopCount(int).build()`. Same pattern for `GifWriteOptions`, `JpegWriteOptions`, `PngWriteOptions`.
 
 ## Build
 

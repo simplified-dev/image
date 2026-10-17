@@ -1,8 +1,7 @@
-package dev.simplified.image.codec.tiff;
+package dev.simplified.image.option;
 
 import dev.simplified.annotations.ClassBuilder;
 import dev.simplified.annotations.SetterNames;
-import dev.simplified.image.codec.ImageWriteOptions;
 import org.jetbrains.annotations.NotNull;
 
 /**

@@ -1,4 +1,4 @@
-package dev.simplified.image.codec;
+package dev.simplified.image.option;
 
 /**
  * Base type for format-specific image encoding options.
