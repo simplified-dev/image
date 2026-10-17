@@ -210,14 +210,6 @@ The GIF NETSCAPE loop count and the WebP `ANIM` loop count pass unchanged into `
 - Type: **RISK**
 - Status: **OPEN**
 
-## `Resample.NEAREST` promises the centre-closest pixel; `resize` takes the top-left one
-The javadoc says nearest picks the source pixel whose centre is closest to the sampled location, but `resize` maps `sx = x * W / w`, the top-left of each footprint, as `blitScaled` does: for a 3x downscale, output 1 reads source 3 where the centre-closest is 4.
-
-- Affected: `src/main/java/dev/simplified/image/pixel/Resample.java:25-30`, `src/main/java/dev/simplified/image/PixelBuffer.java:408`, `:410` (`resize`)
-- Severity: **LOW**
-- Type: **GAP**
-- Status: **OPEN**
-
 ## `resize(BICUBIC)` always reports `hasAlpha = true`
 `NEAREST` and `BILINEAR` keep the source's `hasAlpha`; `BICUBIC` wraps a `TYPE_INT_ARGB` image, so an opaque buffer comes back flagged as carrying alpha and loses `blit`'s opaque fast path.
 

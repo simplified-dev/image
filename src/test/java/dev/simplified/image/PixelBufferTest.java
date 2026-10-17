@@ -172,6 +172,19 @@ class PixelBufferTest {
     }
 
     @Test
+    @DisplayName("resize NEAREST takes the top-left source pixel of each output pixel's footprint")
+    void resizeNearestTakesTheTopLeftOfEachFootprint() {
+        PixelBuffer row = PixelBuffer.create(9, 1);
+        for (int x = 0; x < 9; x++)
+            row.setPixel(x, 0, 0xFF000000 | x);
+
+        // A 3x downscale reads source 0, 3 and 6, where the centre-closest pixels are 1, 4 and 7.
+        assertArrayEquals(new int[]{ 0xFF000000, 0xFF000003, 0xFF000006 }, row.resize(3, 1, Resample.NEAREST).data());
+        // Upscaling 2 to 3 reads source 0, 0 and 1: each output column rounds down onto the source.
+        assertArrayEquals(new int[]{ 0xFF000000, 0xFF000000, 0xFF000001 }, row.crop(0, 0, 2, 1).resize(3, 1, Resample.NEAREST).data());
+    }
+
+    @Test
     @DisplayName("blitScaled PREMULTIPLIED onto a fresh buffer agrees with resize NEAREST for a translucent source")
     void blitScaledPremultipliedMatchesResizeNearest() {
         PixelBuffer render = PixelBuffer.create(6, 6);

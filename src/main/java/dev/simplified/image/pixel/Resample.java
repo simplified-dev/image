@@ -23,8 +23,11 @@ public enum Resample {
     BILINEAR,
 
     /**
-     * Nearest-neighbor resampling. Picks the source pixel whose centre is closest to the sampled
-     * location. Preserves hard edges and keeps pixel-art crisp, but introduces aliasing on
+     * Nearest-neighbor resampling. Output pixel {@code (x, y)} of a {@code w x h} result takes source
+     * pixel {@code (x * W / w, y * H / h)} of a {@code W x H} source, each division rounding down: the
+     * top-left pixel of the source area the output pixel covers, which is not always the one whose
+     * centre lies closest. A 3x downscale keeps source pixels 0, 3 and 6, where the closest centres are
+     * those of 1, 4 and 7. Preserves hard edges and keeps pixel-art crisp, but introduces aliasing on
      * smooth content.
      */
     NEAREST
