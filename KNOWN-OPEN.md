@@ -10,14 +10,6 @@ Defects present in the current tree and not yet fixed, most severe first. Each e
 - Type: **BUG**
 - Status: **OPEN**
 
-## GIF writer misreads frames of different sizes and drops frame offsets
-`flattenAllFrames` packs every frame's pixels back to back, but the write loop reads frame i at `i * frameStride`, where `frameStride` is the largest frame's area, so an animation whose frames differ in size is written from the wrong slices and the last one overruns the array: frames of 4x4, 2x2 and 2x2 throw `ArrayIndexOutOfBoundsException: Index 32 out of bounds for length 24`. `configureFrameMetadata` writes only the GraphicControlExtension and never the ImageDescriptor's `imageLeftPosition` / `imageTopPosition`, so every frame is written at the origin. A GIF this library decodes - partial frames at offsets - therefore cannot be re-encoded: it throws, or, where its partial frames happen to share one size, it is written with every frame moved to the top-left corner. The writer hands ImageIO no stream metadata either, so the Logical Screen Descriptor declares the first frame's size rather than the image's canvas: two 8x8 frames on a 16x16 canvas are written with an 8x8 screen and read back 8x8, and a decoded GIF whose screen is larger than its first frame is written with the smaller one. HIGH once a caller re-encodes decoded GIFs.
-
-- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:117-143` (`write`, the `frameStride` read, and `prepareWriteSequence(null)` at `:119`), `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:179` (`flattenAllFrames`), `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:576-594` (`configureFrameMetadata`)
-- Severity: **MEDIUM**
-- Type: **BUG**
-- Status: **OPEN**
-
 ## WebP writer refuses an animation whose frames do not cover its canvas from the origin
 `writeAnimated` encodes every frame as though its pixels spanned the canvas from the origin - frame 0's ANMF is declared canvas-sized and each later frame is diffed pixel for pixel against the one before - so `requireCanvasFrames` refuses with `ImageEncodeException` any animation holding a frame of another size or at an offset. A decoded GIF whose first frame is smaller than its logical screen, or whose later frames are partial, is such an animation, and cannot be written as WebP at all: two 4x4 frames on an 8x8 screen, the second at (4, 4), are refused at frame 0, and a 4x4 frame followed by a 2x2 one at (1, 1) at frame 1. An ANMF chunk carries its own offset, at even coordinates, and its own blend and disposal flags, so the container can hold such frames as they are; GIF's `RESTORE_TO_PREVIOUS` disposal has no WebP flag. `ImageData#toCanvasFrames` composes such an animation into whole-canvas frames the writer accepts, but the writer does not call it, so a caller must. Nothing in the workspace re-encodes a decoded GIF as WebP today. HIGH once a caller converts GIFs to WebP.
 
