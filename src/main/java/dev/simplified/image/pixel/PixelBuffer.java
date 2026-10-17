@@ -573,8 +573,10 @@ public class PixelBuffer {
     /**
      * Un-premultiplies each pixel's RGB channels in place, dividing by alpha.
      * <p>
-     * Inverse of {@link #premultiplyAlpha()}. Results are clamped to {@code [0, 255]} to guard
-     * against accumulated floating-point drift.
+     * Inverse of {@link #premultiplyAlpha()}: each channel is divided back and rounded to nearest, a
+     * tie rounding up, so every premultiplied pixel becomes the straight pixel
+     * {@link #premultiplyAlpha()} takes back to it exactly. A pixel at alpha 0 or 255 is left as it
+     * is, and a channel above its alpha, which no premultiplied pixel holds, is held at 255.
      */
     public void unpremultiplyAlpha() {
         forEachRow(0, this.height, y -> {
@@ -584,9 +586,10 @@ public class PixelBuffer {
                 int p = this.data[i];
                 int a = (p >>> 24) & 0xFF;
                 if (a == 0xFF || a == 0) continue;
-                int r = Math.min(255, (((p >>> 16) & 0xFF) * 255) / a);
-                int g = Math.min(255, (((p >>> 8) & 0xFF) * 255) / a);
-                int b = Math.min(255, ((p & 0xFF) * 255) / a);
+                int half = a >> 1;
+                int r = Math.min(255, (((p >>> 16) & 0xFF) * 255 + half) / a);
+                int g = Math.min(255, (((p >>> 8) & 0xFF) * 255 + half) / a);
+                int b = Math.min(255, ((p & 0xFF) * 255 + half) / a);
                 this.data[i] = (a << 24) | (r << 16) | (g << 8) | b;
             }
         });
