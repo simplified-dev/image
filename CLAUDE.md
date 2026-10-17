@@ -52,6 +52,6 @@ The VP8 and WebP tests check this library's output against libwebp through Pytho
 - Java 21 toolchain (`build.gradle.kts`)
 - Internal deps: Simplified-Dev `collections`, `utils` (both pulled via JitPack, pinned to a commit)
 - External deps: Log4j2, Simplified Annotations, JetBrains annotations
-- Third-party code: `NOTICE` names every class ported from libwebp, libvpx or RFC 6386 and carries their licences; the jar packs it into `META-INF`. Code or tables taken from another codec get a line there too
+- Third-party code: `NOTICE` names every class ported from libwebp, libvpx or RFC 6386 and carries their licences; the jar packs it into `META-INF` with `LICENSE.md`, the Apache-2.0 text it points to. Code or tables taken from another codec get a line there too
 - Tests: JUnit 5 + Hamcrest
 - 95 main sources plus a `package-info.java` per package; 27 test sources

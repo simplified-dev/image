@@ -58,9 +58,10 @@ tasks.withType<Javadoc>().configureEach {
 }
 
 // NOTICE carries the libwebp, libvpx and RFC 6386 attributions, whose licences require them to
-// travel with a binary as well as with the source.
+// travel with a binary as well as with the source. LICENSE.md is the Apache-2.0 text NOTICE points
+// to, which the licence asks a redistributor to pass on with the work.
 tasks.jar {
-    metaInf { from("NOTICE") }
+    metaInf { from("NOTICE", "LICENSE.md") }
 }
 
 tasks.test {
