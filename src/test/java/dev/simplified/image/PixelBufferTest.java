@@ -455,7 +455,7 @@ class PixelBufferTest {
     }
 
     @Test
-    @DisplayName("premultiply then unpremultiply lands within half a premultiplied step of every straight pixel")
+    @DisplayName("premultiply then unpremultiply lands within half a premultiplied step, rounded to nearest, of every straight pixel")
     void premultiplyRoundtripBound() {
         for (int alpha = 1; alpha < 255; alpha++) {
             int[] fixture = new int[256];
@@ -467,8 +467,9 @@ class PixelBufferTest {
             buffer.unpremultiplyAlpha();
 
             // Premultiplying keeps alpha + 1 of the 256 straight levels, so a level comes back to the
-            // nearest one kept: within half a step, ceil(255 / (2 * alpha)), and within 1 from 128 up.
-            int bound = alpha >= 128 ? 1 : (255 + 2 * alpha - 1) / (2 * alpha);
+            // nearest one kept: within half a step rounded to nearest, (255 + alpha) / (2 * alpha), which
+            // is 1 from alpha 86 up. A division that floors lands one level further at 57 alphas.
+            int bound = (255 + alpha) / (2 * alpha);
             for (int straight = 0; straight < 256; straight++) {
                 int pixel = buffer.data()[straight];
                 String label = "alpha %d, straight %d".formatted(alpha, straight);
