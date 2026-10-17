@@ -42,14 +42,6 @@ Defects present in the current tree and not yet fixed, most severe first. Each e
 - Type: **BUG**
 - Status: **OPEN**
 
-## CLAUDE.md "VP8 encoder state" describes an outdated codec
-Line 28 says the encoder is keyframe-only 16x16 intra with no B_PRED and no inter frames, but it ships B_PRED, P-frames with golden/altref references, SPLITMV, R-D mode selection, trellis quantization and segmentation. It also cites libwebp `src/enc/tree_enc.c` for tables that `VP8Tables` takes from `src/dec/tree_dec.c`. Line 30 says the decoder still carries fixed-width 11-bit coefficient shortcuts pending a spec-compliant rewrite; that rewrite has landed. Anyone planning or sizing work against this paragraph undercounts the VP8 codec.
-
-- Affected: `CLAUDE.md:28`, `CLAUDE.md:30`
-- Severity: **MEDIUM**
-- Type: **GAP**
-- Status: **OPEN**
-
 ## No downscale averages: `blitScaled` decimates
 `blitScaled` and `blitScaledFxaa` map each destination pixel to one source pixel (`x * sw / dw`, read from the column table `sourceColumns` builds) and offer no other filter, and `resize` offers `NEAREST`, a 2x2 `BILINEAR` with no prefilter, and AWT `BICUBIC`. The library's one box filter, `PixelMask.downsample`, is boolean. A supersampled render scaled down through either composite keeps one sample of each block and discards the rest, so the supersampling averages nothing, and a `BILINEAR` downscale beyond 2x aliases the same way. asset-renderer's `RasterPass` scales down through `blitScaledFxaa` when it anti-aliases and through `blitScaled` when it does not: FXAA smooths the hi-res pixels the scale-down samples, and the scale-down still keeps one sample per block - a decimation of a filtered source. What such a caller needs is an area-averaging downsample of premultiplied colour.
 
@@ -123,9 +115,9 @@ Each ends with `if (x == null) return;` when Python or the `webp` package is una
 - Status: **OPEN**
 
 ## CLAUDE.md overstates the test-abort guarantee
-Line 44 promises that the VP8 tests abort via `TestAbortedException` when Python or the package is missing; the four silent passes above contradict it.
+Line 48 promises that the VP8 tests abort via `TestAbortedException` when Python or the package is missing; the four silent passes above contradict it.
 
-- Affected: `CLAUDE.md:44`
+- Affected: `CLAUDE.md:48`
 - Severity: **LOW**
 - Type: **GAP**
 - Status: **OPEN**

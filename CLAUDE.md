@@ -23,11 +23,15 @@ Internal, every package below `codec`. A type there is public only where another
 
 Every package has a `package-info.java` charter saying what belongs in it. `guard/CallerSurfaceTest` holds the layout over the main sources: every package classified and chartered, no caller source importing an internal type except `ImageFactory`, no caller signature naming one, options types in `.option` and readers and writers in their format's package, `.codec.common` and every package below it naming no format, and every public internal type tagged and named from another package.
 
-## VP8 encoder state
+## VP8 codec state
 
-Keyframe-only, 16x16 intra. All four luma and chroma modes (DC/V/H/TM) with SSE-based mode selection. No B_PRED 4x4 sub-blocks, no inter-frame. Quantizer / token-tree / coefficient probability tables are copied verbatim from libwebp (`src/enc/tree_enc.c`, `src/enc/frame_enc.c`, `src/enc/quant_enc.c`) - they must stay bit-exact or libwebp will reject the bitstream. `WebPImageWriter` with `isLossless(false)` is production-ready.
+The encoder writes keyframes and, opt-in, P-frames. A keyframe macroblock is coded either whole, as 16x16 DC/V/H/TM picked by distortion plus mode cost, or as B_PRED, each 4x4 sub-block taking the best of the ten sub-block modes by rate-distortion score; the lower score of the two wins. Chroma takes one of the four 8x8 modes the same way. Coefficients are trellis-quantized against the frame's token costs, the normal loop filter runs at a level derived from the quantizer (zero, so off, at the top of the quality range), and tokens go out over four partitions.
 
-The VP8 decoder handles the full intra-4x4 B_PRED sub-mode tree for reading libwebp-produced files, but also still carries shortcuts (fixed-width 11-bit coefficient reads) from the old sketch encoder era - a spec-compliant decoder rewrite is a future task.
+P-frames (`WebPWriteOptions.usePFrames`, through `VP8EncoderSession`) predict from the LAST reference only. Each macroblock takes the best rate-distortion score of ZEROMV skip, NEAREST and NEAR with and without residual, NEWMV from a motion search, SPLITMV, and intra 16x16 or B_PRED, and the motion-vector, mode and token probabilities update with a one-frame lag. GOLDEN and ALTREF are filled by each keyframe and are never refreshed or predicted from. `WebPWriteOptions.autoSegment` adds variance-based segmentation: four segments, each with its own quantizer delta. libwebp decodes the keyframe output and rejects every P-frame, so P-frame output reads back only through this library and libvpx-based decoders.
+
+The tables are taken from the two reference codecs and must stay bit-exact, or a decoder misreads the bitstream: the token tree and coefficient probabilities from libwebp's `src/dec/tree_dec.c`, the bit costs from `src/enc/cost_enc.c` and `cost_enc.h`, the quantizer bias and sharpening matrices from `src/enc/quant_enc.c`, and the inter-frame mode, motion-vector and SPLITMV tables from libvpx, chiefly `vp8/common/entropymode.c`, `vp8/common/modecont.c` and `vp8/decoder/decodemv.c`.
+
+The decoder reads keyframes and P-frames, the latter against all three references with their refresh, copy and sign-bias flags, plus SPLITMV, segmentation, loop-filter deltas, both loop filters and every token partition. Coefficients go through the full token tree in `VP8TokenDecoder`, after libwebp's `GetCoeffsFast`, and chroma is upsampled with libwebp's fancy bilinear filter. A P-frame decodes only through a `VP8DecoderSession` holding its reference.
 
 ## Builders
 
