@@ -18,6 +18,7 @@ import dev.simplified.image.frame.ImageFrame;
 import dev.simplified.image.option.ImageWriteOptions;
 import dev.simplified.image.option.WebPWriteOptions;
 import dev.simplified.image.pixel.AlphaMode;
+import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -27,6 +28,7 @@ import java.util.concurrent.CompletableFuture;
  * Writes WebP images (static and animated) using a pure Java implementation
  * of the VP8L lossless and VP8 lossy codecs.
  */
+@ApiStatus.Internal
 public class WebPImageWriter implements ImageWriter {
 
     @Override

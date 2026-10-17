@@ -1,6 +1,7 @@
 package dev.simplified.image.codec.webp.vp8l;
 
 import dev.simplified.image.PixelBuffer;
+import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 
 /**
@@ -31,6 +32,7 @@ import org.jetbrains.annotations.NotNull;
  * @see <a href="https://developers.google.com/speed/webp/docs/webp_lossless_bitstream_specification">
  *     WebP Lossless Bitstream Specification</a>
  */
+@ApiStatus.Internal
 public final class VP8LEncoder {
 
     private static final int VP8L_SIGNATURE = 0x2F;
@@ -95,6 +97,7 @@ public final class VP8LEncoder {
      * an image's histogram; predictor operates on the reduced residuals but libwebp
      * treats the two as competing strategies and we match that).
      */
+    @ApiStatus.Internal
     public enum TransformMode {
         /**
          * No transform - emit pixels as literal ARGB through the body entropy coder.

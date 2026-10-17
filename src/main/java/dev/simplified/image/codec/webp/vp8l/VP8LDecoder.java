@@ -2,6 +2,7 @@ package dev.simplified.image.codec.webp.vp8l;
 
 import dev.simplified.image.PixelBuffer;
 import dev.simplified.image.exception.ImageDecodeException;
+import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 
 import java.util.ArrayList;
@@ -14,6 +15,7 @@ import java.util.List;
  * LZ77 backward references, color cache, and four reversible transforms
  * (predictor, color, subtract-green, color-indexing).
  */
+@ApiStatus.Internal
 public final class VP8LDecoder {
 
     /**

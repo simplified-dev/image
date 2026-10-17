@@ -15,6 +15,7 @@ import dev.simplified.image.frame.FrameBlend;
 import dev.simplified.image.frame.FrameDisposal;
 import dev.simplified.image.frame.ImageFrame;
 import dev.simplified.image.option.ImageReadOptions;
+import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -30,6 +31,7 @@ import java.io.ByteArrayInputStream;
  * {@value #PAGE_DELAY_MS}-ms per-page delay, matching the GIF/WebP convention of
  * promoting any multi-frame image to animated output.
  */
+@ApiStatus.Internal
 public class TiffImageReader implements ImageReader {
 
     private static final int PAGE_DELAY_MS = 100;

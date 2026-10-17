@@ -8,6 +8,7 @@ import dev.simplified.image.StaticImageData;
 import dev.simplified.image.codec.ImageReader;
 import dev.simplified.image.exception.ImageDecodeException;
 import dev.simplified.image.option.ImageReadOptions;
+import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -17,6 +18,7 @@ import org.jetbrains.annotations.Nullable;
  * (bit 5) for top-down vs. bottom-up row order. Color-mapped and grayscale variants are
  * rejected.
  */
+@ApiStatus.Internal
 public class TgaImageReader implements ImageReader {
 
     private static final int TYPE_TRUE_COLOR = 2;

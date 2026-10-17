@@ -13,6 +13,7 @@ import dev.simplified.image.option.ImageWriteOptions;
 import dev.simplified.image.option.TiffWriteOptions;
 import dev.simplified.image.pixel.AlphaMode;
 import dev.simplified.util.io.ByteArrayDataOutput;
+import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -30,6 +31,7 @@ import java.awt.image.BufferedImage;
  * StaticImageData} is encoded as a single page. Compression scheme is selected via
  * {@link TiffWriteOptions}; the default is {@link TiffWriteOptions.Compression#DEFLATE}.
  */
+@ApiStatus.Internal
 public class TiffImageWriter implements ImageWriter {
 
     @Override

@@ -8,6 +8,7 @@ import dev.simplified.image.StaticImageData;
 import dev.simplified.image.codec.ImageReader;
 import dev.simplified.image.exception.ImageDecodeException;
 import dev.simplified.image.option.ImageReadOptions;
+import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -21,6 +22,7 @@ import java.nio.charset.StandardCharsets;
  * stores '1' as black and '0' as white; this reader follows that convention. All output
  * is fully opaque ARGB.
  */
+@ApiStatus.Internal
 public class PnmImageReader implements ImageReader {
 
     @Override

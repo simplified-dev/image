@@ -10,6 +10,7 @@ import dev.simplified.image.codec.ImageWriter;
 import dev.simplified.image.codec.png.PngImageWriter;
 import dev.simplified.image.option.ImageWriteOptions;
 import dev.simplified.util.io.ByteArrayDataOutput;
+import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -24,6 +25,7 @@ import java.io.IOException;
  * is not supported for ICO - only the first frame is written, since ICO's multi-entry
  * structure describes resolutions rather than animation frames.
  */
+@ApiStatus.Internal
 public class IcoImageWriter implements ImageWriter {
 
     private static final int MAX_ICO_DIMENSION = 256;

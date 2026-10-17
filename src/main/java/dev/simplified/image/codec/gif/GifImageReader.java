@@ -16,6 +16,7 @@ import dev.simplified.image.frame.FrameDisposal;
 import dev.simplified.image.frame.ImageFrame;
 import dev.simplified.image.option.ImageReadOptions;
 import dev.simplified.util.StringUtil;
+import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -33,6 +34,7 @@ import java.io.ByteArrayInputStream;
  * at the transparent index showing what lies beneath, so every frame is read
  * {@link FrameBlend#OVER}.
  */
+@ApiStatus.Internal
 public class GifImageReader implements ImageReader {
 
     @Override

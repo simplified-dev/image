@@ -2,6 +2,7 @@ package dev.simplified.image.codec.webp.vp8;
 
 import dev.simplified.image.PixelBuffer;
 import dev.simplified.image.exception.ImageDecodeException;
+import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -22,6 +23,7 @@ import org.jetbrains.annotations.Nullable;
  *
  * @see <a href="https://datatracker.ietf.org/doc/html/rfc6386">RFC 6386</a>
  */
+@ApiStatus.Internal
 public final class VP8Decoder {
 
     private VP8Decoder() { }

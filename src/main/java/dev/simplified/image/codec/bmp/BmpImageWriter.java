@@ -8,6 +8,7 @@ import dev.simplified.image.codec.ImageWriter;
 import dev.simplified.image.option.ImageWriteOptions;
 import dev.simplified.image.pixel.AlphaMode;
 import dev.simplified.util.io.ByteArrayDataOutput;
+import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -18,6 +19,7 @@ import java.awt.image.BufferedImage;
 /**
  * Writes BMP images via {@link ImageIO}.
  */
+@ApiStatus.Internal
 public class BmpImageWriter implements ImageWriter {
 
     @Override

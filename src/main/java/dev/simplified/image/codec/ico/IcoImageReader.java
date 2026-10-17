@@ -8,6 +8,7 @@ import dev.simplified.image.StaticImageData;
 import dev.simplified.image.codec.ImageReader;
 import dev.simplified.image.exception.ImageDecodeException;
 import dev.simplified.image.option.ImageReadOptions;
+import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -24,6 +25,7 @@ import java.util.Arrays;
  * are decoded via {@link ImageIO}. DIB blobs are decoded manually and currently require
  * 32 bits per pixel (BGRA); other color depths throw {@link ImageDecodeException}.
  */
+@ApiStatus.Internal
 public class IcoImageReader implements ImageReader {
 
     @Override

@@ -1,6 +1,7 @@
 package dev.simplified.image.codec.webp.vp8;
 
 import dev.simplified.image.PixelBuffer;
+import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 
 import java.util.concurrent.ForkJoinPool;
@@ -25,6 +26,7 @@ import java.util.concurrent.ForkJoinPool;
  * @see VP8DecoderSession
  * @see <a href="https://datatracker.ietf.org/doc/html/rfc6386#section-9.7">RFC 6386 section 9.7</a>
  */
+@ApiStatus.Internal
 public final class VP8EncoderSession {
 
     // ── LAST reference (legacy field names) ──

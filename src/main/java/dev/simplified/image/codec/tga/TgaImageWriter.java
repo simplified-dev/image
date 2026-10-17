@@ -10,6 +10,7 @@ import dev.simplified.image.option.ImageWriteOptions;
 import dev.simplified.image.option.TgaWriteOptions;
 import dev.simplified.image.pixel.AlphaMode;
 import dev.simplified.util.io.ByteArrayDataOutput;
+import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -24,6 +25,7 @@ import java.io.IOException;
  * (BGR). RLE packets never cross row boundaries, matching the conservative interpretation
  * of the TGA 2.0 spec.
  */
+@ApiStatus.Internal
 public class TgaImageWriter implements ImageWriter {
 
     private static final int TYPE_TRUE_COLOR = 2;

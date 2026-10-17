@@ -16,6 +16,7 @@ import dev.simplified.image.pixel.AlphaMode;
 import dev.simplified.image.pixel.BlendMode;
 import dev.simplified.image.pixel.ColorMath;
 import dev.simplified.util.io.ByteArrayDataOutput;
+import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -45,6 +46,7 @@ import java.util.Map;
  * {@link FrameDisposal#RESTORE_TO_BACKGROUND}, and so starts from a clear canvas rather than showing
  * the frame before it through its transparent pixels.
  */
+@ApiStatus.Internal
 public class GifImageWriter implements ImageWriter {
 
     /**

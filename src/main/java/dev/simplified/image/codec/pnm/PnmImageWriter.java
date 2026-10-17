@@ -10,6 +10,7 @@ import dev.simplified.image.option.ImageWriteOptions;
 import dev.simplified.image.option.PnmWriteOptions;
 import dev.simplified.image.pixel.AlphaMode;
 import dev.simplified.util.io.ByteArrayDataOutput;
+import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -23,6 +24,7 @@ import java.io.IOException;
  * luma threshold of 128 (below = black / bit set, at-or-above = white / bit clear).
  * Alpha is discarded for all three variants.
  */
+@ApiStatus.Internal
 public class PnmImageWriter implements ImageWriter {
 
     private static final int PBM_LUMA_THRESHOLD = 128;

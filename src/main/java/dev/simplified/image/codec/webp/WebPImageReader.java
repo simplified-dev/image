@@ -16,6 +16,7 @@ import dev.simplified.image.frame.FrameBlend;
 import dev.simplified.image.frame.FrameDisposal;
 import dev.simplified.image.frame.ImageFrame;
 import dev.simplified.image.option.ImageReadOptions;
+import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -23,6 +24,7 @@ import org.jetbrains.annotations.Nullable;
  * Reads WebP images (static and animated, lossless and lossy) using a pure Java
  * implementation of the VP8L and VP8 codecs.
  */
+@ApiStatus.Internal
 public class WebPImageReader implements ImageReader {
 
     @Override

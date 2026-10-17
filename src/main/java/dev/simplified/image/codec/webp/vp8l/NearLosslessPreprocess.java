@@ -1,6 +1,7 @@
 package dev.simplified.image.codec.webp.vp8l;
 
 import dev.simplified.image.option.WebPWriteOptions;
+import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 
 /**
@@ -42,6 +43,7 @@ import org.jetbrains.annotations.NotNull;
  *
  * @see <a href="https://chromium.googlesource.com/webm/libwebp/+/refs/heads/main/src/enc/near_lossless_enc.c">libwebp near_lossless_enc.c</a>
  */
+@ApiStatus.Internal
 public final class NearLosslessPreprocess {
 
     /**
