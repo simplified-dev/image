@@ -30,12 +30,18 @@ import static org.hamcrest.Matchers.hasSize;
  * GIF has no blend flag: a frame is always laid over what the previous frame's disposal left. The
  * writer honours a frame's {@link FrameBlend#SOURCE} through the disposal of the frame before it, so
  * what is checked here is the disposal written, never the one a frame carries.
+ * <p>
+ * For the same reason {@link GifImageReader} reads every frame {@link FrameBlend#OVER}, so a decoded
+ * GIF is written again with the disposals it was read with.
  */
 class GifDisposalTest {
 
     private static final int RED = 0xFFFF0000;
     private static final int BLUE = 0xFF0000FF;
     private static final int CLEAR = 0x00000000;
+
+    /** The options every played fixture is written with: a transparent palette slot. */
+    private static final GifWriteOptions TRANSPARENT = GifWriteOptions.builder().isTransparent().build();
 
     /**
      * The side of a decoded fixture: ImageIO's GIF reader, which {@link GifImageReader} decodes
@@ -141,7 +147,62 @@ class GifDisposalTest {
         assertThat(boxed(shown.getLast()), equalTo(boxed(both)));
     }
 
+    // ──── a decoded GIF ────
+
+    @Test
+    @DisplayName("every frame of a decoded GIF blends OVER")
+    void decodedFramesBlendOver() {
+        ImageData decoded = new GifImageReader().read(new GifImageWriter().write(blockOverRed(), TRANSPARENT));
+
+        assertThat(decoded.getFrames(), hasSize(2));
+        for (ImageFrame frame : decoded.getFrames())
+            assertThat(frame.blend(), equalTo(FrameBlend.OVER));
+    }
+
+    @Test
+    @DisplayName("a decoded GIF is written again with the disposals it was read with")
+    void decodedGifKeepsItsDisposals() {
+        byte[] original = new GifImageWriter().write(blockOverRed(), TRANSPARENT);
+        byte[] rewritten = new GifImageWriter().write(new GifImageReader().read(original), TRANSPARENT);
+
+        // Frame 0 is followed by an OVER frame and keeps its own disposal; frame 1 is followed by
+        // frame 0, which blends SOURCE.
+        assertThat(disposals(original), contains(0, 2));
+        assertThat(disposals(rewritten), equalTo(disposals(original)));
+    }
+
+    @Test
+    @DisplayName("a decoded GIF written again shows the frame beneath where a later frame is transparent")
+    void decodedGifShowsTheFrameBeneath() {
+        byte[] original = new GifImageWriter().write(blockOverRed(), TRANSPARENT);
+        byte[] rewritten = new GifImageWriter().write(new GifImageReader().read(original), TRANSPARENT);
+        int beneath = 5 * SIZE + 5;
+
+        assertThat(Integer.toHexString(play(original).getLast()[beneath]), equalTo(Integer.toHexString(RED)));
+        assertThat(Integer.toHexString(play(rewritten).getLast()[beneath]), equalTo(Integer.toHexString(RED)));
+    }
+
     // ──── fixtures ────
+
+    /**
+     * Two frames each disposed {@link FrameDisposal#NONE}: opaque red over the whole canvas, then a
+     * 2x2 blue block at (1, 1) laid {@link FrameBlend#OVER} it, transparent everywhere else.
+     */
+    private static @NotNull AnimatedImageData blockOverRed() {
+        int[] red = new int[SIZE * SIZE];
+        Arrays.fill(red, RED);
+        int[] block = new int[SIZE * SIZE];
+
+        for (int y = 1; y < 3; y++) {
+            for (int x = 1; x < 3; x++)
+                block[y * SIZE + x] = BLUE;
+        }
+
+        return animation(
+            ImageFrame.of(PixelBuffer.of(red, SIZE, SIZE), 100, 0, 0, FrameDisposal.NONE, FrameBlend.SOURCE),
+            ImageFrame.of(PixelBuffer.of(block, SIZE, SIZE), 100, 0, 0, FrameDisposal.NONE, FrameBlend.OVER)
+        );
+    }
 
     /**
      * Two transparent frames whose opaque pixels do not overlap - red on the left half, then blue on
@@ -242,9 +303,16 @@ class GifDisposalTest {
      * {@code (packed >> 2) & 7}, in file order.
      */
     private static @NotNull List<Integer> writtenDisposals(@NotNull ImageData data, @Nullable GifWriteOptions options) {
-        byte[] gif = options == null
+        return disposals(options == null
             ? new GifImageWriter().write(data)
-            : new GifImageWriter().write(data, options);
+            : new GifImageWriter().write(data, options));
+    }
+
+    /**
+     * Returns the disposal method each graphic control extension of {@code gif} declares,
+     * {@code (packed >> 2) & 7}, in file order.
+     */
+    private static @NotNull List<Integer> disposals(byte @NotNull [] gif) {
         List<Integer> disposals = new ArrayList<>();
 
         for (int offset : GifBlocks.graphicControlOffsets(gif)) {
@@ -259,8 +327,16 @@ class GifDisposalTest {
     }
 
     /**
-     * Writes {@code data} with a transparent palette slot, decodes it, and plays it as a GIF player
-     * does, returning the canvas shown after each frame.
+     * Writes {@code data} with a transparent palette slot and plays it, returning the canvas shown
+     * after each frame.
+     */
+    private static @NotNull List<int[]> play(@NotNull ImageData data) {
+        return play(new GifImageWriter().write(data, TRANSPARENT));
+    }
+
+    /**
+     * Decodes {@code gif} and plays it as a GIF player does, returning the canvas shown after each
+     * frame.
      * <p>
      * Each frame is laid over the canvas the previous frame's disposal left, a transparent pixel
      * showing what lies beneath. Every frame here spans the canvas from the origin, so restoring to
@@ -269,8 +345,7 @@ class GifDisposalTest {
      * @throws IllegalStateException if a decoded frame restores to the previous canvas, which no
      *     fixture here declares
      */
-    private static @NotNull List<int[]> play(@NotNull ImageData data) {
-        byte[] gif = new GifImageWriter().write(data, GifWriteOptions.builder().isTransparent().build());
+    private static @NotNull List<int[]> play(byte @NotNull [] gif) {
         ImageData decoded = new GifImageReader().read(gif);
         int[] canvas = new int[decoded.getWidth() * decoded.getHeight()];
         FrameDisposal pending = FrameDisposal.NONE;

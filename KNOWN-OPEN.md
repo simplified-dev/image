@@ -2,18 +2,10 @@
 
 Defects present in the current tree and not yet fixed, most severe first. Each entry names the cause, the affected code, what it costs today, and what would raise its severity.
 
-## A decoded GIF re-encoded with a transparent slot drops whatever its frames left to the frame beneath
-`GifImageReader` builds every frame with `FrameBlend.SOURCE`, but a GIF frame is always laid over what the previous frame's disposal left, a pixel at the transparent index showing what lies beneath, which is `OVER`. `GifImageWriter` honours the flag and declares a frame `RESTORE_TO_BACKGROUND` whenever the frame after it blends `SOURCE`, so a decoded animation is re-encoded with disposal 2 on every frame. Written with `GifWriteOptions.isTransparent()`, each frame then shows the background wherever it relied on the frame beneath, and a GIF whose later frames are transparent where nothing changed plays only its changes. Two 8x8 frames - opaque red disposed `NONE`, then a 2x2 blue block transparent elsewhere - are written with disposals 0 and 2 and show red at (5, 5) in the second frame; decoded and written again with the same options they declare 2 and 2 and show transparent there. The re-encode kept the composite until the writer honoured the blend. Without a transparent slot every pixel is flattened opaque and nothing shows through. The WebP writer draws a decoded GIF the same way on both its animated paths, the full-frame path writing a `SOURCE` frame "do not blend" and the partial-frame path writing each frame's own pixels, so a decoded GIF animates alike as GIF and as WebP and unlike the file it was read from. Nothing in the workspace decodes a GIF. Building the reader's frames `OVER` re-encodes a decoded GIF with the disposals it was read with, and lets WebP's full-frame path composite it.
-
-- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:107`, `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:561-569` (`writtenDisposal`)
-- Severity: **HIGH**
-- Type: **REGRESSION**
-- Status: **OPEN**
-
 ## GIF without a NETSCAPE block reads as "loop forever"
 `GifImageReader.parseLoopCount` returns 0 when the file carries no NETSCAPE2.0 application extension, and `AnimatedImageData` defines a loop count of 0 as infinite. A GIF that plays once therefore decodes to an `AnimatedImageData` that claims infinite looping, and any re-encode carries that forward. HIGH once a caller depends on play-once fidelity.
 
-- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:99-104`, `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:130-145` (`parseLoopCount`), `src/main/java/dev/simplified/image/data/AnimatedImageData.java:179-184` (`Builder.withLoopCount`)
+- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:103-108`, `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:134-149` (`parseLoopCount`), `src/main/java/dev/simplified/image/data/AnimatedImageData.java:179-184` (`Builder.withLoopCount`)
 - Severity: **MEDIUM**
 - Type: **BUG**
 - Status: **OPEN**
@@ -37,7 +29,7 @@ Defects present in the current tree and not yet fixed, most severe first. Each e
 ## GIF reader sizes the canvas from the first frame
 `GifImageReader` never reads the logical screen descriptor and builds the `AnimatedImageData` with no width or height, so the canvas takes the first frame's size, and a GIF whose first frame does not span its screen loses whatever later frames draw outside that rectangle. HIGH once a consumer draws a decoded GIF's frames onto its canvas.
 
-- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:115-118`
+- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:119-122`
 - Severity: **MEDIUM**
 - Type: **BUG**
 - Status: **OPEN**
@@ -173,7 +165,7 @@ The ICO arm of `ImageFormat.matches` accepts `00 00 01 00`, which is also the bi
 ## Loop-count unit differs per container but is stored raw
 The GIF NETSCAPE loop count and the WebP `ANIM` loop count pass unchanged into `AnimatedImageData.loopCount`, although players are widely reported to read the two in different units (repetitions after the first play versus total plays; UNVERIFIED against browser source). `AnimatedImageData` documents no unit beyond "0 for infinite".
 
-- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:103`, `src/main/java/dev/simplified/image/codec/webp/WebPImageReader.java:99-104`, `src/main/java/dev/simplified/image/data/AnimatedImageData.java:26`
+- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:107`, `src/main/java/dev/simplified/image/codec/webp/WebPImageReader.java:99-104`, `src/main/java/dev/simplified/image/data/AnimatedImageData.java:26`
 - Severity: **LOW**
 - Type: **RISK**
 - Status: **OPEN**
