@@ -16,6 +16,7 @@ import dev.simplified.image.exception.ImageDecodeException;
 import dev.simplified.image.frame.FrameBlend;
 import dev.simplified.image.frame.FrameDisposal;
 import dev.simplified.image.frame.ImageFrame;
+import dev.simplified.image.frame.LoopCount;
 import dev.simplified.image.option.ImageReadOptions;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
@@ -99,12 +100,15 @@ public class WebPImageReader implements ImageReader {
         // Animated
         WebPChunk animChunk = findChunk(chunks, WebPChunk.Type.ANIM);
         int backgroundColor = 0;
-        int loopCount = 0;
+        // ANIM counts plays, the first included, and 0 plays forever. A file with no ANIM chunk plays
+        // once, the count libwebp's demuxer starts from.
+        LoopCount loopCount = LoopCount.Preset.NONE;
 
         if (animChunk != null && animChunk.payloadLength() >= 6) {
             byte[] animPayload = animChunk.payload();
             backgroundColor = LittleEndian.readUint32(animPayload, 0);
-            loopCount = (animPayload[4] & 0xFF) | ((animPayload[5] & 0xFF) << 8);
+            int plays = LittleEndian.readUint16(animPayload, 4);
+            loopCount = plays == 0 ? LoopCount.Preset.INFINITE : LoopCount.of(plays - 1);
         }
 
         ConcurrentList<ImageFrame> frames = Concurrent.newList();

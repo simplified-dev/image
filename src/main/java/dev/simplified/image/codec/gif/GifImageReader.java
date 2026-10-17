@@ -14,6 +14,7 @@ import dev.simplified.image.exception.ImageDecodeException;
 import dev.simplified.image.frame.FrameBlend;
 import dev.simplified.image.frame.FrameDisposal;
 import dev.simplified.image.frame.ImageFrame;
+import dev.simplified.image.frame.LoopCount;
 import dev.simplified.image.option.ImageReadOptions;
 import dev.simplified.util.StringUtil;
 import org.jetbrains.annotations.ApiStatus;
@@ -60,7 +61,7 @@ public class GifImageReader implements ImageReader {
             throw new ImageDecodeException("GIF contains no frames");
 
         ConcurrentList<ImageFrame> frames = Concurrent.newList();
-        int loopCount = 0;
+        LoopCount loopCount = LoopCount.Preset.INFINITE;
 
         for (int i = 0; i < frameCount; i++) {
             var image = reader.read(i);
@@ -133,7 +134,15 @@ public class GifImageReader implements ImageReader {
         return null;
     }
 
-    private static int parseLoopCount(@NotNull IIOMetadataNode appExts) {
+    /**
+     * Reads the loop count a GIF's NETSCAPE2.0 application extension declares.
+     * <p>
+     * The extension counts repeats after the first play, {@code 0} repeating forever.
+     *
+     * @param appExts the first frame's application extensions
+     * @return the loop count declared, or one that repeats forever when no extension declares one
+     */
+    private static @NotNull LoopCount parseLoopCount(@NotNull IIOMetadataNode appExts) {
         for (int i = 0; i < appExts.getLength(); i++) {
             IIOMetadataNode child = (IIOMetadataNode) appExts.item(i);
             String appId = child.getAttribute("applicationID");
@@ -142,12 +151,14 @@ public class GifImageReader implements ImageReader {
             if ("NETSCAPE".equals(appId) && "2.0".equals(authCode)) {
                 Object userObject = child.getUserObject();
 
-                if (userObject instanceof byte[] bytes && bytes.length >= 3)
-                    return (bytes[1] & 0xFF) | ((bytes[2] & 0xFF) << 8);
+                if (userObject instanceof byte[] bytes && bytes.length >= 3) {
+                    int count = (bytes[1] & 0xFF) | ((bytes[2] & 0xFF) << 8);
+                    return count == 0 ? LoopCount.Preset.INFINITE : LoopCount.of(count);
+                }
             }
         }
 
-        return 0;
+        return LoopCount.Preset.INFINITE;
     }
 
 }

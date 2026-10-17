@@ -3,9 +3,9 @@
 Defects present in the current tree and not yet fixed, most severe first. Each entry names the cause, the affected code, what it costs today, and what would raise its severity.
 
 ## GIF without a NETSCAPE block reads as "loop forever"
-`GifImageReader.parseLoopCount` returns 0 when the file carries no NETSCAPE2.0 application extension, and `AnimatedImageData` defines a loop count of 0 as infinite. A GIF that plays once therefore decodes to an `AnimatedImageData` that claims infinite looping, and any re-encode carries that forward. HIGH once a caller depends on play-once fidelity.
+`GifImageReader` starts from `LoopCount.Preset.INFINITE`, and `parseLoopCount` answers it again when no NETSCAPE2.0 application extension declares a count, but a GIF that carries none plays once. A GIF that plays once therefore decodes to an `AnimatedImageData` that claims infinite looping, and any re-encode carries that forward. HIGH once a caller depends on play-once fidelity.
 
-- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:105-110`, `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:136-151` (`parseLoopCount`), `src/main/java/dev/simplified/image/AnimatedImageData.java:178-183` (`Builder.withLoopCount`)
+- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:64`, `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:106-111`, `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:145-162` (`parseLoopCount`)
 - Severity: **MEDIUM**
 - Type: **BUG**
 - Status: **OPEN**
@@ -21,7 +21,7 @@ Defects present in the current tree and not yet fixed, most severe first. Each e
 ## GIF writer misreads frames of different sizes and drops frame offsets
 `flattenAllFrames` packs every frame's pixels back to back, but the write loop reads frame i at `i * frameStride`, where `frameStride` is the largest frame's area, so an animation whose frames differ in size is written from the wrong slices and the last one overruns the array: frames of 4x4, 2x2 and 2x2 throw `ArrayIndexOutOfBoundsException: Index 32 out of bounds for length 24`. `configureFrameMetadata` writes only the GraphicControlExtension and never the ImageDescriptor's `imageLeftPosition` / `imageTopPosition`, so every frame is written at the origin. A GIF this library decodes - partial frames at offsets - therefore cannot be re-encoded: it throws, or, where its partial frames happen to share one size, it is written with every frame moved to the top-left corner. HIGH once a caller re-encodes decoded GIFs.
 
-- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:109-132` (`write`, the `frameStride` read), `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:168` (`flattenAllFrames`), `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:575-593` (`configureFrameMetadata`)
+- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:117-143` (`write`, the `frameStride` read), `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:179` (`flattenAllFrames`), `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:589-607` (`configureFrameMetadata`)
 - Severity: **MEDIUM**
 - Type: **BUG**
 - Status: **OPEN**
@@ -29,7 +29,7 @@ Defects present in the current tree and not yet fixed, most severe first. Each e
 ## GIF reader sizes the canvas from the first frame
 `GifImageReader` never reads the logical screen descriptor and builds the `AnimatedImageData` with no width or height, so the canvas takes the first frame's size, and a GIF whose first frame does not span its screen loses whatever later frames draw outside that rectangle. HIGH once a consumer draws a decoded GIF's frames onto its canvas.
 
-- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:121-124`
+- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:122-125`
 - Severity: **MEDIUM**
 - Type: **BUG**
 - Status: **OPEN**
@@ -37,7 +37,7 @@ Defects present in the current tree and not yet fixed, most severe first. Each e
 ## WebP reader keeps each frame's disposal and blend on frames it has already composed
 `readExtended` composites every ANMF frame onto the canvas - applying its blend and the prior frame's disposal - and emits the whole canvas at offset 0, but tags that full picture with the frame's original `disposal` and `blend`. A consumer that honours the flags composites each frame a second time: an `OVER` frame is blended over itself, and a `RESTORE_TO_BACKGROUND` frame clears a rectangle of a picture that is already whole. A composed frame carries no blend or disposal of its own to apply. HIGH once a consumer composites decoded WebPs by the flags.
 
-- Affected: `src/main/java/dev/simplified/image/codec/webp/WebPImageReader.java:247` (`readExtended`)
+- Affected: `src/main/java/dev/simplified/image/codec/webp/WebPImageReader.java:251` (`readExtended`)
 - Severity: **MEDIUM**
 - Type: **BUG**
 - Status: **OPEN**
@@ -53,7 +53,7 @@ Defects present in the current tree and not yet fixed, most severe first. Each e
 ## ImageIO's GIF reader decodes interlaced frames shorter than 8 rows wrongly
 `GifImageWriter` writes every frame interlaced, because it takes ImageIO's default image metadata, whose `interlaceFlag` is TRUE. The JDK GIF reader that `GifImageReader` decodes through reads such a frame wrongly when it is shorter than 8 rows. Measured on still GIFs of alternating red and blue rows: a 2x2 frame decodes 2 pixels wrong, 3x3 6, 4x2 4 and 4x4 8; 8x8 and 16x16 decode exactly. A hand LZW decode and Pillow read the same files correctly, so the files are sound, and a short GIF this library writes does not round-trip through its own reader. Writing non-interlaced avoids it and moves every GIF's bytes. HIGH once a caller round-trips frames under 8 rows.
 
-- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:118`, `:137` (`getDefaultImageMetadata`), `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:66` (`reader.read`)
+- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:127`, `:148` (`getDefaultImageMetadata`), `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:67` (`reader.read`)
 - Severity: **MEDIUM**
 - Type: **BUG**
 - Status: **OPEN**
@@ -61,23 +61,23 @@ Defects present in the current tree and not yet fixed, most severe first. Each e
 ## The WebP writer's partial-frame path drops an OVER frame's blend
 When `usePartialFrames` holds - every lossless write, and every lossy write without P-frames - `WebPImageWriter` writes each ANMF chunk as do-not-dispose and do-not-blend over the region that changed. A frame tagged `FrameBlend.OVER` that is transparent where it relies on the frame beneath is therefore written as an overwrite. Measured on an animation whose frame 1 is `OVER`: written as lossless WebP (the default) the relying pixel reads `00000000`, where GIF shows `ffff0000` and lossy WebP with P-frames shows `ffff0005`. A decoded GIF, whose frames read as `OVER`, reaches it when re-encoded as lossless WebP; nothing in the workspace does that today. HIGH once a caller converts GIFs to WebP.
 
-- Affected: `src/main/java/dev/simplified/image/codec/webp/WebPImageWriter.java:158` (`usePartialFrames`), `:275-276`
+- Affected: `src/main/java/dev/simplified/image/codec/webp/WebPImageWriter.java:166` (`usePartialFrames`), `:283-284`
 - Severity: **MEDIUM**
 - Type: **BUG**
 - Status: **OPEN**
 
 ## WebP write options cannot force infinite looping over a finite count
-`WebPImageWriter` reads a loop count of 0 in `WebPWriteOptions` as "unset" and falls back to the image's own loop count. `withLoopCount(0)`, which means infinite, is therefore ignored whenever the `AnimatedImageData` carries a finite count.
+`WebPImageWriter` reads a loop count in `WebPWriteOptions` that repeats forever as no count at all, and falls back to the image's own loop count. `withLoopCount(LoopCount.Preset.INFINITE)` is therefore ignored whenever the `AnimatedImageData` carries a finite count.
 
-- Affected: `src/main/java/dev/simplified/image/codec/webp/WebPImageWriter.java:68-70`
+- Affected: `src/main/java/dev/simplified/image/codec/webp/WebPImageWriter.java:77-78`
 - Severity: **LOW**
 - Type: **BUG**
 - Status: **OPEN**
 
 ## GIF writer ignores the image's loop count whenever options are passed
-When `GifWriteOptions` are supplied, `GifImageWriter` takes the loop count only from the options, whose default of 0 means infinite. A finite-loop GIF re-encoded with options, for example to set transparency, loops forever. The WebP writer applies the opposite precedence.
+When `GifWriteOptions` are supplied, `GifImageWriter` takes the loop count only from the options, and options that set none declare `LoopCount.Preset.INFINITE`. A finite-loop GIF re-encoded with options, for example to set transparency, loops forever. The WebP writer declares the image's count when its options set none.
 
-- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:72-81`
+- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:80-89`
 - Severity: **LOW**
 - Type: **BUG**
 - Status: **OPEN**
@@ -85,7 +85,7 @@ When `GifWriteOptions` are supplied, `GifImageWriter` takes the loop count only 
 ## GIF writer floors the flatten of a straight image
 `flattenAllFrames` lays a partly transparent straight pixel over the background as `(c * a + bg * (255 - a)) / 255`, an integer division, so every such pixel lands up to a level low: at worst 0.996 of a level from the exact composite over 455,168 cases (backgrounds 0, 1, 16, 127, 128, 198 and 255, every partial alpha, every straight level), where the premultiplied flatten beside it, rounded once, lands within 0.498. A straight image and its premultiplied twin therefore flatten up to a level apart. Rounding it moves the bytes of every GIF written from a straight image with partial alpha. MEDIUM once a caller holds GIF output to an exact composite.
 
-- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:204-206` (`flattenAllFrames`)
+- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:215-217` (`flattenAllFrames`)
 - Severity: **LOW**
 - Type: **BUG**
 - Status: **OPEN**
@@ -101,7 +101,7 @@ When `GifWriteOptions` are supplied, `GifImageWriter` takes the loop count only 
 ## `Background.composite` drops an animation's canvas size
 The `AnimatedImageData` it rebuilds never calls `withWidth` or `withHeight`, so its canvas becomes the first frame's size and an animation whose canvas is larger than its first frame loses the rest. Nothing in the workspace builds such an animation and composites it: the GIF reader and `FrameNormalizer` set no canvas size, and the WebP reader sets one but composes every frame to the whole canvas, so its first frame is canvas-sized. MEDIUM once a caller composites an animation whose first frame is smaller than its canvas.
 
-- Affected: `src/main/java/dev/simplified/image/pixel/Background.java:97-103` (`composite`), `src/main/java/dev/simplified/image/AnimatedImageData.java:212-213` (`Builder.build`)
+- Affected: `src/main/java/dev/simplified/image/pixel/Background.java:97-103` (`composite`), `src/main/java/dev/simplified/image/AnimatedImageData.java:216-217` (`Builder.build`)
 - Severity: **LOW**
 - Type: **BUG**
 - Status: **OPEN**
@@ -120,14 +120,6 @@ The ICO arm of `ImageFormat.matches` accepts `00 00 01 00`, which is also the bi
 - Affected: `src/main/java/dev/simplified/image/codec/webp/WebPChunk.java:39-54`, `src/main/java/dev/simplified/image/codec/webp/WebPImageReader.java`, `src/main/java/dev/simplified/image/codec/webp/WebPImageWriter.java`, `src/main/java/dev/simplified/image/ImageData.java`
 - Severity: **LOW**
 - Type: **GAP**
-- Status: **OPEN**
-
-## Loop-count unit differs per container but is stored raw
-The GIF NETSCAPE loop count and the WebP `ANIM` loop count pass unchanged into `AnimatedImageData.loopCount`, although players are widely reported to read the two in different units (repetitions after the first play versus total plays; UNVERIFIED against browser source). `AnimatedImageData` documents no unit beyond "0 for infinite".
-
-- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:109`, `src/main/java/dev/simplified/image/codec/webp/WebPImageReader.java:102-107`, `src/main/java/dev/simplified/image/AnimatedImageData.java:25`
-- Severity: **LOW**
-- Type: **RISK**
 - Status: **OPEN**
 
 ## No disposal/blend-aware timeline renderer

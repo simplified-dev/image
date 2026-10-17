@@ -160,14 +160,21 @@ ImageFactory.toFile(image, ImageFormat.WEBP, outputFile,
 ### Animated Images
 
 The two forms of an image, `StaticImageData` and `AnimatedImageData`, sit beside
-`ImageData` in the root package; one frame and its disposal and blend come from
-`dev.simplified.image.frame`.
+`ImageData` in the root package; one frame and its disposal and blend, and the
+`LoopCount` an animation plays by, come from `dev.simplified.image.frame`.
+
+A `LoopCount` counts the repeats after the first play: `LoopCount.Preset.NONE`
+plays once, `ONCE` twice and `INFINITE` forever, and `LoopCount.of(n)` plays
+`n + 1` times. Each codec converts it to its container's own unit - a GIF's
+NETSCAPE2.0 block counts repeats, a WebP's `ANIM` chunk counts plays.
 
 ```java
 import dev.simplified.image.AnimatedImageData;
 import dev.simplified.image.ImageFactory;
 import dev.simplified.image.ImageFormat;
 import dev.simplified.image.frame.ImageFrame;
+import dev.simplified.image.frame.LoopCount;
+import dev.simplified.image.option.GifWriteOptions;
 import dev.simplified.image.option.WebPWriteOptions;
 
 // Read any animated format (GIF, WebP) - auto-detected.
@@ -180,6 +187,10 @@ for (ImageFrame frame : animated.getFrames()) {
 // Re-encode as animated WebP; frames encoded in parallel by default.
 ImageFactory.toFile(animated, ImageFormat.WEBP, outputFile,
     WebPWriteOptions.builder().isLossless(false).withQuality(0.9f).build());
+
+// Re-encode as a GIF that plays twice, one repeat after the first play.
+ImageFactory.toFile(animated, ImageFormat.GIF, outputFile,
+    GifWriteOptions.builder().withLoopCount(LoopCount.Preset.ONCE).build());
 ```
 
 ### Batch Processing

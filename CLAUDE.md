@@ -35,7 +35,7 @@ The decoder reads keyframes and P-frames, the latter against all three reference
 
 ## Builders
 
-Write options live in `.option` and use fluent builders: `WebPWriteOptions.builder().isLossless(bool).withQuality(float).isMultithreaded().withLoopCount(int).build()`. Same pattern for `GifWriteOptions`, `JpegWriteOptions`, `PngWriteOptions`, `PnmWriteOptions`, `TgaWriteOptions`. They are handed to the factory beside the format they configure: `ImageFactory.toFile(image, ImageFormat.WEBP, out, options)`.
+Write options live in `.option` and use fluent builders: `WebPWriteOptions.builder().isLossless(bool).withQuality(float).isMultithreaded().withLoopCount(LoopCount.Preset.INFINITE).build()`. Same pattern for `GifWriteOptions`, `JpegWriteOptions`, `PngWriteOptions`, `PnmWriteOptions`, `TgaWriteOptions`. They are handed to the factory beside the format they configure: `ImageFactory.toFile(image, ImageFormat.WEBP, out, options)`.
 
 ## Build
 
@@ -54,4 +54,4 @@ The VP8 and WebP tests check this library's output against libwebp through Pytho
 - External deps: Log4j2, Simplified Annotations, JetBrains annotations
 - Third-party code: `NOTICE` names every class ported from libwebp, libvpx or RFC 6386 and carries their licences; the jar packs it into `META-INF`. Code or tables taken from another codec get a line there too
 - Tests: JUnit 5 + Hamcrest
-- 95 main sources plus a `package-info.java` per package; 25 test sources
+- 95 main sources plus a `package-info.java` per package; 27 test sources

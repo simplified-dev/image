@@ -7,6 +7,7 @@ import dev.simplified.annotations.RequiredArgsConstructor;
 import dev.simplified.collection.Concurrent;
 import dev.simplified.collection.ConcurrentList;
 import dev.simplified.image.frame.ImageFrame;
+import dev.simplified.image.frame.LoopCount;
 import dev.simplified.image.pixel.AlphaMode;
 import org.jetbrains.annotations.NotNull;
 
@@ -22,7 +23,8 @@ public class AnimatedImageData implements ImageData {
     @Getter(style = NamingStyle.FLUENT)
     private final boolean hasAlpha;
     private final @NotNull ConcurrentList<ImageFrame> frames;
-    private final int loopCount;
+    /** how many times the animation repeats after its first play */
+    private final @NotNull LoopCount loopCount;
     private final int backgroundColor;
     /**
      * the summed declared delay of every frame - the timing the animation itself describes, not an
@@ -120,7 +122,7 @@ public class AnimatedImageData implements ImageData {
         private ConcurrentList<ImageFrame> frames = Concurrent.newList();
         private int width = -1;
         private int height = -1;
-        private int loopCount = 0;
+        private @NotNull LoopCount loopCount = LoopCount.Preset.INFINITE;
         private int backgroundColor = 0;
         private @NotNull AlphaMode alphaMode = AlphaMode.STRAIGHT;
 
@@ -173,12 +175,14 @@ public class AnimatedImageData implements ImageData {
         }
 
         /**
-         * Sets the animation loop count.
+         * Sets how many times the animation repeats after its first play.
+         * <p>
+         * When not set, the animation repeats forever.
          *
-         * @param loopCount the number of times to loop (0 for infinite)
+         * @param loopCount the repeats after the first play
          * @return this builder for chaining
          */
-        public @NotNull Builder withLoopCount(int loopCount) {
+        public @NotNull Builder withLoopCount(@NotNull LoopCount loopCount) {
             this.loopCount = loopCount;
             return this;
         }

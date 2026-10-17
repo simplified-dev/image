@@ -13,6 +13,7 @@ import dev.simplified.image.codec.webp.vp8l.VP8LEncoder;
 import dev.simplified.image.frame.FrameBlend;
 import dev.simplified.image.frame.FrameDisposal;
 import dev.simplified.image.frame.ImageFrame;
+import dev.simplified.image.frame.LoopCount;
 import dev.simplified.image.option.WebPWriteOptions;
 import org.jetbrains.annotations.NotNull;
 import org.junit.jupiter.api.DisplayName;
@@ -231,7 +232,7 @@ class WebPRoundTripTest {
         AnimatedImageData anim = AnimatedImageData.builder()
             .withWidth(16).withHeight(16)
             .withFrames(frames)
-            .withLoopCount(0)
+            .withLoopCount(LoopCount.Preset.INFINITE)
             .withBackgroundColor(0)
             .build();
 
@@ -279,7 +280,7 @@ class WebPRoundTripTest {
         AnimatedImageData anim = AnimatedImageData.builder()
             .withWidth(32).withHeight(32)
             .withFrames(frames)
-            .withLoopCount(0)
+            .withLoopCount(LoopCount.Preset.INFINITE)
             .withBackgroundColor(0)
             .build();
 
@@ -455,7 +456,7 @@ class WebPRoundTripTest {
         AnimatedImageData anim = AnimatedImageData.builder()
             .withWidth(W).withHeight(H)
             .withFrames(frames)
-            .withLoopCount(0)
+            .withLoopCount(LoopCount.Preset.INFINITE)
             .withBackgroundColor(0)
             .build();
 
@@ -582,7 +583,7 @@ class WebPRoundTripTest {
         AnimatedImageData anim = AnimatedImageData.builder()
             .withWidth(W).withHeight(H)
             .withFrames(frames)
-            .withLoopCount(0)
+            .withLoopCount(LoopCount.Preset.INFINITE)
             .withBackgroundColor(0)
             .build();
 
@@ -624,7 +625,7 @@ class WebPRoundTripTest {
         AnimatedImageData anim = AnimatedImageData.builder()
             .withWidth(W).withHeight(H)
             .withFrames(frames)
-            .withLoopCount(0)
+            .withLoopCount(LoopCount.Preset.INFINITE)
             .withBackgroundColor(0)
             .build();
 
@@ -950,7 +951,7 @@ class WebPRoundTripTest {
         AnimatedImageData anim = AnimatedImageData.builder()
             .withWidth(W).withHeight(H)
             .withFrames(frames)
-            .withLoopCount(0)
+            .withLoopCount(LoopCount.Preset.INFINITE)
             .withBackgroundColor(0)
             .build();
 
@@ -986,7 +987,7 @@ class WebPRoundTripTest {
         AnimatedImageData anim = AnimatedImageData.builder()
             .withWidth(32).withHeight(32)
             .withFrames(frames)
-            .withLoopCount(0)
+            .withLoopCount(LoopCount.Preset.INFINITE)
             .withBackgroundColor(0)
             .build();
 
@@ -1040,7 +1041,7 @@ class WebPRoundTripTest {
         AnimatedImageData anim = AnimatedImageData.builder()
             .withWidth(32).withHeight(32)
             .withFrames(frames)
-            .withLoopCount(0)
+            .withLoopCount(LoopCount.Preset.INFINITE)
             .withBackgroundColor(0)
             .build();
 
@@ -1086,7 +1087,7 @@ class WebPRoundTripTest {
         AnimatedImageData anim = AnimatedImageData.builder()
             .withWidth(16).withHeight(16)
             .withFrames(frames)
-            .withLoopCount(0)
+            .withLoopCount(LoopCount.Preset.INFINITE)
             .withBackgroundColor(0)
             .build();
 

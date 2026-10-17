@@ -9,6 +9,7 @@ import dev.simplified.image.StaticImageData;
 import dev.simplified.image.frame.FrameBlend;
 import dev.simplified.image.frame.FrameDisposal;
 import dev.simplified.image.frame.ImageFrame;
+import dev.simplified.image.frame.LoopCount;
 import dev.simplified.image.option.GifWriteOptions;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -97,13 +98,31 @@ class GifDisposalTest {
     }
 
     @Test
+    @DisplayName("the last frame of an animation that never repeats is followed by nothing and keeps its own disposal")
+    void lastFrameOfANonRepeatingAnimationKeepsItsDisposal() {
+        AnimatedImageData playsOnce = animation(
+            LoopCount.Preset.NONE,
+            frame(0, FrameDisposal.NONE, FrameBlend.SOURCE),
+            frame(1, FrameDisposal.DO_NOT_DISPOSE, FrameBlend.OVER)
+        );
+        AnimatedImageData playsTwice = animation(
+            LoopCount.Preset.ONCE,
+            frame(0, FrameDisposal.NONE, FrameBlend.SOURCE),
+            frame(1, FrameDisposal.DO_NOT_DISPOSE, FrameBlend.OVER)
+        );
+
+        assertThat(writtenDisposals(playsOnce, null), contains(0, 1));
+        assertThat(writtenDisposals(playsTwice, null), contains(0, 2));
+    }
+
+    @Test
     @DisplayName("the disposal written follows the blend whatever options are passed")
     void optionsDoNotChangeTheDisposalWritten() {
         AnimatedImageData data = animation(
             frame(0, FrameDisposal.NONE, FrameBlend.SOURCE),
             frame(1, FrameDisposal.DO_NOT_DISPOSE, FrameBlend.OVER)
         );
-        GifWriteOptions options = GifWriteOptions.builder().isTransparent().withLoopCount(3).build();
+        GifWriteOptions options = GifWriteOptions.builder().isTransparent().withLoopCount(LoopCount.of(3)).build();
 
         assertThat(writtenDisposals(data, options), contains(0, 2));
     }
@@ -231,7 +250,11 @@ class GifDisposalTest {
     }
 
     private static @NotNull AnimatedImageData animation(@NotNull ImageFrame @NotNull ... frames) {
-        AnimatedImageData.Builder builder = AnimatedImageData.builder();
+        return animation(LoopCount.Preset.INFINITE, frames);
+    }
+
+    private static @NotNull AnimatedImageData animation(@NotNull LoopCount loopCount, @NotNull ImageFrame @NotNull ... frames) {
+        AnimatedImageData.Builder builder = AnimatedImageData.builder().withLoopCount(loopCount);
 
         for (ImageFrame frame : frames)
             builder.withFrame(frame);
