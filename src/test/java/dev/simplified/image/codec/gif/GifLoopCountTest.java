@@ -13,10 +13,15 @@ import org.jetbrains.annotations.Nullable;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.empty;
+import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.instanceOf;
 import static org.hamcrest.Matchers.is;
+import static org.hamcrest.Matchers.sameInstance;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
@@ -79,6 +84,33 @@ class GifLoopCountTest {
         assertThat(GifBlocks.netscapeLoopCounts(write(animation(LoopCount.Preset.NONE), options)), contains(1));
     }
 
+    // ──── what the reader reads ────
+
+    @Test
+    @DisplayName("each count reads back as the count written")
+    void eachCountRoundTrips() {
+        for (LoopCount count : List.of(LoopCount.Preset.NONE, LoopCount.Preset.ONCE, LoopCount.of(4), LoopCount.Preset.INFINITE))
+            assertThat(read(write(animation(count), null)).getLoopCount(), equalTo(count));
+    }
+
+    @Test
+    @DisplayName("a GIF with no NETSCAPE2.0 extension reads as playing once")
+    void noExtensionReadsAsPlayingOnce() {
+        byte[] gif = write(animation(LoopCount.Preset.NONE), null);
+
+        assertThat(GifBlocks.netscapeLoopCounts(gif), is(empty()));
+        assertThat(read(gif).getLoopCount(), sameInstance(LoopCount.Preset.NONE));
+    }
+
+    @Test
+    @DisplayName("a GIF that plays once is written again with no NETSCAPE2.0 extension")
+    void playOnceSurvivesAReEncode() {
+        byte[] original = write(animation(LoopCount.Preset.NONE), null);
+        byte[] rewritten = write(read(original), null);
+
+        assertThat(GifBlocks.netscapeLoopCounts(rewritten), is(empty()));
+    }
+
     // ──── fixtures ────
 
     /**
@@ -103,6 +135,12 @@ class GifLoopCountTest {
         return options == null
             ? new GifImageWriter().write(data)
             : new GifImageWriter().write(data, options);
+    }
+
+    private static @NotNull AnimatedImageData read(byte @NotNull [] gif) {
+        ImageData decoded = new GifImageReader().read(gif);
+        assertThat(decoded, instanceOf(AnimatedImageData.class));
+        return (AnimatedImageData) decoded;
     }
 
 }

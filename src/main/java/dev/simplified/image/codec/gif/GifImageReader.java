@@ -61,7 +61,7 @@ public class GifImageReader implements ImageReader {
             throw new ImageDecodeException("GIF contains no frames");
 
         ConcurrentList<ImageFrame> frames = Concurrent.newList();
-        LoopCount loopCount = LoopCount.Preset.INFINITE;
+        LoopCount loopCount = LoopCount.Preset.NONE;
 
         for (int i = 0; i < frameCount; i++) {
             var image = reader.read(i);
@@ -137,10 +137,11 @@ public class GifImageReader implements ImageReader {
     /**
      * Reads the loop count a GIF's NETSCAPE2.0 application extension declares.
      * <p>
-     * The extension counts repeats after the first play, {@code 0} repeating forever.
+     * The extension counts repeats after the first play, {@code 0} repeating forever, and a GIF
+     * that carries none plays once.
      *
      * @param appExts the first frame's application extensions
-     * @return the loop count declared, or one that repeats forever when no extension declares one
+     * @return the loop count declared, or {@link LoopCount.Preset#NONE} when no extension declares one
      */
     private static @NotNull LoopCount parseLoopCount(@NotNull IIOMetadataNode appExts) {
         for (int i = 0; i < appExts.getLength(); i++) {
@@ -158,7 +159,7 @@ public class GifImageReader implements ImageReader {
             }
         }
 
-        return LoopCount.Preset.INFINITE;
+        return LoopCount.Preset.NONE;
     }
 
 }

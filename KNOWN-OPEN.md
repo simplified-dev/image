@@ -2,14 +2,6 @@
 
 Defects present in the current tree and not yet fixed, most severe first. Each entry names the cause, the affected code, what it costs today, and what would raise its severity.
 
-## GIF without a NETSCAPE block reads as "loop forever"
-`GifImageReader` starts from `LoopCount.Preset.INFINITE`, and `parseLoopCount` answers it again when no NETSCAPE2.0 application extension declares a count, but a GIF that carries none plays once. A GIF that plays once therefore decodes to an `AnimatedImageData` that claims infinite looping, and any re-encode carries that forward. HIGH once a caller depends on play-once fidelity.
-
-- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:64`, `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:106-111`, `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:145-162` (`parseLoopCount`)
-- Severity: **MEDIUM**
-- Type: **BUG**
-- Status: **OPEN**
-
 ## VP8 encoder point-samples 4:2:0 chroma instead of averaging
 `Macroblock.fromARGB` takes each 2x2 block's Cb/Cr from its top-left pixel rather than averaging the four pixels, so every lossy WebP encode aliases thin colour detail such as one-pixel lines and coloured text edges. The bitstream stays valid; the cost is fidelity.
 
