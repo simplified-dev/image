@@ -29,6 +29,7 @@ import dev.simplified.image.data.AnimatedImageData;
 import dev.simplified.image.data.ImageFrame;
 import dev.simplified.image.data.StaticImageData;
 import dev.simplified.image.exception.UnsupportedFormatException;
+import dev.simplified.image.pixel.AlphaMode;
 import dev.simplified.image.pixel.PixelBuffer;
 import dev.simplified.image.transform.FrameNormalizer;
 import org.junit.jupiter.api.Nested;
@@ -325,6 +326,19 @@ public class ImagePipelineTest {
 
             assertThat(normalized.getFrames().get(0).delayMs(), is(100));
             assertThat(normalized.getFrames().get(1).delayMs(), is(250));
+        }
+
+        @Test
+        void normalizeKeepsTheConvention() {
+            for (AlphaMode mode : AlphaMode.values()) {
+                AnimatedImageData data = AnimatedImageData.builder()
+                    .withFrame(ImageFrame.of(PixelBuffer.wrap(createArgbTestImage(4, 4, Color.RED)), 100))
+                    .withFrame(ImageFrame.of(PixelBuffer.wrap(createArgbTestImage(8, 8, Color.BLUE)), 100))
+                    .withAlphaMode(mode)
+                    .build();
+
+                assertThat(FrameNormalizer.normalize(data).getAlphaMode(), is(mode));
+            }
         }
 
     }

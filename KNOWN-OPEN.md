@@ -82,6 +82,22 @@ When `GifWriteOptions` are supplied, `GifImageWriter` takes the loop count only 
 - Type: **BUG**
 - Status: **OPEN**
 
+## `Background.composite` lays every image down as premultiplied colour, whatever it holds
+`composite` blits each frame onto the fill with `BlendMode.PREMULTIPLIED`, on the assumption that a finished render's colours already carry their alpha, and premultiplies the fill only under an image declared `PREMULTIPLIED`. A straight image - anything decoded - is therefore laid down with its colour unscaled and comes out too bright wherever it is partly transparent. `getAlphaMode` would let it blend a straight image with `NORMAL`, but every caller in the workspace passes asset-renderer renders, which hold premultiplied colour under the default `STRAIGHT` until that consumer declares them, so honouring the label now would move their bytes. MEDIUM once a caller composites a decoded image.
+
+- Affected: `src/main/java/dev/simplified/image/Background.java:90-105` (`composite`), `src/main/java/dev/simplified/image/Background.java:112-121` (`over`)
+- Severity: **LOW**
+- Type: **RISK**
+- Status: **OPEN**
+
+## `Background.composite` drops an animation's canvas size
+The `AnimatedImageData` it rebuilds never calls `withWidth` or `withHeight`, so its canvas becomes the first frame's size and an animation whose canvas is larger than its first frame loses the rest. Nothing in the workspace builds such an animation and composites it: the GIF reader and `FrameNormalizer` set no canvas size, and the WebP reader sets one but composes every frame to the whole canvas, so its first frame is canvas-sized. MEDIUM once a caller composites an animation whose first frame is smaller than its canvas.
+
+- Affected: `src/main/java/dev/simplified/image/Background.java:98-104` (`composite`), `src/main/java/dev/simplified/image/data/AnimatedImageData.java:213-214` (`Builder.build`)
+- Severity: **LOW**
+- Type: **BUG**
+- Status: **OPEN**
+
 ## Four libwebp oracle tests pass instead of skipping when the oracle is missing
 Each ends with `if (x == null) return;` when Python or the `webp` package is unavailable, so a run without the oracle reports PASSED for checks that never ran.
 
@@ -195,9 +211,9 @@ Four class headers describe shipped features as absent or future work: `VP8Encod
 - Status: **OPEN**
 
 ## `resize` takes no alpha convention, and its two smoothing filters assume opposite ones
-`BILINEAR` mixes every channel as it is held, which is correct for premultiplied colour and darkens a straight pixel beside a transparent one toward the transparent pixel's colour. `BICUBIC` draws through AWT with the raster declared straight, which is correct for straight colour and weights a premultiplied buffer by alpha twice. A caller cannot say which it holds, and switching filter switches the convention assumed. Nothing in the workspace resizes with either today. `resize(w, h, Resample, AlphaMode)` would route the bilinear sampler's alpha weighting and declare the AWT raster premultiplied where asked.
+`BILINEAR` mixes every channel as it is held, which is correct for premultiplied colour and darkens a straight pixel beside a transparent one toward the transparent pixel's colour. `BICUBIC` draws through AWT with the raster declared straight, which is correct for straight colour and weights a premultiplied buffer by alpha twice. A caller cannot say which it holds, and switching filter switches the convention assumed. Nothing in the workspace resizes with either today. `resize(w, h, Resample, AlphaMode)` would route the bilinear sampler's alpha weighting and declare the AWT raster premultiplied where asked. `FrameNormalizer` scales frames through the same AWT bicubic from a straight-declared image, so it weights a premultiplied animation's colour by alpha twice, and fills its letterbox with a straight `Color`; it carries the animation's convention onto its output without honouring it. Nothing in the workspace normalizes premultiplied frames.
 
-- Affected: `src/main/java/dev/simplified/image/pixel/PixelBuffer.java:375-419` (`resize`)
+- Affected: `src/main/java/dev/simplified/image/pixel/PixelBuffer.java:375-419` (`resize`), `src/main/java/dev/simplified/image/transform/FrameNormalizer.java:87-138` (`normalize`)
 - Severity: **LOW**
 - Type: **GAP**
 - Status: **OPEN**

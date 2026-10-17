@@ -3,6 +3,7 @@ package dev.simplified.image;
 import dev.simplified.image.data.AnimatedImageData;
 import dev.simplified.image.data.ImageFrame;
 import dev.simplified.image.data.StaticImageData;
+import dev.simplified.image.pixel.AlphaMode;
 import dev.simplified.image.pixel.BlendMode;
 import dev.simplified.image.pixel.PixelBuffer;
 import org.jetbrains.annotations.NotNull;
@@ -17,6 +18,10 @@ import org.jetbrains.annotations.NotNull;
  * finished render's colours already carry their alpha. A partially transparent pixel therefore
  * shows the fill through it as it would had the render been drawn over the fill directly. A
  * {@link #TRANSPARENT} background is a no-op and leaves output byte-identical to the input.
+ * <p>
+ * A fill colour is straight colour. Under an image held in {@link AlphaMode#PREMULTIPLIED} the fill
+ * is premultiplied before the image is laid over it, so the composite holds premultiplied colour
+ * throughout and a translucent fill encodes as the colour given.
  */
 public sealed interface Background permits Background.Solid, Background.Checkerboard {
 
@@ -74,8 +79,10 @@ public sealed interface Background permits Background.Solid, Background.Checkerb
     /**
      * Composites {@code image} over this background, applied as the very last step. Each frame is
      * laid with {@link BlendMode#PREMULTIPLIED} onto a freshly filled background buffer of the same
-     * size; per-frame timing and metadata are preserved. A {@linkplain #isTransparent()
-     * transparent} background returns {@code image} unchanged.
+     * size; per-frame timing and metadata are preserved, and the result holds the convention
+     * {@code image} holds. Under an image held in {@link AlphaMode#PREMULTIPLIED} the fill is
+     * premultiplied first. A {@linkplain #isTransparent() transparent} background returns
+     * {@code image} unchanged.
      *
      * @param image the finished render
      * @return the backgrounded image, or {@code image} unchanged when this background is transparent
@@ -83,25 +90,32 @@ public sealed interface Background permits Background.Solid, Background.Checkerb
     default @NotNull ImageData composite(@NotNull ImageData image) {
         if (isTransparent()) return image;
 
-        if (!image.isAnimated())
-            return StaticImageData.of(over(image.getFrames().getFirst().pixels()));
+        AlphaMode alphaMode = image.getAlphaMode();
 
-        AnimatedImageData.Builder builder = AnimatedImageData.builder();
+        if (!image.isAnimated())
+            return StaticImageData.of(over(image.getFrames().getFirst().pixels(), alphaMode), alphaMode);
+
+        AnimatedImageData.Builder builder = AnimatedImageData.builder().withAlphaMode(alphaMode);
         if (image instanceof AnimatedImageData animated)
             builder.withLoopCount(animated.getLoopCount()).withBackgroundColor(animated.getBackgroundColor());
         for (ImageFrame frame : image.getFrames())
-            builder.withFrame(frame.withPixels(over(frame.pixels())));
+            builder.withFrame(frame.withPixels(over(frame.pixels(), alphaMode)));
 
         return builder.build();
     }
 
     /**
-     * Returns a new buffer the size of {@code rendered} with this background filled underneath and
-     * {@code rendered} laid on top with {@link BlendMode#PREMULTIPLIED}.
+     * Returns a new buffer the size of {@code rendered} with this background filled underneath -
+     * premultiplied when {@code alphaMode} is {@link AlphaMode#PREMULTIPLIED} - and {@code rendered}
+     * laid on top with {@link BlendMode#PREMULTIPLIED}.
      */
-    private @NotNull PixelBuffer over(@NotNull PixelBuffer rendered) {
+    private @NotNull PixelBuffer over(@NotNull PixelBuffer rendered, @NotNull AlphaMode alphaMode) {
         PixelBuffer out = PixelBuffer.create(rendered.width(), rendered.height());
         this.fill(out);
+
+        if (alphaMode == AlphaMode.PREMULTIPLIED)
+            out.premultiplyAlpha();
+
         out.blit(rendered, 0, 0, BlendMode.PREMULTIPLIED);
         return out;
     }
