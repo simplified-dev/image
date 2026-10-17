@@ -11,17 +11,17 @@ Defects present in the current tree and not yet fixed, most severe first. Each e
 - Status: **OPEN**
 
 ## GIF writer misreads frames of different sizes and drops frame offsets
-`flattenAllFrames` packs every frame's pixels back to back, but the write loop reads frame i at `i * frameStride`, where `frameStride` is the largest frame's area, so an animation whose frames differ in size is written from the wrong slices and the last one overruns the array: frames of 4x4, 2x2 and 2x2 throw `ArrayIndexOutOfBoundsException: Index 32 out of bounds for length 24`. `configureFrameMetadata` writes only the GraphicControlExtension and never the ImageDescriptor's `imageLeftPosition` / `imageTopPosition`, so every frame is written at the origin. A GIF this library decodes - partial frames at offsets - therefore cannot be re-encoded: it throws, or, where its partial frames happen to share one size, it is written with every frame moved to the top-left corner. HIGH once a caller re-encodes decoded GIFs.
+`flattenAllFrames` packs every frame's pixels back to back, but the write loop reads frame i at `i * frameStride`, where `frameStride` is the largest frame's area, so an animation whose frames differ in size is written from the wrong slices and the last one overruns the array: frames of 4x4, 2x2 and 2x2 throw `ArrayIndexOutOfBoundsException: Index 32 out of bounds for length 24`. `configureFrameMetadata` writes only the GraphicControlExtension and never the ImageDescriptor's `imageLeftPosition` / `imageTopPosition`, so every frame is written at the origin. A GIF this library decodes - partial frames at offsets - therefore cannot be re-encoded: it throws, or, where its partial frames happen to share one size, it is written with every frame moved to the top-left corner. The writer hands ImageIO no stream metadata either, so the Logical Screen Descriptor declares the first frame's size rather than the image's canvas: two 8x8 frames on a 16x16 canvas are written with an 8x8 screen and read back 8x8, and a decoded GIF whose screen is larger than its first frame is written with the smaller one. HIGH once a caller re-encodes decoded GIFs.
 
-- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:117-143` (`write`, the `frameStride` read), `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:179` (`flattenAllFrames`), `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:589-607` (`configureFrameMetadata`)
+- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:117-143` (`write`, the `frameStride` read, and `prepareWriteSequence(null)` at `:119`), `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:179` (`flattenAllFrames`), `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:589-607` (`configureFrameMetadata`)
 - Severity: **MEDIUM**
 - Type: **BUG**
 - Status: **OPEN**
 
-## GIF reader sizes the canvas from the first frame
-`GifImageReader` never reads the logical screen descriptor and builds the `AnimatedImageData` with no width or height, so the canvas takes the first frame's size, and a GIF whose first frame does not span its screen loses whatever later frames draw outside that rectangle. HIGH once a consumer draws a decoded GIF's frames onto its canvas.
+## WebP writer takes every animation frame as canvas-sized at the origin
+`writeAnimated` declares frame 0's ANMF rectangle as the whole canvas, `getWidth()` by `getHeight()`, over a bitstream of frame 0's own pixels; on the partial-frame path it diffs each later frame against the one before through `FrameDiffUtil.computeBoundingBox`, which refuses two frames of different sizes; and it never reads a frame's `offsetX` / `offsetY`. An animation whose frames are not all canvas-sized at the origin is therefore written wrongly or not at all. Measured on decoded GIFs, lossless and lossy alike: two 4x4 frames on an 8x8 screen, the second at (4, 4), are written as an ANMF declaring 8x8 over a 4x4 bitstream, which this library's WebP reader refuses with `ANMF frame size mismatch: declared 8x8 but decoded 4x4`; a 20x20 frame followed by a 3x3 one at (1, 1) throws `IllegalArgumentException: dimension mismatch: prev=20x20 curr=3x3`. A decoded GIF whose first frame is smaller than its logical screen, or whose later frames are partial, is such an animation; nothing in the workspace re-encodes one as WebP today. HIGH once a caller converts GIFs to WebP.
 
-- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:122-125`
+- Affected: `src/main/java/dev/simplified/image/codec/webp/WebPImageWriter.java:156-195` (`writeAnimated`), `src/main/java/dev/simplified/image/codec/webp/FrameDiffUtil.java:39` (`computeBoundingBox`)
 - Severity: **MEDIUM**
 - Type: **BUG**
 - Status: **OPEN**
@@ -45,7 +45,7 @@ Defects present in the current tree and not yet fixed, most severe first. Each e
 ## ImageIO's GIF reader decodes interlaced frames shorter than 8 rows wrongly
 `GifImageWriter` writes every frame interlaced, because it takes ImageIO's default image metadata, whose `interlaceFlag` is TRUE. The JDK GIF reader that `GifImageReader` decodes through reads such a frame wrongly when it is shorter than 8 rows. Measured on still GIFs of alternating red and blue rows: a 2x2 frame decodes 2 pixels wrong, 3x3 6, 4x2 4 and 4x4 8; 8x8 and 16x16 decode exactly. A hand LZW decode and Pillow read the same files correctly, so the files are sound, and a short GIF this library writes does not round-trip through its own reader. Writing non-interlaced avoids it and moves every GIF's bytes. HIGH once a caller round-trips frames under 8 rows.
 
-- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:127`, `:148` (`getDefaultImageMetadata`), `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:67` (`reader.read`)
+- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:127`, `:148` (`getDefaultImageMetadata`), `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:75` (`reader.read`)
 - Severity: **MEDIUM**
 - Type: **BUG**
 - Status: **OPEN**
@@ -75,7 +75,7 @@ When `usePartialFrames` holds - every lossless write, and every lossy write with
 - Status: **OPEN**
 
 ## `Background.composite` drops an animation's canvas size
-The `AnimatedImageData` it rebuilds never calls `withWidth` or `withHeight`, so its canvas becomes the first frame's size and an animation whose canvas is larger than its first frame loses the rest. Nothing in the workspace builds such an animation and composites it: the GIF reader and `FrameNormalizer` set no canvas size, and the WebP reader sets one but composes every frame to the whole canvas, so its first frame is canvas-sized. MEDIUM once a caller composites an animation whose first frame is smaller than its canvas.
+The `AnimatedImageData` it rebuilds never calls `withWidth` or `withHeight`, so its canvas becomes the first frame's size and an animation whose canvas is larger than its first frame loses the rest. The GIF reader builds such an animation from every GIF whose first frame is smaller than its logical screen, but nothing in the workspace composites a decoded GIF; `FrameNormalizer` sets no canvas size, and the WebP reader sets one but composes every frame to the whole canvas, so its first frame is canvas-sized. MEDIUM once a caller composites an animation whose first frame is smaller than its canvas.
 
 - Affected: `src/main/java/dev/simplified/image/pixel/Background.java:97-103` (`composite`), `src/main/java/dev/simplified/image/AnimatedImageData.java:216-217` (`Builder.build`)
 - Severity: **LOW**

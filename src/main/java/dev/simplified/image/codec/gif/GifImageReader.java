@@ -31,6 +31,11 @@ import java.io.ByteArrayInputStream;
  * Reads GIF images (static and animated) via {@link ImageIO}, extracting per-frame
  * metadata for disposal, delay, and canvas offset.
  * <p>
+ * The canvas is the logical screen the GIF's Logical Screen Descriptor declares, grown to hold any
+ * frame that reaches past it, as Pillow grows it. An animation's frames keep their own sizes and
+ * offsets on it; a still's one frame is laid on it at its offset, the rest of the canvas left
+ * transparent.
+ * <p>
  * GIF has no blend flag: every frame is laid over what the previous frame's disposal left, a pixel
  * at the transparent index showing what lies beneath, so every frame is read
  * {@link FrameBlend#OVER}.
@@ -62,6 +67,9 @@ public class GifImageReader implements ImageReader {
 
         ConcurrentList<ImageFrame> frames = Concurrent.newList();
         LoopCount loopCount = LoopCount.Preset.NONE;
+        IIOMetadataNode screen = logicalScreen(reader.getStreamMetadata());
+        int canvasWidth = screenDimension(screen, "logicalScreenWidth");
+        int canvasHeight = screenDimension(screen, "logicalScreenHeight");
 
         for (int i = 0; i < frameCount; i++) {
             var image = reader.read(i);
@@ -112,17 +120,70 @@ public class GifImageReader implements ImageReader {
             }
 
             frames.add(ImageFrame.of(PixelBuffer.wrap(image), delayMs, offsetX, offsetY, disposal, FrameBlend.OVER));
+            canvasWidth = Math.max(canvasWidth, offsetX + image.getWidth());
+            canvasHeight = Math.max(canvasHeight, offsetY + image.getHeight());
         }
 
         reader.dispose();
 
         if (frames.size() == 1)
-            return StaticImageData.of(frames.getFirst().pixels());
+            return StaticImageData.of(onCanvas(frames.getFirst(), canvasWidth, canvasHeight));
 
         return AnimatedImageData.builder()
             .withFrames(frames)
+            .withWidth(canvasWidth)
+            .withHeight(canvasHeight)
             .withLoopCount(loopCount)
             .build();
+    }
+
+    /**
+     * Finds the Logical Screen Descriptor in a GIF's stream metadata.
+     *
+     * @param streamMetadata the stream metadata the reader hands over, if any
+     * @return the descriptor's node, or {@code null} when the metadata carries none
+     */
+    private static @Nullable IIOMetadataNode logicalScreen(@Nullable IIOMetadata streamMetadata) {
+        if (streamMetadata == null)
+            return null;
+
+        IIOMetadataNode root = (IIOMetadataNode) streamMetadata.getAsTree(streamMetadata.getNativeMetadataFormatName());
+        return findNode(root, "LogicalScreenDescriptor");
+    }
+
+    /**
+     * Reads one dimension of the logical screen a GIF declares.
+     *
+     * @param screen the Logical Screen Descriptor's node, if the metadata carries one
+     * @param attribute the attribute holding the dimension
+     * @return the dimension declared, or {@code 0} when none is
+     */
+    private static int screenDimension(@Nullable IIOMetadataNode screen, @NotNull String attribute) {
+        if (screen == null)
+            return 0;
+
+        String value = screen.getAttribute(attribute);
+        return StringUtil.isNotEmpty(value) ? Integer.parseInt(value) : 0;
+    }
+
+    /**
+     * Lays a still GIF's one frame on its canvas at the frame's offset.
+     * <p>
+     * A frame spanning the canvas from the origin is the picture as it is; any other leaves the rest
+     * of the canvas transparent.
+     *
+     * @param frame the one frame
+     * @param width the canvas width, which holds the frame at its offset
+     * @param height the canvas height, which holds the frame at its offset
+     * @return the picture the still shows
+     */
+    private static @NotNull PixelBuffer onCanvas(@NotNull ImageFrame frame, int width, int height) {
+        if (frame.offsetX() == 0 && frame.offsetY() == 0 && frame.width() == width && frame.height() == height)
+            return frame.pixels();
+
+        PixelBuffer canvas = PixelBuffer.create(width, height);
+        canvas.setPixels(frame.offsetX(), frame.offsetY(), frame.width(), frame.height(), frame.pixels().data(), 0, frame.width());
+        return canvas;
     }
 
     private static @Nullable IIOMetadataNode findNode(@NotNull IIOMetadataNode root, @NotNull String name) {
