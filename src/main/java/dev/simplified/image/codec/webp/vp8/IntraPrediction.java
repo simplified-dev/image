@@ -52,7 +52,7 @@ final class IntraPrediction {
      * @param predicted output 16-element predicted block
      * @param above 8-element row - 4 above pixels followed by 4 above-right pixels (null if top row)
      * @param left 4-element column of pixels to the left (null if left column)
-     * @param aboveLeft the pixel above-left of the block (128 if unavailable)
+     * @param aboveLeft the pixel above-left of the block, as {@link #aboveLeft} gives it
      * @param mode the sub-block prediction mode (0-9)
      */
     static void predict4x4(
@@ -64,8 +64,8 @@ final class IntraPrediction {
     ) {
         // Materialize the neighbour pixels with libwebp's default fills so the per-mode
         // formulas stay simple and bit-compatible: 127 for missing top, 129 for missing
-        // left, 128 for missing above-left. Matches libwebp's dsp/dec.c predictors,
-        // which rely on the surrounding buffer being pre-seeded with those values.
+        // left, the above-left already seeded by aboveLeft. Matches libwebp's dsp/dec.c
+        // predictors, which rely on the surrounding buffer being pre-seeded with those values.
         short[] top = above;
         if (top == null) {
             top = new short[8];
@@ -155,8 +155,9 @@ final class IntraPrediction {
                 predicted[6] = predicted[13] = avg3((short) C, (short) D, (short) E);
                 predicted[3] = predicted[10] = avg2((short) D, (short) E);
                 predicted[7] = predicted[14] = avg3((short) D, (short) E, (short) F);
-                predicted[11] = avg2((short) E, (short) F);
-                predicted[15] = avg3((short) E, (short) F, (short) G);
+                // The last two break the pattern, as RFC 6386 and libwebp's VL4 do.
+                predicted[11] = avg3((short) E, (short) F, (short) G);
+                predicted[15] = avg3((short) F, (short) G, (short) H);
             }
             case B_HD_PRED -> {
                 predicted[12] = avg2((short) L, (short) K);
@@ -190,7 +191,7 @@ final class IntraPrediction {
      * @param predicted output 64-element predicted block
      * @param above 8-element row of pixels above the block (null if top row)
      * @param left 8-element column of pixels to the left (null if left column)
-     * @param aboveLeft the pixel above-left of the block (128 if unavailable)
+     * @param aboveLeft the pixel above-left of the block, as {@link #aboveLeft} gives it
      * @param mode the prediction mode (0-3)
      */
     static void predict8x8(
@@ -238,7 +239,7 @@ final class IntraPrediction {
      * @param predicted output 256-element predicted block
      * @param above 16-element row of pixels above the block (null if top row)
      * @param left 16-element column of pixels to the left (null if left column)
-     * @param aboveLeft the pixel above-left of the block (128 if unavailable)
+     * @param aboveLeft the pixel above-left of the block, as {@link #aboveLeft} gives it
      * @param mode the prediction mode (0-3)
      */
     static void predict16x16(
@@ -278,6 +279,23 @@ final class IntraPrediction {
             }
             default -> java.util.Arrays.fill(predicted, (short) 128);
         }
+    }
+
+    /**
+     * Returns the sample above and to the left of a block, or the value libwebp's decoder seeds
+     * there when the block touches the frame's edge: 127 along the top row, the corner
+     * included, and 129 down the left column.
+     *
+     * @param plane the reconstructed plane
+     * @param stride the plane's row length
+     * @param x the block's left column
+     * @param y the block's top row
+     * @return the above-left sample
+     */
+    static short aboveLeft(short @NotNull [] plane, int stride, int x, int y) {
+        if (y == 0) return 127;
+        if (x == 0) return 129;
+        return plane[(y - 1) * stride + x - 1];
     }
 
     private static short avg2(int a, int b) {

@@ -19,12 +19,15 @@ Classes in dev.simplified.image.codec.webp.vp8:
     matrices and TrellisQuantizeBlock (src/enc/quant_enc.c)
   - DCT: the forward and inverse DCT and Walsh-Hadamard transforms
     (src/dsp/enc.c, src/dsp/dec.c)
-  - LoopFilter: the edge filters and the filter-strength setup
-    (src/dsp/dec.c, src/dec/frame_dec.c)
+  - IntraPrediction: the intra predictors and the samples a decoder
+    seeds along the frame's edges (src/dsp/dec.c, src/dec/frame_dec.c)
+  - LoopFilter: the edge filters, the filter-strength setup and which
+    macroblocks have their inner edges filtered (src/dsp/dec.c,
+    src/dec/frame_dec.c, src/dec/vp8_dec.c)
   - VP8TokenEncoder, VP8TokenDecoder: PutCoeffs (src/enc/frame_enc.c)
     and GetCoeffsFast (src/dec/vp8_dec.c)
-  - ChromaUpsampler: the fancy chroma upsampler (src/dsp/upsampling.c,
-    src/dec/io_dec.c)
+  - ChromaUpsampler: the fancy chroma upsampler and the YUV-to-RGB
+    conversion (src/dsp/upsampling.c, src/dsp/yuv.h, src/dec/io_dec.c)
 
 Classes in dev.simplified.image.codec.webp.vp8l:
   - NearLosslessPreprocess: near-lossless preprocessing

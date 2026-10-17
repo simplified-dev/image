@@ -43,7 +43,10 @@ public final class LibwebpOracle {
     /** The script a candidate runs to be taken. */
     private static final String PROBE = "import webp, numpy";
 
-    /** Encodes raw RGBA - path, output path, width, height, quality - with libwebp's lossy encoder. */
+    /**
+     * Encodes raw RGBA - path, output path, width, height, quality, then any {@code WebPConfig} fields
+     * as {@code name=value} - with libwebp's lossy encoder.
+     */
     private static final String ENCODE_LOSSY = """
         import sys
         import numpy as np
@@ -52,7 +55,11 @@ public final class LibwebpOracle {
         with open(raw, 'rb') as f:
             arr = np.frombuffer(f.read(), dtype=np.uint8).reshape(height, width, 4)
         pic = webp.WebPPicture.from_numpy(arr, pilmode='RGBA')
-        data = pic.encode(webp.WebPConfig.new(quality=quality)).buffer()
+        config = webp.WebPConfig.new(quality=quality)
+        for setting in sys.argv[6:]:
+            name, value = setting.split('=')
+            setattr(config.ptr, name, int(value))
+        data = pic.encode(config).buffer()
         with open(out, 'wb') as f:
             f.write(bytes(data))
         """;
@@ -264,6 +271,21 @@ public final class LibwebpOracle {
      * @throws IOException if a temporary file cannot be written or read
      */
     public static byte @NotNull [] encodeLossy(@NotNull PixelBuffer src, int quality) throws IOException {
+        return vp8Payload(encodeLossyFile(src, quality));
+    }
+
+    /**
+     * Encodes an image with libwebp's lossy encoder, setting {@code WebPConfig} fields beyond the
+     * quality.
+     *
+     * @param src the image
+     * @param quality libwebp's quality, from 0 to 100
+     * @param settings the {@code WebPConfig} fields to set, each as {@code name=value}, such as
+     *                 {@code method=6} or {@code filter_type=0}
+     * @return the whole WebP file
+     * @throws IOException if a temporary file cannot be written or read
+     */
+    public static byte @NotNull [] encodeLossyFile(@NotNull PixelBuffer src, int quality, @NotNull String... settings) throws IOException {
         // The pixels go through a file rather than the script, which keeps a large source clear of the
         // Windows command-line length limit.
         Path raw = Files.createTempFile("libwebp-enc-raw-", ".bin");
@@ -281,9 +303,11 @@ public final class LibwebpOracle {
                 }
             }
             Files.write(raw, rgba);
-            run("libwebp encode", ENCODE_LOSSY, raw.toString(), out.toString(),
-                Integer.toString(src.width()), Integer.toString(src.height()), Integer.toString(quality));
-            return vp8Payload(Files.readAllBytes(out));
+            List<String> args = new ArrayList<>(List.of(raw.toString(), out.toString(),
+                Integer.toString(src.width()), Integer.toString(src.height()), Integer.toString(quality)));
+            args.addAll(List.of(settings));
+            run("libwebp encode", ENCODE_LOSSY, args.toArray(String[]::new));
+            return Files.readAllBytes(out);
         } finally {
             Files.deleteIfExists(raw);
             Files.deleteIfExists(out);

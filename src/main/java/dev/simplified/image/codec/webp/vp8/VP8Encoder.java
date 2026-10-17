@@ -152,10 +152,13 @@ public final class VP8Encoder {
         //   mbRefFrame[i]   = one of LoopFilter.REF_INTRA / REF_LAST / REF_GOLDEN / REF_ALTREF
         //   mbModeLfIdx[i]  = one of LoopFilter.MODE_NON_BPRED_INTRA / MODE_BPRED / MODE_ZEROMV
         //                     / MODE_OTHER_INTER / MODE_SPLITMV
+        //   mbHasCoeffs[i]  = the MB carries a non-zero coefficient, which has the loop
+        //                     filter take its inner edges whatever its mode
         // Populated as each MB is committed and consumed at the end-of-frame loop-filter
         // pass to apply RFC 6386 section 15 ref_lf_delta + mode_lf_delta per-MB.
         final int[] mbRefFrame;
         final int[] mbModeLfIdx;
+        final boolean[] mbHasCoeffs;
 
         // Active quantizer steps for the MB currently being encoded. Mirror of the
         // decoder's State fields of the same names. Swapped by {@link #applySegment}
@@ -363,6 +366,7 @@ public final class VP8Encoder {
             java.util.Arrays.fill(this.mbSplitScheme, -1);
             this.mbRefFrame = new int[mbCols * mbRows];       // defaults to REF_INTRA = 0
             this.mbModeLfIdx = new int[mbCols * mbRows];       // defaults to MODE_NON_BPRED_INTRA = 0
+            this.mbHasCoeffs = new boolean[mbCols * mbRows];
             this.mbSegmentId = new int[mbCols * mbRows];       // defaults to 0 (single-segment)
 
             this.motionSearchThreads = session != null ? session.getMotionSearchThreads() : 1;
@@ -960,7 +964,7 @@ public final class VP8Encoder {
                 s.lumaStride, s.chromaStride,
                 s.mbCols, s.mbRows,
                 /*simpleFilter=*/ false, baseFilterLevel, /*sharpness=*/ 0,
-                s.mbRefFrame, s.mbModeLfIdx,
+                s.mbRefFrame, s.mbModeLfIdx, s.mbHasCoeffs,
                 s.useLfDelta, s.refLfDelta, s.modeLfDelta,
                 s.mbSegmentId, s.segFilterLevel
             );
@@ -1136,7 +1140,7 @@ public final class VP8Encoder {
                 s.lumaStride, s.chromaStride,
                 s.mbCols, s.mbRows,
                 /*simpleFilter=*/ false, filterLevel, /*sharpness=*/ 0,
-                s.mbRefFrame, s.mbModeLfIdx,
+                s.mbRefFrame, s.mbModeLfIdx, s.mbHasCoeffs,
                 s.useLfDelta, s.refLfDelta, s.modeLfDelta,
                 s.mbSegmentId, s.segFilterLevel
             );
@@ -1597,16 +1601,13 @@ public final class VP8Encoder {
         //    inside the per-mode evaluation paths below).
         short[] yAbove = extractAbove(s.reconY, s.lumaStride, mbX * 16, mbY * 16, 16);
         short[] yLeft  = extractLeft(s.reconY, s.lumaStride, mbX * 16, mbY * 16, 16);
-        short yAboveLeft = (mbX > 0 && mbY > 0)
-            ? s.reconY[(mbY * 16 - 1) * s.lumaStride + mbX * 16 - 1] : (short) 128;
+        short yAboveLeft = IntraPrediction.aboveLeft(s.reconY, s.lumaStride, mbX * 16, mbY * 16);
         short[] uAbove = extractAbove(s.reconU, s.chromaStride, mbX * 8, mbY * 8, 8);
         short[] uLeft  = extractLeft(s.reconU, s.chromaStride, mbX * 8, mbY * 8, 8);
         short[] vAbove = extractAbove(s.reconV, s.chromaStride, mbX * 8, mbY * 8, 8);
         short[] vLeft  = extractLeft(s.reconV, s.chromaStride, mbX * 8, mbY * 8, 8);
-        short uvAboveLeft = (mbX > 0 && mbY > 0)
-            ? s.reconU[(mbY * 8 - 1) * s.chromaStride + mbX * 8 - 1] : (short) 128;
-        short vuAboveLeft = (mbX > 0 && mbY > 0)
-            ? s.reconV[(mbY * 8 - 1) * s.chromaStride + mbX * 8 - 1] : (short) 128;
+        short uvAboveLeft = IntraPrediction.aboveLeft(s.reconU, s.chromaStride, mbX * 8, mbY * 8);
+        short vuAboveLeft = IntraPrediction.aboveLeft(s.reconV, s.chromaStride, mbX * 8, mbY * 8);
 
         // 3. 16x16 luma path - DCT + trellis + reconstruct into a local 256-sample buffer.
         short[] predY16 = new short[256];
@@ -1654,14 +1655,17 @@ public final class VP8Encoder {
         }
         emitUvMode(h, uvMode);
 
-        // 9. Emit tokens + quantize+emit chroma (using trellis in emit-time order so each
-        //    block sees the correct {@code top_nz + left_nz} context). MB rows are
-        //    interleaved across {@code NUM_TOKEN_PARTITIONS} partitions so a multi-
-        //    threaded decoder can parse rows in parallel.
+        // 9. Quantize chroma and emit tokens. Each chroma plane's nz context slots are its
+        //    own, so trellising both planes ahead of the emits gives each block the
+        //    {@code top_nz + left_nz} context it is emitted under. MB rows are interleaved
+        //    across {@code NUM_TOKEN_PARTITIONS} partitions so a multi-threaded decoder can
+        //    parse rows in parallel.
+        ChromaTrellisResult uResult = trellisChroma(s, mbX, mb.cb, predU, /*isU=*/ true);
+        ChromaTrellisResult vResult = trellisChroma(s, mbX, mb.cr, predV, /*isU=*/ false);
         BooleanEncoder tokenPart = s.tokens[mbY & (NUM_TOKEN_PARTITIONS - 1)];
-        emitLumaTokens(s, tokenPart, mbX, useBPred, i16.y2ZigZag, useBPred ? bpred.yAc : i16.yAcZigZag);
-        ChromaTrellisResult uResult = trellisAndEmitChroma(s, tokenPart, mbX, mb.cb, predU, /*isU=*/ true);
-        ChromaTrellisResult vResult = trellisAndEmitChroma(s, tokenPart, mbX, mb.cr, predV, /*isU=*/ false);
+        s.mbHasCoeffs[mbIdx] = emitLumaTokens(s, tokenPart, mbX, useBPred, i16.y2ZigZag, useBPred ? bpred.yAc : i16.yAcZigZag)
+            | emitChromaTokensFromTrellis(s, tokenPart, mbX, uResult, /*isU=*/ true)
+            | emitChromaTokensFromTrellis(s, tokenPart, mbX, vResult, /*isU=*/ false);
 
         // 10. Commit chroma reconstruction using the dequantized coefficients from trellis.
         commitChromaFromDequant(s.reconU, s.chromaStride, mbX, mbY, predU, uResult.dequant);
@@ -1840,9 +1844,9 @@ public final class VP8Encoder {
             java.util.Arrays.fill(s.intraL, IntraPrediction.B_DC_PRED);
 
             BooleanEncoder tokenPart = s.tokens[mbY & (NUM_TOKEN_PARTITIONS - 1)];
-            emitLumaTokens(s, tokenPart, mbX, /*isBPred=*/ false, i16.y2ZigZag, i16.yAcZigZag);
-            emitChromaTokensFromTrellis(s, tokenPart, mbX, u, /*isU=*/ true);
-            emitChromaTokensFromTrellis(s, tokenPart, mbX, v, /*isU=*/ false);
+            s.mbHasCoeffs[mbIdx] = emitLumaTokens(s, tokenPart, mbX, /*isBPred=*/ false, i16.y2ZigZag, i16.yAcZigZag)
+                | emitChromaTokensFromTrellis(s, tokenPart, mbX, u, /*isU=*/ true)
+                | emitChromaTokensFromTrellis(s, tokenPart, mbX, v, /*isU=*/ false);
             commitChromaFromDequant(s.reconU, s.chromaStride, mbX, mbY, predU, u.dequant);
             commitChromaFromDequant(s.reconV, s.chromaStride, mbX, mbY, predV, v.dequant);
         }
@@ -1894,9 +1898,9 @@ public final class VP8Encoder {
             java.util.Arrays.fill(s.intraL, ctxMode);
 
             BooleanEncoder tokenPart = s.tokens[mbY & (NUM_TOKEN_PARTITIONS - 1)];
-            emitLumaTokens(s, tokenPart, mbX, /*isBPred=*/ false, i16.y2ZigZag, i16.yAcZigZag);
-            emitChromaTokensFromTrellis(s, tokenPart, mbX, u, /*isU=*/ true);
-            emitChromaTokensFromTrellis(s, tokenPart, mbX, v, /*isU=*/ false);
+            s.mbHasCoeffs[mbIdx] = emitLumaTokens(s, tokenPart, mbX, /*isBPred=*/ false, i16.y2ZigZag, i16.yAcZigZag)
+                | emitChromaTokensFromTrellis(s, tokenPart, mbX, u, /*isU=*/ true)
+                | emitChromaTokensFromTrellis(s, tokenPart, mbX, v, /*isU=*/ false);
             commitChromaFromDequant(s.reconU, s.chromaStride, mbX, mbY, predU, u.dequant);
             commitChromaFromDequant(s.reconV, s.chromaStride, mbX, mbY, predV, v.dequant);
         }
@@ -1944,9 +1948,9 @@ public final class VP8Encoder {
             commitLumaToRecon(s, mbX, mbY, bpred.recon);
 
             BooleanEncoder tokenPart = s.tokens[mbY & (NUM_TOKEN_PARTITIONS - 1)];
-            emitLumaTokens(s, tokenPart, mbX, /*isBPred=*/ true, /*y2ZigZag=*/ null, bpred.yAc);
-            emitChromaTokensFromTrellis(s, tokenPart, mbX, u, /*isU=*/ true);
-            emitChromaTokensFromTrellis(s, tokenPart, mbX, v, /*isU=*/ false);
+            s.mbHasCoeffs[mbIdx] = emitLumaTokens(s, tokenPart, mbX, /*isBPred=*/ true, /*y2ZigZag=*/ null, bpred.yAc)
+                | emitChromaTokensFromTrellis(s, tokenPart, mbX, u, /*isU=*/ true)
+                | emitChromaTokensFromTrellis(s, tokenPart, mbX, v, /*isU=*/ false);
             commitChromaFromDequant(s.reconU, s.chromaStride, mbX, mbY, predU, u.dequant);
             commitChromaFromDequant(s.reconV, s.chromaStride, mbX, mbY, predV, v.dequant);
         }
@@ -2136,9 +2140,9 @@ public final class VP8Encoder {
             java.util.Arrays.fill(s.intraL, IntraPrediction.B_DC_PRED);
 
             BooleanEncoder tokenPart = s.tokens[mbY & (NUM_TOKEN_PARTITIONS - 1)];
-            emitLumaTokens(s, tokenPart, mbX, /*isBPred=*/ false, i16.y2ZigZag, i16.yAcZigZag);
-            emitChromaTokensFromTrellis(s, tokenPart, mbX, u, /*isU=*/ true);
-            emitChromaTokensFromTrellis(s, tokenPart, mbX, v, /*isU=*/ false);
+            s.mbHasCoeffs[mbIdx] = emitLumaTokens(s, tokenPart, mbX, /*isBPred=*/ false, i16.y2ZigZag, i16.yAcZigZag)
+                | emitChromaTokensFromTrellis(s, tokenPart, mbX, u, /*isU=*/ true)
+                | emitChromaTokensFromTrellis(s, tokenPart, mbX, v, /*isU=*/ false);
             commitChromaFromDequant(s.reconU, s.chromaStride, mbX, mbY, predU, u.dequant);
             commitChromaFromDequant(s.reconV, s.chromaStride, mbX, mbY, predV, v.dequant);
         }
@@ -2914,16 +2918,13 @@ public final class VP8Encoder {
     ) {
         short[] yAbove = extractAbove(s.reconY, s.lumaStride, mbX * 16, mbY * 16, 16);
         short[] yLeft  = extractLeft(s.reconY, s.lumaStride, mbX * 16, mbY * 16, 16);
-        short yAboveLeft = (mbX > 0 && mbY > 0)
-            ? s.reconY[(mbY * 16 - 1) * s.lumaStride + mbX * 16 - 1] : (short) 128;
+        short yAboveLeft = IntraPrediction.aboveLeft(s.reconY, s.lumaStride, mbX * 16, mbY * 16);
         short[] uAbove = extractAbove(s.reconU, s.chromaStride, mbX * 8, mbY * 8, 8);
         short[] uLeft  = extractLeft(s.reconU, s.chromaStride, mbX * 8, mbY * 8, 8);
         short[] vAbove = extractAbove(s.reconV, s.chromaStride, mbX * 8, mbY * 8, 8);
         short[] vLeft  = extractLeft(s.reconV, s.chromaStride, mbX * 8, mbY * 8, 8);
-        short uvAboveLeft = (mbX > 0 && mbY > 0)
-            ? s.reconU[(mbY * 8 - 1) * s.chromaStride + mbX * 8 - 1] : (short) 128;
-        short vuAboveLeft = (mbX > 0 && mbY > 0)
-            ? s.reconV[(mbY * 8 - 1) * s.chromaStride + mbX * 8 - 1] : (short) 128;
+        short uvAboveLeft = IntraPrediction.aboveLeft(s.reconU, s.chromaStride, mbX * 8, mbY * 8);
+        short vuAboveLeft = IntraPrediction.aboveLeft(s.reconV, s.chromaStride, mbX * 8, mbY * 8);
 
         short[] predY16 = new short[256];
         int yMode16 = selectBest16x16Mode(mb.y, yAbove, yLeft, yAboveLeft, predY16);
@@ -2969,10 +2970,8 @@ public final class VP8Encoder {
         short[] uLeft  = extractLeft(s.reconU, s.chromaStride, mbX * 8, mbY * 8, 8);
         short[] vAbove = extractAbove(s.reconV, s.chromaStride, mbX * 8, mbY * 8, 8);
         short[] vLeft  = extractLeft(s.reconV, s.chromaStride, mbX * 8, mbY * 8, 8);
-        short uvAboveLeft = (mbX > 0 && mbY > 0)
-            ? s.reconU[(mbY * 8 - 1) * s.chromaStride + mbX * 8 - 1] : (short) 128;
-        short vuAboveLeft = (mbX > 0 && mbY > 0)
-            ? s.reconV[(mbY * 8 - 1) * s.chromaStride + mbX * 8 - 1] : (short) 128;
+        short uvAboveLeft = IntraPrediction.aboveLeft(s.reconU, s.chromaStride, mbX * 8, mbY * 8);
+        short vuAboveLeft = IntraPrediction.aboveLeft(s.reconV, s.chromaStride, mbX * 8, mbY * 8);
 
         BPredResult bpred = encodeBPredLuma(s, mb.y, mbX, mbY);
 
@@ -3847,14 +3846,17 @@ public final class VP8Encoder {
      * per-sub-block nz flags into {@code s.topNz[mbX]} / {@code s.leftNz}. Must be called
      * in the same channel order as the trellis (U before V) with the same {@code isU}
      * argument so the context slots line up.
+     *
+     * @return whether any of the four blocks carries a non-zero level
      */
-    private static void emitChromaTokensFromTrellis(
+    private static boolean emitChromaTokensFromTrellis(
         @NotNull State s, @NotNull BooleanEncoder tokens, int mbX,
         @NotNull ChromaTrellisResult tr, boolean isU
     ) {
         int[] top = s.topNz[mbX];
         int[] left = s.leftNz;
         int baseIdx = isU ? 4 : 6;
+        int anyNz = 0;
         for (int by = 0; by < 2; by++) {
             for (int bx = 0; bx < 2; bx++) {
                 int ctx = top[baseIdx + bx] + left[baseIdx + by];
@@ -3864,25 +3866,10 @@ public final class VP8Encoder {
                 int nz = tr.nz[by * 2 + bx];
                 top[baseIdx + bx] = nz;
                 left[baseIdx + by] = nz;
+                anyNz |= nz;
             }
         }
-    }
-
-    /**
-     * Trellis-quantizes one chroma plane and emits its tokens in one call, {@link #trellisChroma}
-     * then {@link #emitChromaTokensFromTrellis}, for the keyframe path and the winning inter /
-     * intra candidates. The returned {@link ChromaTrellisResult#dequant} feeds
-     * {@link #commitChromaFromDequant}.
-     *
-     * @param isU {@code true} for U (context slots 4..5), {@code false} for V (slots 6..7)
-     */
-    private static @NotNull ChromaTrellisResult trellisAndEmitChroma(
-        @NotNull State s, @NotNull BooleanEncoder tokens, int mbX,
-        short @NotNull [] src, short @NotNull [] pred, boolean isU
-    ) {
-        ChromaTrellisResult tr = trellisChroma(s, mbX, src, pred, isU);
-        emitChromaTokensFromTrellis(s, tokens, mbX, tr, isU);
-        return tr;
+        return anyNz != 0;
     }
 
     /**
@@ -4049,24 +4036,22 @@ public final class VP8Encoder {
     /**
      * Above-row neighbours for sub-block ({@code by}, {@code bx}): 4 above + 4 above-right,
      * sourced from {@code mbRecon} for sub-blocks within the current MB and from
-     * {@code s.reconY} for the prior MB row. Above-right past the current MB's right edge
-     * is replicated from the rightmost in-MB pixel (matching {@link VP8Decoder}).
+     * {@code s.reconY} for the prior MB row. A sub-block in the MB's right column below its
+     * top row takes its above-right from the row above the MB, as the top-right sub-block
+     * does, where RFC 6386 and libwebp take it: 127 on the frame's top row, the last
+     * sample of the MB above at the frame's right edge.
      */
     private static short[] neighborAbove8(@NotNull State s, short @NotNull [] mbRecon, int mbX, int mbY, int bx, int by) {
         if (by == 0 && mbY == 0) return null;
         short[] above = new short[8];
         for (int i = 0; i < 8; i++) {
             int relX = bx * 4 + i;
-            if (by == 0) {
-                int absX = mbX * 16 + relX;
-                int rightLimit = s.lumaStride - 1;
-                int x = Math.min(absX, rightLimit);
-                above[i] = s.reconY[(mbY * 16 - 1) * s.lumaStride + x];
-            } else {
-                int rightLimit = 15;
-                int x = Math.min(relX, rightLimit);
-                above[i] = mbRecon[(by * 4 - 1) * 16 + x];
-            }
+            if (by > 0 && relX < 16)
+                above[i] = mbRecon[(by * 4 - 1) * 16 + relX];
+            else if (mbY == 0)
+                above[i] = 127;
+            else
+                above[i] = s.reconY[(mbY * 16 - 1) * s.lumaStride + Math.min(mbX * 16 + relX, s.lumaStride - 1)];
         }
         return above;
     }
@@ -4088,10 +4073,15 @@ public final class VP8Encoder {
         return left;
     }
 
+    /**
+     * Above-left neighbour for sub-block ({@code by}, {@code bx}), or the value
+     * {@link IntraPrediction#aboveLeft} gives a block on the frame's edge.
+     */
     private static short neighborAboveLeft(@NotNull State s, short @NotNull [] mbRecon, int mbX, int mbY, int bx, int by) {
         int absX = mbX * 16 + bx * 4 - 1;
         int absY = mbY * 16 + by * 4 - 1;
-        if (absX < 0 || absY < 0) return 128;
+        if (absY < 0) return 127;
+        if (absX < 0) return 129;
         if (by > 0 && bx > 0)
             return mbRecon[(by * 4 - 1) * 16 + bx * 4 - 1];
         if (by == 0 && bx > 0)
@@ -4130,7 +4120,7 @@ public final class VP8Encoder {
 
     /**
      * Reconstructs a chroma channel from its prediction plus per-sub-block raster-order
-     * dequantized coefficients (as produced by {@link #trellisAndEmitChroma}), and commits
+     * dequantized coefficients (as produced by {@link #trellisChroma}), and commits
      * the result to the appropriate region of {@code plane}.
      */
     private static void commitChromaFromDequant(
@@ -4156,13 +4146,16 @@ public final class VP8Encoder {
      * (if {@code !isBPred}), then 16 Y sub-blocks in raster order. Coefficient blocks are
      * already in zig-zag order - trellis writes directly to zig-zag. Updates the
      * {@link State#topNz}/{@link State#leftNz} luma slots.
+     *
+     * @return whether any luma block, Y2 included, carries a non-zero level
      */
-    private static void emitLumaTokens(
+    private static boolean emitLumaTokens(
         @NotNull State s, @NotNull BooleanEncoder t, int mbX, boolean isBPred,
         short @Nullable [] y2ZigZag, short @NotNull [] @NotNull [] yAcZigZag
     ) {
         int[] top = s.topNz[mbX];
         int[] left = s.leftNz;
+        int anyNz = 0;
 
         int yFirst;
         int yType;
@@ -4176,6 +4169,7 @@ public final class VP8Encoder {
             int nz = VP8TokenEncoder.emit(
                 t, y2ZigZag, 0, ctx, VP8Tables.TYPE_I16_DC, s.tokenProba, s.tokenBranches);
             top[8] = left[8] = nz;
+            anyNz = nz;
             yFirst = 1;
             yType = VP8Tables.TYPE_I16_AC;
         }
@@ -4186,8 +4180,10 @@ public final class VP8Encoder {
                 int nz = VP8TokenEncoder.emit(
                     t, yAcZigZag[y * 4 + x], yFirst, ctx, yType, s.tokenProba, s.tokenBranches);
                 top[x] = left[y] = nz;
+                anyNz |= nz;
             }
         }
+        return anyNz != 0;
     }
 
     /**

@@ -3,8 +3,9 @@ package dev.simplified.image.codec.webp.vp8;
 import org.jetbrains.annotations.NotNull;
 
 /**
- * Bilinear 4:2:0 chroma upsampling for VP8 decode, matching libwebp's fancy upsampler
- * ({@code src/dsp/upsampling.c} + {@code EmitFancyRGB} in {@code src/dec/io_dec.c}).
+ * Bilinear 4:2:0 chroma upsampling and YCbCr-to-RGB conversion for VP8 decode, matching
+ * libwebp's fancy upsampler ({@code src/dsp/upsampling.c} + {@code EmitFancyRGB} in
+ * {@code src/dec/io_dec.c}) and its {@code VP8YuvToRgb} ({@code src/dsp/yuv.h}) bit for bit.
  * <p>
  * Given chroma samples laid out as a 2x2 square
  * <pre>
@@ -195,19 +196,30 @@ final class ChromaUpsampler {
     }
 
     /**
-     * BT.601 YCbCr -> ARGB conversion for a single pixel: {@code y -= 16}, {@code u -= 128},
-     * {@code v -= 128}, {@code R = clamp((298y + 409v + 128) >> 8)} etc. Not bit-exact with
-     * libwebp's YUV->RGB, which uses a different fixed-point layout; the output differs from it by
-     * at most 1 LSB per channel.
+     * Converts one BT.601 YCbCr pixel to opaque ARGB as libwebp's {@code VP8YuvToRgb} does
+     * ({@code src/dsp/yuv.h}): each channel sums {@link #multHi} terms and an offset in 14-bit
+     * fixed point, then {@link #clip8} drops the six fraction bits.
      */
     private static int yuvToArgb(int y, int u, int v) {
-        int yy = y - 16;
-        int cb = u - 128;
-        int cr = v - 128;
-        int r = Math.clamp((298 * yy + 409 * cr + 128) >> 8, 0, 255);
-        int g = Math.clamp((298 * yy - 100 * cb - 208 * cr + 128) >> 8, 0, 255);
-        int b = Math.clamp((298 * yy + 516 * cb + 128) >> 8, 0, 255);
+        int r = clip8(multHi(y, 19077) + multHi(v, 26149) - 14234);
+        int g = clip8(multHi(y, 19077) - multHi(u, 6419) - multHi(v, 13320) + 8708);
+        int b = clip8(multHi(y, 19077) + multHi(u, 33050) - 17685);
         return 0xFF000000 | (r << 16) | (g << 8) | b;
+    }
+
+    /**
+     * Returns the high bits of a sample's product with a coefficient, libwebp's {@code MultHi}.
+     */
+    private static int multHi(int value, int coefficient) {
+        return (value * coefficient) >> 8;
+    }
+
+    /**
+     * Drops the six fraction bits of a 14-bit fixed-point channel, clamping it to {@code [0, 255]},
+     * libwebp's {@code VP8Clip8}.
+     */
+    private static int clip8(int value) {
+        return (value & ~0x3FFF) == 0 ? value >> 6 : value < 0 ? 0 : 255;
     }
 
 }

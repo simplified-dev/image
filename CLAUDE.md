@@ -31,7 +31,7 @@ P-frames (`WebPWriteOptions.usePFrames`, through `VP8EncoderSession`) predict fr
 
 The tables are taken from the two reference codecs and must stay bit-exact, or a decoder misreads the bitstream: the token tree and coefficient probabilities from libwebp's `src/dec/tree_dec.c`, the bit costs from `src/enc/cost_enc.c` and `cost_enc.h`, the quantizer bias and sharpening matrices from `src/enc/quant_enc.c`, and the inter-frame mode, motion-vector and SPLITMV tables from libvpx, chiefly `vp8/common/entropymode.c`, `vp8/common/entropymv.c`, `vp8/common/modecont.c` and `vp8/decoder/decodemv.c`.
 
-The decoder reads keyframes and P-frames, the latter against all three references with their refresh, copy and sign-bias flags, plus SPLITMV, segmentation, loop-filter deltas, both loop filters and every token partition. Coefficients go through the full token tree in `VP8TokenDecoder`, after libwebp's `GetCoeffsFast`, and chroma is upsampled with libwebp's fancy bilinear filter. A P-frame decodes only through a `VP8DecoderSession` holding its reference.
+The decoder reads keyframes and P-frames, the latter against all three references with their refresh, copy and sign-bias flags, plus SPLITMV, segmentation, loop-filter deltas, both loop filters and every token partition. Coefficients go through the full token tree in `VP8TokenDecoder`, after libwebp's `GetCoeffsFast`, and chroma is upsampled with libwebp's fancy bilinear filter and converted to RGB in libwebp's fixed point. A keyframe decodes to exactly the pixels libwebp decodes it to, whichever encoder wrote it, and the encoder reconstructs every frame exactly as the decoder will; `VP8DecodeParityTest` holds both. A P-frame decodes only through a `VP8DecoderSession` holding its reference.
 
 ## Builders
 
@@ -54,4 +54,4 @@ The VP8 and WebP tests check this library's output against libwebp through Pytho
 - External deps: Log4j2, Simplified Annotations, JetBrains annotations
 - Third-party code: `NOTICE` names every class ported from libwebp, libvpx or RFC 6386 and carries their licences; the jar packs it into `META-INF` with `LICENSE.md`, the Apache-2.0 text it points to. Code or tables taken from another codec get a line there too
 - Tests: JUnit 5 + Hamcrest
-- 93 main sources plus a `package-info.java` per package; 35 test sources
+- 93 main sources plus a `package-info.java` per package; 36 test sources

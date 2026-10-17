@@ -16,8 +16,9 @@ import org.jetbrains.annotations.Nullable;
  *       {@code Hev} high-edge-variance branch: {@code DoFilter2} on HEV, {@code DoFilter6} (MB edge)
  *       or {@code DoFilter4} (inner edge) otherwise. Applied to luma + U + V.</li>
  * </ul>
- * Both modes optionally filter the three inner 4x4 sub-block edges inside the MB when
- * the macroblock was coded with {@code is_i4x4 = true} (B_PRED).
+ * Both modes also filter the three inner 4x4 sub-block edges inside a macroblock that is
+ * B_PRED or SPLITMV, or that carries a non-zero coefficient, as libwebp's
+ * {@code VP8DecodeMB} decides.
  *
  * @see <a href="https://datatracker.ietf.org/doc/html/rfc6386#section-15">RFC 6386 section 15</a>
  */
@@ -91,7 +92,8 @@ final class LoopFilter {
          */
         final int hevThresh;
         /**
-         * Whether inner 4x4 sub-block edges should also be filtered (true for B_PRED MBs).
+         * Whether the mode alone has the inner 4x4 sub-block edges filtered, true for B_PRED
+         * and SPLITMV; any other macroblock has them filtered when it carries a coefficient.
          */
         final boolean fInner;
 
@@ -110,7 +112,11 @@ final class LoopFilter {
      * {@code DoFilter} iterating across the full MB grid, with full RFC 6386 section 15
      * {@code ref_lf_delta} / {@code mode_lf_delta} support: each MB's effective filter
      * strength is {@code filter_level + ref_lf_delta[mb.ref] + mode_lf_delta[mb.mode]}
-     * when {@code useLfDelta} is set, or just {@code filter_level} otherwise.
+     * when {@code useLfDelta} is set, or just {@code filter_level} otherwise. When
+     * {@code mbSegmentId} and {@code segmentFilterLevel} are non-null, each MB's base
+     * filter level is read from {@code segmentFilterLevel[mbSegmentId[mbIdx]]} (per RFC
+     * 6386 section 10); passing {@code null} for either uses {@code filterLevel} for
+     * every MB.
      *
      * @param planeY luma plane (row-major, stride {@code yStride})
      * @param planeU chroma U plane; may be {@code null} for simple-only filtering
@@ -126,36 +132,19 @@ final class LoopFilter {
      * @param mbRefFrame per-MB reference-frame index (row-major), one of {@link #REF_INTRA}
      *                  / {@link #REF_LAST} / {@link #REF_GOLDEN} / {@link #REF_ALTREF}
      * @param mbModeLfIdx per-MB mode-class (row-major), one of the {@code MODE_*} constants
+     * @param mbHasCoeffs per-MB (row-major) whether the macroblock carries a non-zero
+     *                    coefficient, which has its inner edges filtered whatever its mode
      * @param useLfDelta whether to apply {@code refLfDelta} + {@code modeLfDelta}
      * @param refLfDelta 4-entry delta vector indexed by reference frame
      * @param modeLfDelta 4-entry delta vector indexed by {@link #MODE_LF_DELTA_INDEX}
+     * @param mbSegmentId per-MB segment ID (row-major), or {@code null} for one segment
+     * @param segmentFilterLevel per-segment base filter level, or {@code null} for one segment
      */
     static void filterFrame(
         short @NotNull [] planeY, short[] planeU, short[] planeV,
         int yStride, int uvStride, int mbCols, int mbRows,
         boolean simple, int filterLevel, int sharpness,
-        int @NotNull [] mbRefFrame, int @NotNull [] mbModeLfIdx,
-        boolean useLfDelta, int @NotNull [] refLfDelta, int @NotNull [] modeLfDelta
-    ) {
-        filterFrame(planeY, planeU, planeV, yStride, uvStride, mbCols, mbRows,
-            simple, filterLevel, sharpness, mbRefFrame, mbModeLfIdx,
-            useLfDelta, refLfDelta, modeLfDelta,
-            /*mbSegmentId=*/ null, /*segmentFilterLevel=*/ null);
-    }
-
-    /**
-     * Segment-aware variant of {@link #filterFrame}. When {@code mbSegmentId} and
-     * {@code segmentFilterLevel} are non-null, each MB's base filter level is read
-     * from {@code segmentFilterLevel[mbSegmentId[mbIdx]]} (per RFC 6386 section 10);
-     * {@code ref_lf_delta} + {@code mode_lf_delta} still stack on top when
-     * {@code useLfDelta} is set. Passing {@code null} for either array reverts to
-     * the single-segment path using {@code filterLevel} for every MB.
-     */
-    static void filterFrame(
-        short @NotNull [] planeY, short[] planeU, short[] planeV,
-        int yStride, int uvStride, int mbCols, int mbRows,
-        boolean simple, int filterLevel, int sharpness,
-        int @NotNull [] mbRefFrame, int @NotNull [] mbModeLfIdx,
+        int @NotNull [] mbRefFrame, int @NotNull [] mbModeLfIdx, boolean @NotNull [] mbHasCoeffs,
         boolean useLfDelta, int @NotNull [] refLfDelta, int @NotNull [] modeLfDelta,
         int @Nullable [] mbSegmentId, int @Nullable [] segmentFilterLevel
     ) {
@@ -186,7 +175,8 @@ final class LoopFilter {
                 int segId = segmented ? mbSegmentId[mbIdx] : 0;
                 FInfo info = strengths[segId][mbRefFrame[mbIdx]][mbModeLfIdx[mbIdx]];
                 if (info.fLimit == 0) continue;
-                doFilter(planeY, planeU, planeV, yStride, uvStride, mbX, mbY, info, simple);
+                boolean inner = info.fInner || mbHasCoeffs[mbIdx];
+                doFilter(planeY, planeU, planeV, yStride, uvStride, mbX, mbY, info, inner, simple);
             }
         }
     }
@@ -213,10 +203,10 @@ final class LoopFilter {
                     if (modeDeltaIdx >= 0) level += modeLfDelta[modeDeltaIdx];
                 }
                 level = Math.clamp(level, 0, 63);
-                // Inner edges are filtered for both B_PRED and SPLITMV (RFC 6386 section
-                // 15.4, libvpx {@code skip_lf = mode != B_PRED && mode != SPLITMV && skip}).
-                // Our strengths table doesn't see the skip flag, so we set inner=true
-                // for these two modes unconditionally; other inter modes leave it false.
+                // Inner edges are filtered for both B_PRED and SPLITMV whatever their
+                // coefficients (RFC 6386 section 15.4, libvpx {@code skip_lf = mode != B_PRED
+                // && mode != SPLITMV && skip}); filterFrame adds every other mode's MBs that
+                // carry a coefficient.
                 boolean inner = (mode == MODE_BPRED || mode == MODE_SPLITMV);
                 out[ref][mode] = buildFInfo(level, sharpness, inner);
             }
@@ -244,11 +234,13 @@ final class LoopFilter {
 
     /**
      * Per-MB filter dispatch. Mirrors libwebp's {@code DoFilter} in {@code src/dec/frame_dec.c}.
+     *
+     * @param inner whether the three inner 4x4 sub-block edges are filtered too
      */
     private static void doFilter(
         short[] planeY, short[] planeU, short[] planeV,
         int yStride, int uvStride, int mbX, int mbY,
-        @NotNull FInfo info, boolean simple
+        @NotNull FInfo info, boolean inner, boolean simple
     ) {
         int yPtr = (mbY * 16) * yStride + mbX * 16;
         int limit = info.fLimit;
@@ -257,9 +249,9 @@ final class LoopFilter {
 
         if (simple) {
             if (mbX > 0) simpleHFilter16(planeY, yPtr, yStride, limit + 4);
-            if (info.fInner) simpleHFilter16i(planeY, yPtr, yStride, limit);
+            if (inner) simpleHFilter16i(planeY, yPtr, yStride, limit);
             if (mbY > 0) simpleVFilter16(planeY, yPtr, yStride, limit + 4);
-            if (info.fInner) simpleVFilter16i(planeY, yPtr, yStride, limit);
+            if (inner) simpleVFilter16i(planeY, yPtr, yStride, limit);
             return;
         }
 
@@ -270,7 +262,7 @@ final class LoopFilter {
             hFilter16(planeY, yPtr, yStride, limit + 4, ilevel, hevThresh);
             hFilter8(planeU, planeV, uPtr, vPtr, uvStride, limit + 4, ilevel, hevThresh);
         }
-        if (info.fInner) {
+        if (inner) {
             hFilter16i(planeY, yPtr, yStride, limit, ilevel, hevThresh);
             hFilter8i(planeU, planeV, uPtr, vPtr, uvStride, limit, ilevel, hevThresh);
         }
@@ -278,7 +270,7 @@ final class LoopFilter {
             vFilter16(planeY, yPtr, yStride, limit + 4, ilevel, hevThresh);
             vFilter8(planeU, planeV, uPtr, vPtr, uvStride, limit + 4, ilevel, hevThresh);
         }
-        if (info.fInner) {
+        if (inner) {
             vFilter16i(planeY, yPtr, yStride, limit, ilevel, hevThresh);
             vFilter8i(planeU, planeV, uPtr, vPtr, uvStride, limit, ilevel, hevThresh);
         }

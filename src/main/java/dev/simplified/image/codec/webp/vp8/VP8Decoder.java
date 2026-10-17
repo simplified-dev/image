@@ -178,8 +178,11 @@ public final class VP8Decoder {
         //   mbRefFrame[i]   = LoopFilter.REF_INTRA / REF_LAST / REF_GOLDEN / REF_ALTREF
         //   mbModeLfIdx[i]  = LoopFilter.MODE_{NON_BPRED_INTRA, BPRED, ZEROMV, OTHER_INTER, SPLITMV}
         // Consumed by the end-of-frame loop filter to apply RFC 6386 section 15 deltas.
+        //   mbHasCoeffs[i]  = the MB carries a non-zero coefficient, which has the loop
+        //                     filter take its inner edges whatever its mode
         final int[] mbRefFrame;
         final int[] mbModeLfIdx;
+        final boolean[] mbHasCoeffs;
 
         // Filter-delta header state populated by the filter-header parse:
         //   useLfDelta    - the use_lf_delta bit
@@ -269,6 +272,7 @@ public final class VP8Decoder {
             java.util.Arrays.fill(this.mbSplitScheme, -1);
             this.mbRefFrame = new int[mbCols * mbRows];       // defaults to REF_INTRA = 0
             this.mbModeLfIdx = new int[mbCols * mbRows];       // defaults to MODE_NON_BPRED_INTRA = 0
+            this.mbHasCoeffs = new boolean[mbCols * mbRows];
             this.mbSegmentId = new int[mbCols * mbRows];       // defaults to 0 (single-segment)
             this.proba = cloneProba(VP8Tables.COEFFS_PROBA_0);
             // Keyframes always reset MV probs to defaults; P-frames inherit from the
@@ -561,7 +565,7 @@ public final class VP8Decoder {
                 s.lumaStride, s.chromaStride,
                 s.mbCols, s.mbRows,
                 simpleFilter, filterLevel, sharpness,
-                s.mbRefFrame, s.mbModeLfIdx,
+                s.mbRefFrame, s.mbModeLfIdx, s.mbHasCoeffs,
                 s.useLfDelta, s.refLfDelta, s.modeLfDelta,
                 s.mbSegmentId, s.segFilterLevel
             );
@@ -683,16 +687,18 @@ public final class VP8Decoder {
 
         if (skip != 0) {
             // All residuals are zero; clear nz contexts and fall through to reconstruction.
-            for (int i = 0; i < 9; i++) { top[i] = 0; left[i] = 0; }
+            clearNzForSkip(top, left, isI4x4);
         } else {
             int first;
             int acType;
+            int anyNz = 0;
 
             if (!isI4x4) {
                 short[] zz = new short[16];
                 int ctx = top[8] + left[8];
                 int nz = VP8TokenDecoder.decode(td, zz, 0, ctx, VP8Tables.TYPE_I16_DC, s.proba);
                 top[8] = left[8] = nz;
+                anyNz |= nz;
 
                 short[] y2Raster = zigzagToRaster(zz);
                 y2Raster[0] = (short) (y2Raster[0] * s.y2Dc);
@@ -713,6 +719,7 @@ public final class VP8Decoder {
                     int ctx = top[x] + left[y];
                     int nz = VP8TokenDecoder.decode(td, zz, first, ctx, acType, s.proba);
                     top[x] = left[y] = nz;
+                    anyNz |= nz;
 
                     short[] raster = zigzagToRaster(zz);
                     if (!isI4x4) {
@@ -733,6 +740,7 @@ public final class VP8Decoder {
                     int ctx = top[4 + x] + left[4 + y];
                     int nz = VP8TokenDecoder.decode(td, zz, 0, ctx, VP8Tables.TYPE_CHROMA_A, s.proba);
                     top[4 + x] = left[4 + y] = nz;
+                    anyNz |= nz;
 
                     short[] raster = zigzagToRaster(zz);
                     raster[0] = (short) (raster[0] * s.uvDc);
@@ -747,6 +755,7 @@ public final class VP8Decoder {
                     int ctx = top[6 + x] + left[6 + y];
                     int nz = VP8TokenDecoder.decode(td, zz, 0, ctx, VP8Tables.TYPE_CHROMA_A, s.proba);
                     top[6 + x] = left[6 + y] = nz;
+                    anyNz |= nz;
 
                     short[] raster = zigzagToRaster(zz);
                     raster[0] = (short) (raster[0] * s.uvDc);
@@ -754,6 +763,7 @@ public final class VP8Decoder {
                     vCoefs[y * 2 + x] = raster;
                 }
             }
+            s.mbHasCoeffs[mbIdxKf] = anyNz != 0;
         }
 
         // ── Reconstruct ──
@@ -913,15 +923,17 @@ public final class VP8Decoder {
         short[][] vCoefs = new short[4][16];
 
         if (skip != 0) {
-            for (int i = 0; i < 9; i++) { top[i] = 0; left[i] = 0; }
+            clearNzForSkip(top, left, isI4x4);
         } else {
             int first;
             int acType;
+            int anyNz = 0;
             if (!isI4x4) {
                 short[] zz = new short[16];
                 int ctx = top[8] + left[8];
                 int nz = VP8TokenDecoder.decode(td, zz, 0, ctx, VP8Tables.TYPE_I16_DC, s.proba);
                 top[8] = left[8] = nz;
+                anyNz |= nz;
                 short[] y2Raster = zigzagToRaster(zz);
                 y2Raster[0] = (short) (y2Raster[0] * s.y2Dc);
                 for (int i = 1; i < 16; i++) y2Raster[i] = (short) (y2Raster[i] * s.y2Ac);
@@ -938,6 +950,7 @@ public final class VP8Decoder {
                     int ctx = top[x] + left[y];
                     int nz = VP8TokenDecoder.decode(td, zz, first, ctx, acType, s.proba);
                     top[x] = left[y] = nz;
+                    anyNz |= nz;
                     short[] raster = zigzagToRaster(zz);
                     if (!isI4x4)
                         raster[0] = dcValues[y * 4 + x];
@@ -953,6 +966,7 @@ public final class VP8Decoder {
                     int ctx = top[4 + x] + left[4 + y];
                     int nz = VP8TokenDecoder.decode(td, zz, 0, ctx, VP8Tables.TYPE_CHROMA_A, s.proba);
                     top[4 + x] = left[4 + y] = nz;
+                    anyNz |= nz;
                     short[] raster = zigzagToRaster(zz);
                     raster[0] = (short) (raster[0] * s.uvDc);
                     for (int i = 1; i < 16; i++) raster[i] = (short) (raster[i] * s.uvAc);
@@ -965,12 +979,14 @@ public final class VP8Decoder {
                     int ctx = top[6 + x] + left[6 + y];
                     int nz = VP8TokenDecoder.decode(td, zz, 0, ctx, VP8Tables.TYPE_CHROMA_A, s.proba);
                     top[6 + x] = left[6 + y] = nz;
+                    anyNz |= nz;
                     short[] raster = zigzagToRaster(zz);
                     raster[0] = (short) (raster[0] * s.uvDc);
                     for (int i = 1; i < 16; i++) raster[i] = (short) (raster[i] * s.uvAc);
                     vCoefs[y * 2 + x] = raster;
                 }
             }
+            s.mbHasCoeffs[mbIdxIp] = anyNz != 0;
         }
 
         if (isI4x4)
@@ -1036,6 +1052,7 @@ public final class VP8Decoder {
             int ctx = top[8] + left[8];
             int nz = VP8TokenDecoder.decode(td, zz, 0, ctx, VP8Tables.TYPE_I16_DC, s.proba);
             top[8] = left[8] = nz;
+            int anyNz = nz;
             short[] y2Raster = zigzagToRaster(zz);
             y2Raster[0] = (short) (y2Raster[0] * s.y2Dc);
             for (int i = 1; i < 16; i++) y2Raster[i] = (short) (y2Raster[i] * s.y2Ac);
@@ -1048,6 +1065,7 @@ public final class VP8Decoder {
                     int yctx = top[x] + left[y];
                     int ynz = VP8TokenDecoder.decode(td, yzz, 1, yctx, VP8Tables.TYPE_I16_AC, s.proba);
                     top[x] = left[y] = ynz;
+                    anyNz |= ynz;
                     short[] raster = zigzagToRaster(yzz);
                     raster[0] = dcValues[y * 4 + x];
                     for (int i = 1; i < 16; i++) raster[i] = (short) (raster[i] * s.y1Ac);
@@ -1061,6 +1079,7 @@ public final class VP8Decoder {
                     int uctx = top[4 + x] + left[4 + y];
                     int unz = VP8TokenDecoder.decode(td, uzz, 0, uctx, VP8Tables.TYPE_CHROMA_A, s.proba);
                     top[4 + x] = left[4 + y] = unz;
+                    anyNz |= unz;
                     short[] raster = zigzagToRaster(uzz);
                     raster[0] = (short) (raster[0] * s.uvDc);
                     for (int i = 1; i < 16; i++) raster[i] = (short) (raster[i] * s.uvAc);
@@ -1073,12 +1092,14 @@ public final class VP8Decoder {
                     int vctx = top[6 + x] + left[6 + y];
                     int vnz = VP8TokenDecoder.decode(td, vzz, 0, vctx, VP8Tables.TYPE_CHROMA_A, s.proba);
                     top[6 + x] = left[6 + y] = vnz;
+                    anyNz |= vnz;
                     short[] raster = zigzagToRaster(vzz);
                     raster[0] = (short) (raster[0] * s.uvDc);
                     for (int i = 1; i < 16; i++) raster[i] = (short) (raster[i] * s.uvAc);
                     vCoefs[y * 2 + x] = raster;
                 }
             }
+            s.mbHasCoeffs[mbY * s.mbCols + mbX] = anyNz != 0;
         }
 
         // Add residual to prediction (or just commit prediction when skip), clamp, write.
@@ -1533,8 +1554,7 @@ public final class VP8Decoder {
     ) {
         short[] above = mbY > 0 ? extractRow(s.reconY, mbX * 16, (mbY * 16 - 1) * s.lumaStride, 16) : null;
         short[] leftCol = mbX > 0 ? extractCol(s.reconY, mbX * 16 - 1, mbY * 16, s.lumaStride, 16) : null;
-        short aboveLeft = (mbX > 0 && mbY > 0)
-            ? s.reconY[(mbY * 16 - 1) * s.lumaStride + mbX * 16 - 1] : (short) 128;
+        short aboveLeft = IntraPrediction.aboveLeft(s.reconY, s.lumaStride, mbX * 16, mbY * 16);
 
         short[] predicted = new short[256];
         IntraPrediction.predict16x16(predicted, above, leftCol, aboveLeft, yMode);
@@ -1589,8 +1609,7 @@ public final class VP8Decoder {
     ) {
         short[] above = mbY > 0 ? extractRow(plane, mbX * 8, (mbY * 8 - 1) * stride, 8) : null;
         short[] leftCol = mbX > 0 ? extractCol(plane, mbX * 8 - 1, mbY * 8, stride, 8) : null;
-        short aboveLeft = (mbX > 0 && mbY > 0)
-            ? plane[(mbY * 8 - 1) * stride + mbX * 8 - 1] : (short) 128;
+        short aboveLeft = IntraPrediction.aboveLeft(plane, stride, mbX * 8, mbY * 8);
 
         short[] predicted = new short[64];
         IntraPrediction.predict8x8(predicted, above, leftCol, aboveLeft, uvMode);
@@ -1608,6 +1627,27 @@ public final class VP8Decoder {
                             predicted[(by * 4 + y) * 8 + bx * 4 + x] + residual[y * 4 + x], 0, 255
                         );
             }
+        }
+    }
+
+    /**
+     * Clears the non-zero contexts a skipped intra macroblock leaves, as libwebp's
+     * {@code VP8DecodeMB} does: every luma and chroma slot, and the Y2 slot only when the
+     * macroblock would code a Y2 block, so a skipped B_PRED macroblock leaves the Y2 context
+     * as it found it.
+     *
+     * @param top the macroblock column's above contexts
+     * @param left the macroblock row's left contexts
+     * @param isI4x4 whether the macroblock is B_PRED
+     */
+    static void clearNzForSkip(int @NotNull [] top, int @NotNull [] left, boolean isI4x4) {
+        for (int i = 0; i < 8; i++) {
+            top[i] = 0;
+            left[i] = 0;
+        }
+        if (!isI4x4) {
+            top[8] = 0;
+            left[8] = 0;
         }
     }
 
@@ -1631,21 +1671,25 @@ public final class VP8Decoder {
     /**
      * Gets 8 pixels above a 4x4 sub-block: 4 above plus 4 above-right.
      * <p>
-     * For sub-blocks whose above-row falls inside the current MB row
-     * ({@code blockY % 16 != 0}), the right neighbour MB is not yet reconstructed,
-     * so above-right reads are clamped to the current MB's right edge - replicating
-     * the rightmost in-MB pixel. For top-of-MB sub-blocks the above-row is the prior
-     * MB row's bottom row (fully reconstructed), so we clamp at plane edge.
+     * A sub-block in the MB's top row reads the prior MB row's bottom row, clamped at the
+     * plane's right edge. Below the top row, a sub-block's above-right lies in the MB to the
+     * right, which is not yet reconstructed, so a right-column sub-block takes the four
+     * samples above and to the right of the MB instead, as the top-right sub-block does,
+     * where RFC 6386 and libwebp take them: 127 on the frame's top row.
      */
     private static short[] getAbove8(short[] plane, int blockX, int blockY, int stride) {
         if (blockY == 0) return null;
         short[] above = new short[8];
-        int aboveRow = blockY - 1;
-        boolean withinMbRow = (blockY % 16) != 0;
-        int rightLimit = withinMbRow ? ((blockX / 16) * 16 + 15) : (stride - 1);
+        int mbRight = (blockX / 16) * 16 + 15;
+        int mbTopRow = (blockY / 16) * 16 - 1;
         for (int i = 0; i < 8; i++) {
-            int x = Math.min(blockX + i, rightLimit);
-            above[i] = plane[aboveRow * stride + x];
+            int x = blockX + i;
+            if (blockY % 16 == 0 || x <= mbRight)
+                above[i] = plane[(blockY - 1) * stride + Math.min(x, stride - 1)];
+            else if (mbTopRow < 0)
+                above[i] = 127;
+            else
+                above[i] = plane[mbTopRow * stride + Math.min(x, stride - 1)];
         }
         return above;
     }
@@ -1659,8 +1703,7 @@ public final class VP8Decoder {
     }
 
     private static short getAboveLeft(short[] plane, int blockX, int blockY, int stride) {
-        if (blockX == 0 || blockY == 0) return 128;
-        return plane[(blockY - 1) * stride + blockX - 1];
+        return IntraPrediction.aboveLeft(plane, stride, blockX, blockY);
     }
 
     /**
