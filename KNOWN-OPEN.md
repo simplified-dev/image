@@ -5,7 +5,7 @@ Defects present in the current tree and not yet fixed, most severe first. Each e
 ## A decoded GIF re-encoded with a transparent slot drops whatever its frames left to the frame beneath
 `GifImageReader` builds every frame with `FrameBlend.SOURCE`, but a GIF frame is always laid over what the previous frame's disposal left, a pixel at the transparent index showing what lies beneath, which is `OVER`. `GifImageWriter` honours the flag and declares a frame `RESTORE_TO_BACKGROUND` whenever the frame after it blends `SOURCE`, so a decoded animation is re-encoded with disposal 2 on every frame. Written with `GifWriteOptions.isTransparent()`, each frame then shows the background wherever it relied on the frame beneath, and a GIF whose later frames are transparent where nothing changed plays only its changes. Two 8x8 frames - opaque red disposed `NONE`, then a 2x2 blue block transparent elsewhere - are written with disposals 0 and 2 and show red at (5, 5) in the second frame; decoded and written again with the same options they declare 2 and 2 and show transparent there. The re-encode kept the composite until the writer honoured the blend. Without a transparent slot every pixel is flattened opaque and nothing shows through. The WebP writer draws a decoded GIF the same way on both its animated paths, the full-frame path writing a `SOURCE` frame "do not blend" and the partial-frame path writing each frame's own pixels, so a decoded GIF animates alike as GIF and as WebP and unlike the file it was read from. Nothing in the workspace decodes a GIF. Building the reader's frames `OVER` re-encodes a decoded GIF with the disposals it was read with, and lets WebP's full-frame path composite it.
 
-- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:107`, `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:555-563` (`writtenDisposal`)
+- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:107`, `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:561-569` (`writtenDisposal`)
 - Severity: **HIGH**
 - Type: **REGRESSION**
 - Status: **OPEN**
@@ -29,7 +29,7 @@ Defects present in the current tree and not yet fixed, most severe first. Each e
 ## GIF writer misreads frames of different sizes and drops frame offsets
 `flattenAllFrames` packs every frame's pixels back to back, but the write loop reads frame i at `i * frameStride`, where `frameStride` is the largest frame's area, so an animation whose frames differ in size is written from the wrong slices and the last one overruns the array: frames of 4x4, 2x2 and 2x2 throw `ArrayIndexOutOfBoundsException: Index 32 out of bounds for length 24`. `configureFrameMetadata` writes only the GraphicControlExtension and never the ImageDescriptor's `imageLeftPosition` / `imageTopPosition`, so every frame is written at the origin. A GIF this library decodes - partial frames at offsets - therefore cannot be re-encoded: it throws, or, where its partial frames happen to share one size, it is written with every frame moved to the top-left corner. HIGH once a caller re-encodes decoded GIFs.
 
-- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:106-129` (`write`, the `frameStride` read), `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:159` (`flattenAllFrames`), `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:566-584` (`configureFrameMetadata`)
+- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:106-129` (`write`, the `frameStride` read), `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:165` (`flattenAllFrames`), `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:572-590` (`configureFrameMetadata`)
 - Severity: **MEDIUM**
 - Type: **BUG**
 - Status: **OPEN**
@@ -85,7 +85,7 @@ When `GifWriteOptions` are supplied, `GifImageWriter` takes the loop count only 
 ## GIF writer floors the flatten of a straight image
 `flattenAllFrames` lays a partly transparent straight pixel over the background as `(c * a + bg * (255 - a)) / 255`, an integer division, so every such pixel lands up to a level low: at worst 0.996 of a level from the exact composite over 455,168 cases (backgrounds 0, 1, 16, 127, 128, 198 and 255, every partial alpha, every straight level), where the premultiplied flatten beside it, rounded once, lands within 0.498. A straight image and its premultiplied twin therefore flatten up to a level apart. Rounding it moves the bytes of every GIF written from a straight image with partial alpha. MEDIUM once a caller holds GIF output to an exact composite.
 
-- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:195-197` (`flattenAllFrames`)
+- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:201-203` (`flattenAllFrames`)
 - Severity: **LOW**
 - Type: **BUG**
 - Status: **OPEN**
@@ -93,7 +93,7 @@ When `GifWriteOptions` are supplied, `GifImageWriter` takes the loop count only 
 ## `Background.composite` lays every image down as premultiplied colour, whatever it holds
 `composite` blits each frame onto the fill with `BlendMode.PREMULTIPLIED`, on the assumption that a finished render's colours already carry their alpha, and premultiplies the fill only under an image declared `PREMULTIPLIED`. A straight image - anything decoded - is therefore laid down with its colour unscaled and comes out too bright wherever it is partly transparent. `getAlphaMode` would let it blend a straight image with `NORMAL`, but every caller in the workspace passes asset-renderer renders, which hold premultiplied colour under the default `STRAIGHT` until that consumer declares them, so honouring the label now would move their bytes. MEDIUM once a caller composites a decoded image.
 
-- Affected: `src/main/java/dev/simplified/image/Background.java:90-105` (`composite`), `src/main/java/dev/simplified/image/Background.java:112-121` (`over`)
+- Affected: `src/main/java/dev/simplified/image/Background.java:90-105` (`composite`), `src/main/java/dev/simplified/image/Background.java:116-125` (`over`)
 - Severity: **LOW**
 - Type: **RISK**
 - Status: **OPEN**

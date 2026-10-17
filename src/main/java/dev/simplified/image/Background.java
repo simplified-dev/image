@@ -108,6 +108,10 @@ public sealed interface Background permits Background.Solid, Background.Checkerb
      * Returns a new buffer the size of {@code rendered} with this background filled underneath -
      * premultiplied when {@code alphaMode} is {@link AlphaMode#PREMULTIPLIED} - and {@code rendered}
      * laid on top with {@link BlendMode#PREMULTIPLIED}.
+     *
+     * @param rendered the finished frame laid over the fill
+     * @param alphaMode the convention {@code rendered} is held in, which the fill is laid down in
+     * @return a new buffer holding {@code rendered} over the fill
      */
     private @NotNull PixelBuffer over(@NotNull PixelBuffer rendered, @NotNull AlphaMode alphaMode) {
         PixelBuffer out = PixelBuffer.create(rendered.width(), rendered.height());

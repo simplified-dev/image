@@ -146,15 +146,21 @@ public class GifImageWriter implements ImageWriter {
 
     /**
      * Composites every frame's ARGB pixels onto a solid background and returns a single
-     * contiguous int array containing all frames in order. Pixels with alpha strictly
-     * below {@code alphaThreshold} become transparent-marker pixels (ARGB {@code 0x00000000});
-     * everything else is blended onto {@code backgroundRgb} and emitted fully opaque
-     * ({@code 0xFF......}).
+     * contiguous int array containing all frames in order. When {@code transparent} is set,
+     * pixels with alpha strictly below {@code alphaThreshold} become transparent-marker pixels
+     * (ARGB {@code 0x00000000}); everything else is blended onto {@code backgroundRgb} and
+     * emitted fully opaque ({@code 0xFF......}).
      * <p>
      * A partly transparent pixel is blended by the convention {@link ImageData#getAlphaMode()}
      * reports: premultiplied colour is laid over the background with
      * {@link BlendMode#PREMULTIPLIED}, rounded once, and straight colour is weighted by its alpha
      * against the background.
+     *
+     * @param data the image whose frames are flattened
+     * @param backgroundRgb the RGB a pixel below full alpha is laid over
+     * @param transparent whether pixels below {@code alphaThreshold} take the transparent slot
+     * @param alphaThreshold the alpha below which {@code transparent} gives a pixel the transparent slot
+     * @return every frame's flattened pixels, back to back in frame order
      */
     private static int @NotNull [] flattenAllFrames(
         @NotNull ImageData data,
