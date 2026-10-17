@@ -12,6 +12,7 @@ import dev.simplified.image.codec.webp.vp8.VP8Encoder;
 import dev.simplified.image.codec.webp.vp8.VP8EncoderSession;
 import dev.simplified.image.codec.webp.vp8l.NearLosslessPreprocess;
 import dev.simplified.image.codec.webp.vp8l.VP8LEncoder;
+import dev.simplified.image.exception.ImageEncodeException;
 import dev.simplified.image.frame.FrameBlend;
 import dev.simplified.image.frame.FrameDisposal;
 import dev.simplified.image.frame.ImageFrame;
@@ -29,6 +30,9 @@ import java.util.concurrent.CompletableFuture;
 /**
  * Writes WebP images (static and animated) using a pure Java implementation
  * of the VP8L lossless and VP8 lossy codecs.
+ * <p>
+ * An animation is written only when each of its frames covers its canvas from the origin; any other
+ * is refused with {@link ImageEncodeException}.
  */
 @ApiStatus.Internal
 public class WebPImageWriter implements ImageWriter {
@@ -138,6 +142,7 @@ public class WebPImageWriter implements ImageWriter {
     ) {
         int animLoopCount = animLoopCount(loopCount);
         ConcurrentList<ImageFrame> frames = data.getFrames();
+        requireCanvasFrames(frames, data.getWidth(), data.getHeight());
         boolean hasAlpha = data.hasAlpha();
         // Per-frame lossy + alpha: emit an ALPH sub-chunk before the VP8 sub-chunk.
         boolean perFrameAlpha = hasAlpha && !lossless;
@@ -287,6 +292,31 @@ public class WebPImageWriter implements ImageWriter {
         }
 
         return RiffContainer.write(chunks);
+    }
+
+    /**
+     * Refuses an animation whose frames do not each cover its canvas from the origin.
+     * <p>
+     * Every frame is encoded as though its pixels spanned the canvas from the origin: frame 0's
+     * {@code ANMF} is declared canvas-sized and each later frame is diffed pixel for pixel against the
+     * one before, so a frame of another size, or one at an offset, cannot be written as it is.
+     *
+     * @param frames the animation's frames
+     * @param canvasWidth the animation's canvas width
+     * @param canvasHeight the animation's canvas height
+     * @throws ImageEncodeException if a frame is not canvas-sized at the origin
+     */
+    private static void requireCanvasFrames(@NotNull ConcurrentList<ImageFrame> frames, int canvasWidth, int canvasHeight) {
+        for (int i = 0; i < frames.size(); i++) {
+            ImageFrame frame = frames.get(i);
+
+            if (frame.offsetX() != 0 || frame.offsetY() != 0 || frame.width() != canvasWidth || frame.height() != canvasHeight) {
+                throw new ImageEncodeException(
+                    "WebP writer takes only frames that cover the canvas from the origin: frame '%d' is '%dx%d' at '(%d, %d)' on a '%dx%d' canvas",
+                    i, frame.width(), frame.height(), frame.offsetX(), frame.offsetY(), canvasWidth, canvasHeight
+                );
+            }
+        }
     }
 
     /**

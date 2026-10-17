@@ -18,12 +18,12 @@ Defects present in the current tree and not yet fixed, most severe first. Each e
 - Type: **BUG**
 - Status: **OPEN**
 
-## WebP writer takes every animation frame as canvas-sized at the origin
-`writeAnimated` declares frame 0's ANMF rectangle as the whole canvas, `getWidth()` by `getHeight()`, over a bitstream of frame 0's own pixels; on the partial-frame path it diffs each later frame against the one before through `FrameDiffUtil.computeBoundingBox`, which refuses two frames of different sizes; and it never reads a frame's `offsetX` / `offsetY`. An animation whose frames are not all canvas-sized at the origin is therefore written wrongly or not at all. Measured on decoded GIFs, lossless and lossy alike: two 4x4 frames on an 8x8 screen, the second at (4, 4), are written as an ANMF declaring 8x8 over a 4x4 bitstream, which this library's WebP reader refuses with `ANMF frame size mismatch: declared 8x8 but decoded 4x4`; a 20x20 frame followed by a 3x3 one at (1, 1) throws `IllegalArgumentException: dimension mismatch: prev=20x20 curr=3x3`. A decoded GIF whose first frame is smaller than its logical screen, or whose later frames are partial, is such an animation; nothing in the workspace re-encodes one as WebP today. HIGH once a caller converts GIFs to WebP.
+## WebP writer refuses an animation whose frames do not cover its canvas from the origin
+`writeAnimated` encodes every frame as though its pixels spanned the canvas from the origin - frame 0's ANMF is declared canvas-sized and each later frame is diffed pixel for pixel against the one before - so `requireCanvasFrames` refuses with `ImageEncodeException` any animation holding a frame of another size or at an offset. A decoded GIF whose first frame is smaller than its logical screen, or whose later frames are partial, is such an animation, and cannot be written as WebP at all: two 4x4 frames on an 8x8 screen, the second at (4, 4), are refused at frame 0, and a 4x4 frame followed by a 2x2 one at (1, 1) at frame 1. An ANMF chunk carries its own offset, at even coordinates, and its own blend and disposal flags, so the container can hold such frames as they are; GIF's `RESTORE_TO_PREVIOUS` disposal has no WebP flag, and a frame disposed so needs the timeline renderer this library lacks. Nothing in the workspace re-encodes a decoded GIF as WebP today. HIGH once a caller converts GIFs to WebP.
 
-- Affected: `src/main/java/dev/simplified/image/codec/webp/WebPImageWriter.java:156-195` (`writeAnimated`), `src/main/java/dev/simplified/image/codec/webp/FrameDiffUtil.java:39` (`computeBoundingBox`)
+- Affected: `src/main/java/dev/simplified/image/codec/webp/WebPImageWriter.java:145` (`writeAnimated`), `:309-320` (`requireCanvasFrames`)
 - Severity: **MEDIUM**
-- Type: **BUG**
+- Type: **GAP**
 - Status: **OPEN**
 
 ## No downscale averages: `blitScaled` decimates
@@ -37,7 +37,7 @@ Defects present in the current tree and not yet fixed, most severe first. Each e
 ## The WebP writer's partial-frame path drops an OVER frame's blend
 When `usePartialFrames` holds - every lossless write, and every lossy write without P-frames - `WebPImageWriter` writes each ANMF chunk as do-not-dispose and do-not-blend over the region that changed. A frame tagged `FrameBlend.OVER` that is transparent where it relies on the frame beneath is therefore written as an overwrite. Measured on an animation whose frame 1 is `OVER`: written as lossless WebP (the default) the relying pixel reads `00000000`, where GIF shows `ffff0000` and lossy WebP with P-frames shows `ffff0005`. A decoded GIF, whose frames read as `OVER`, reaches it when re-encoded as lossless WebP; nothing in the workspace does that today. HIGH once a caller converts GIFs to WebP.
 
-- Affected: `src/main/java/dev/simplified/image/codec/webp/WebPImageWriter.java:164` (`usePartialFrames`), `:281-282`
+- Affected: `src/main/java/dev/simplified/image/codec/webp/WebPImageWriter.java:169` (`usePartialFrames`), `:286-287`
 - Severity: **MEDIUM**
 - Type: **BUG**
 - Status: **OPEN**

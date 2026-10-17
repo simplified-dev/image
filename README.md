@@ -187,7 +187,9 @@ for (ImageFrame frame : animated.getFrames()) {
     // Access per-frame timing, position, disposal, blend mode, and pixel data.
 }
 
-// Re-encode as animated WebP; frames encoded in parallel by default.
+// Re-encode as animated WebP; frames encoded in parallel by default. The writer
+// takes only frames that cover the canvas from the origin and refuses any other,
+// such as a GIF's partial frames.
 ImageFactory.toFile(animated, ImageFormat.WEBP, outputFile,
     WebPWriteOptions.builder().isLossless(false).withQuality(0.9f).build());
 
