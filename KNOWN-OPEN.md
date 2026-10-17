@@ -106,38 +106,6 @@ The `AnimatedImageData` it rebuilds never calls `withWidth` or `withHeight`, so 
 - Type: **BUG**
 - Status: **OPEN**
 
-## Python launchers fall through only on `IOException`
-Every launcher copy moves to the next interpreter candidate only when `ProcessBuilder.start()` throws, so the first candidate that launches wins even if it cannot import `webp`. The suspected trigger is a Windows Store `python3` stub; the only evidence for its behaviour is the code comment at `VP8CodecTest.java:764-773`, which says it can shadow a working install (UNVERIFIED that it launches and then fails).
-
-- Affected: `src/test/java/dev/simplified/image/codec/webp/vp8/VP8CodecTest.java:254-265`, `:764-792`, `:2230-2258`, `src/test/java/dev/simplified/image/codec/webp/WebPRoundTripTest.java:1508-1527`
-- Severity: **LOW**
-- Type: **RISK**
-- Status: **OPEN**
-
-## `VP8EncoderTests.startPython` ignores the `vp8.pythonBin` override
-This launcher tries only `python3`, `python` and `py`, unlike the other copies, which honour `-Dvp8.pythonBin` first. If the first interpreter that starts cannot import `webp` and exits non-zero without printing `NO_WEBP`, the caller fails with `AssertionError("libwebp rejected ...")` instead of skipping.
-
-- Affected: `src/test/java/dev/simplified/image/codec/webp/vp8/VP8CodecTest.java:254-265`
-- Severity: **LOW**
-- Type: **RISK**
-- Status: **OPEN**
-
-## Test file paths are spliced into Python `r'...'` literals
-The oracle scripts build `webp.load_image(r'<path>')` and `open(r'<path>')` by string concatenation, so a path containing `'` breaks the script. `Files.createTempFile` paths keep it harmless today; passing paths as argv removes it.
-
-- Affected: `src/test/java/dev/simplified/image/codec/webp/vp8/VP8CodecTest.java:226`, `:439`, `:727`, `:2141`, `:2146`, `:2177`, `src/test/java/dev/simplified/image/codec/webp/WebPRoundTripTest.java:1160`, `:1220`
-- Severity: **LOW**
-- Type: **RISK**
-- Status: **OPEN**
-
-## Python launcher and PSNR helper are duplicated across test classes
-There are four copies of the interpreter launcher and three of the PSNR loop, which is how the override and fall-through behaviour above drifted apart.
-
-- Affected: `src/test/java/dev/simplified/image/codec/webp/vp8/VP8CodecTest.java:254-265`, `:764-792`, `:2230-2258`, `src/test/java/dev/simplified/image/codec/webp/WebPRoundTripTest.java:1508-1527` (launchers); `VP8CodecTest.java:388` (`computePsnr`), `:680` (`sourcePsnr`), `:2094` (`pixelPsnr`)
-- Severity: **LOW**
-- Type: **GAP**
-- Status: **OPEN**
-
 ## ICO magic collides with a 256-byte ISOBMFF `ftyp` box
 The ICO arm of `ImageFormat.matches` accepts `00 00 01 00`, which is also the big-endian size field of a 256-byte `ftyp` box, and `ImageFactory` lists the ICO reader ahead of any format added later, so `detectFormat` tries ICO before it. No ISOBMFF-based format ships today; MEDIUM once one (AVIF, HEIF) is added after ICO.
 

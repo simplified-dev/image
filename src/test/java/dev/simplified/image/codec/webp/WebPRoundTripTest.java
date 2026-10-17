@@ -7,6 +7,8 @@ import dev.simplified.image.ImageData;
 import dev.simplified.image.ImageFactory;
 import dev.simplified.image.ImageFormat;
 import dev.simplified.image.PixelBuffer;
+import dev.simplified.image.codec.webp.vp8.VP8CodecTest;
+import dev.simplified.image.codec.webp.vp8l.VP8LCodecTest;
 import dev.simplified.image.codec.webp.vp8l.VP8LEncoder;
 import dev.simplified.image.frame.FrameBlend;
 import dev.simplified.image.frame.FrameDisposal;
@@ -16,7 +18,6 @@ import org.jetbrains.annotations.NotNull;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import org.opentest4j.TestAbortedException;
 
 import java.io.File;
 import java.io.IOException;
@@ -29,8 +30,9 @@ import static org.hamcrest.Matchers.is;
 
 /**
  * End-to-end WebP file-I/O round trips through {@link ImageFactory}. Complements
- * {@link WebPCodecTest}, which covers the encoder and decoder directly; this class
- * exercises the full RIFF container wrapping via the public API.
+ * {@link VP8CodecTest} and {@link VP8LCodecTest}, which cover the encoders and decoders
+ * directly; this class exercises the full RIFF container wrapping via the public API,
+ * and checks its output against libwebp through {@link LibwebpOracle}.
  */
 class WebPRoundTripTest {
 
@@ -195,12 +197,7 @@ class WebPRoundTripTest {
         ImageFactory.toFile(image, ImageFormat.WEBP, out,
             WebPWriteOptions.builder().isLossless(false).withQuality(0.9f).build());
 
-        int[] decoded;
-        try {
-            decoded = decodeAlphaWithLibwebp(out, 16, 16);
-        } catch (org.opentest4j.TestAbortedException abort) {
-            throw abort;
-        }
+        int[] decoded = LibwebpOracle.decodeAlpha(out.toPath(), 16, 16);
 
         // Alpha is lossless via VP8L ALPH; libwebp must reconstruct it bit-exact.
         for (int y = 0; y < 16; y++)
@@ -721,7 +718,7 @@ class WebPRoundTripTest {
         // Cross-decoder check: libwebp's WebPAnimDecoder must accept this
         // partial-frame file and return all 5 frames. Aborts when Python / webp
         // is unavailable, after the round-trip above has run.
-        int[][] libwebpFrames = decodeAnimatedAlphaWithLibwebp(out, W, H, 5);
+        int[][] libwebpFrames = LibwebpOracle.decodeAnimatedAlpha(out.toPath(), W, H, 5);
         if (libwebpFrames.length != 5)
             throw new AssertionError("libwebp decoded " + libwebpFrames.length
                 + " frames, expected 5 from our partial-frame animated WebP");
@@ -935,10 +932,9 @@ class WebPRoundTripTest {
         // true by default, or leaks P-frames into the all-keyframes path, would
         // surface here as a libwebp decode failure.
         //
-        // Self-skips when python / webp module unavailable - fine on CI without
-        // libwebp installed. On a dev box with libwebp, set -Dvp8.pythonBin=...
-        // to point at a Python with the webp package when the default python3 on
-        // PATH doesn't have it (common on Windows with Microsoft Store stubs).
+        // Aborts when no Python interpreter imports webp - fine on CI without
+        // libwebp installed. LibwebpOracle says how the interpreter is chosen,
+        // and -Dvp8.pythonBin=... names one to try first.
         int W = 48, H = 48;
         ConcurrentList<ImageFrame> frames = Concurrent.newList();
         for (int f = 0; f < 3; f++) {
@@ -962,9 +958,9 @@ class WebPRoundTripTest {
         ImageFactory.toFile(anim, ImageFormat.WEBP, out,
             WebPWriteOptions.builder().isLossless(false).withQuality(0.75f).build());
 
-        // decodeAnimatedAlphaWithLibwebp throws AssertionError when libwebp rejects
-        // the file, and TestAbortedException when python/webp unavailable.
-        int[][] frameAlpha = decodeAnimatedAlphaWithLibwebp(out, W, H, 3);
+        // decodeAnimatedAlpha fails the test when libwebp rejects the file, and
+        // aborts it when libwebp cannot be consulted.
+        int[][] frameAlpha = LibwebpOracle.decodeAnimatedAlpha(out.toPath(), W, H, 3);
         if (frameAlpha.length != 3)
             throw new AssertionError("libwebp decoded " + frameAlpha.length
                 + " frames, expected 3");
@@ -1098,7 +1094,7 @@ class WebPRoundTripTest {
         ImageFactory.toFile(anim, ImageFormat.WEBP, out,
             WebPWriteOptions.builder().isLossless(false).withQuality(0.9f).build());
 
-        int[][] decoded = decodeAnimatedAlphaWithLibwebp(out, 16, 16, 3);
+        int[][] decoded = LibwebpOracle.decodeAnimatedAlpha(out.toPath(), 16, 16, 3);
 
         for (int f = 0; f < 3; f++) {
             int phase = f * 40;
@@ -1143,143 +1139,6 @@ class WebPRoundTripTest {
                         "uncompressed alpha @ (%d,%d): expected %d got %d",
                         x, y, expectedAlpha, gotAlpha));
             }
-    }
-
-    /**
-     * Decodes the alpha channel of a WebP file via Python's {@code webp} bindings
-     * and returns a {@code width * height} array of alpha values (0..255).
-     */
-    private static int[] decodeAlphaWithLibwebp(File file, int expectedW, int expectedH) throws Exception {
-        String script =
-            "import sys, warnings\n" +
-            "warnings.filterwarnings('ignore')\n" +
-            "try:\n" +
-            "    import webp\n" +
-            "except ImportError:\n" +
-            "    print('NO_WEBP'); sys.exit(2)\n" +
-            "img = webp.load_image(r'" + file.getAbsolutePath() + "').convert('RGBA')\n" +
-            "w, h = img.size\n" +
-            "print(f'DIMS {w} {h}')\n" +
-            "for px in img.getdata():\n" +
-            "    print(f'A {px[3]}')\n";
-
-        Process p = startPythonSubprocess(script);
-        if (p == null)
-            throw new org.opentest4j.TestAbortedException(
-                "No python3/python/py on PATH (set -Dvp8.pythonBin=<path> to override)");
-
-        String stdout = new String(p.getInputStream().readAllBytes());
-        int exit = p.waitFor();
-        if (exit == 2 && stdout.contains("NO_WEBP"))
-            throw new org.opentest4j.TestAbortedException("Python webp package not installed");
-        if (exit != 0)
-            throw new AssertionError("libwebp rejected our WebP file:\n" + stdout);
-
-        String[] lines = stdout.split("\\R");
-        int w = -1, h = -1;
-        int[] alpha = new int[expectedW * expectedH];
-        int alphaIdx = 0;
-        for (String line : lines) {
-            if (line.startsWith("DIMS ")) {
-                String[] dims = line.substring(5).split("\\s+");
-                w = Integer.parseInt(dims[0]);
-                h = Integer.parseInt(dims[1]);
-            } else if (line.startsWith("A ")) {
-                if (alphaIdx < alpha.length)
-                    alpha[alphaIdx++] = Integer.parseInt(line.substring(2));
-            }
-            // Ignore any other lines (Python warnings, etc.)
-        }
-        if (w != expectedW || h != expectedH)
-            throw new AssertionError(
-                "dims " + w + "x" + h + " != expected " + expectedW + "x" + expectedH
-                + "\nfull stdout:\n" + stdout);
-        if (alphaIdx != alpha.length)
-            throw new AssertionError(
-                "expected " + alpha.length + " alpha values, got " + alphaIdx
-                + "\nfull stdout:\n" + stdout);
-        return alpha;
-    }
-
-    /**
-     * Decodes all frames of an animated WebP via libwebp's {@code WebPAnimDecoderNew}
-     * through Python's {@code webp._webp} ffi. Returns {@code alpha[frameIdx][y * w + x]}
-     * as integers in {@code 0..255}. {@code webp.load_image} does not support animated
-     * WebPs, so this uses the low-level animation decoder directly.
-     */
-    private static int[][] decodeAnimatedAlphaWithLibwebp(
-        File file, int expectedW, int expectedH, int expectedFrames
-    ) throws Exception {
-        String script =
-            "import sys, warnings\n" +
-            "warnings.filterwarnings('ignore')\n" +
-            "try:\n" +
-            "    from webp import _webp, ffi\n" +
-            "except ImportError:\n" +
-            "    print('NO_WEBP'); sys.exit(2)\n" +
-            "with open(r'" + file.getAbsolutePath() + "', 'rb') as f: data = f.read()\n" +
-            "options = ffi.new('WebPAnimDecoderOptions*')\n" +
-            "_webp.lib.WebPAnimDecoderOptionsInit(options)\n" +
-            "wd = ffi.new('WebPData*')\n" +
-            "buf = ffi.new('uint8_t[]', data); wd.bytes = buf; wd.size = len(data)\n" +
-            "dec = _webp.lib.WebPAnimDecoderNew(wd, options)\n" +
-            "if dec == ffi.NULL:\n" +
-            "    print('DECODE_FAIL'); sys.exit(3)\n" +
-            "info = ffi.new('WebPAnimInfo*')\n" +
-            "_webp.lib.WebPAnimDecoderGetInfo(dec, info)\n" +
-            "w, h = info.canvas_width, info.canvas_height\n" +
-            "print(f'DIMS {w} {h}')\n" +
-            "print(f'FRAMES {info.frame_count}')\n" +
-            "while _webp.lib.WebPAnimDecoderHasMoreFrames(dec):\n" +
-            "    ptr = ffi.new('uint8_t**'); ts = ffi.new('int*')\n" +
-            "    if _webp.lib.WebPAnimDecoderGetNext(dec, ptr, ts) == 0:\n" +
-            "        print('FRAME_FAIL'); sys.exit(4)\n" +
-            "    pixels = ffi.buffer(ptr[0], w * h * 4)[:]\n" +
-            "    print('FRAME')\n" +
-            "    for i in range(3, len(pixels), 4):\n" +
-            "        print(f'A {pixels[i]}')\n" +
-            "_webp.lib.WebPAnimDecoderDelete(dec)\n";
-
-        Process p = startPythonSubprocess(script);
-        if (p == null)
-            throw new org.opentest4j.TestAbortedException(
-                "No python3/python/py on PATH (set -Dvp8.pythonBin=<path> to override)");
-
-        String stdout = new String(p.getInputStream().readAllBytes());
-        int exit = p.waitFor();
-        if (exit == 2 && stdout.contains("NO_WEBP"))
-            throw new org.opentest4j.TestAbortedException("Python webp package not installed");
-        if (exit != 0)
-            throw new AssertionError("libwebp rejected our animated WebP:\n" + stdout);
-
-        int w = -1, h = -1, frameCount = -1;
-        int[][] frames = new int[expectedFrames][expectedW * expectedH];
-        int frameIdx = -1;
-        int alphaIdx = 0;
-        for (String line : stdout.split("\\R")) {
-            if (line.startsWith("DIMS ")) {
-                String[] dims = line.substring(5).split("\\s+");
-                w = Integer.parseInt(dims[0]);
-                h = Integer.parseInt(dims[1]);
-            } else if (line.startsWith("FRAMES ")) {
-                frameCount = Integer.parseInt(line.substring(7).trim());
-            } else if (line.equals("FRAME")) {
-                frameIdx++;
-                alphaIdx = 0;
-            } else if (line.startsWith("A ") && frameIdx >= 0 && frameIdx < expectedFrames) {
-                if (alphaIdx < frames[frameIdx].length)
-                    frames[frameIdx][alphaIdx++] = Integer.parseInt(line.substring(2));
-            }
-        }
-        if (w != expectedW || h != expectedH)
-            throw new AssertionError(
-                "dims " + w + "x" + h + " != expected " + expectedW + "x" + expectedH
-                + "\nfull stdout:\n" + stdout);
-        if (frameCount != expectedFrames)
-            throw new AssertionError(
-                "frame count " + frameCount + " != expected " + expectedFrames
-                + "\nfull stdout:\n" + stdout);
-        return frames;
     }
 
     @Test
@@ -1425,12 +1284,7 @@ class WebPRoundTripTest {
         ImageFactory.toFile(image, ImageFormat.WEBP, out,
             WebPWriteOptions.builder().isLossless().build());
 
-        int[] decoded;
-        try {
-            decoded = decodeAlphaWithLibwebp(out, W, H);
-        } catch (org.opentest4j.TestAbortedException abort) {
-            throw abort;   // self-skip when python/webp unavailable
-        }
+        int[] decoded = LibwebpOracle.decodeAlpha(out.toPath(), W, H);
         for (int y = 0; y < H; y++)
             for (int x = 0; x < W; x++) {
                 int expectedAlpha = (colors[(x + 3 * y) & 3] >>> 24) & 0xFF;
@@ -1495,35 +1349,6 @@ class WebPRoundTripTest {
             return false;
         }
 
-    }
-
-    /**
-     * Shared Python launcher for the libwebp-interop helpers below. Respects the
-     * {@code vp8.pythonBin} JVM system property and {@code VP8_PYTHON_BIN} env var
-     * when set (useful on Windows where the default {@code python3} on PATH is a
-     * Microsoft Store stub without the {@code webp} package). Falls back to the
-     * standard launchers otherwise. Returns {@code null} when nothing launches -
-     * callers typically throw {@link TestAbortedException}.
-     */
-    private static Process startPythonSubprocess(String script) {
-        String override = System.getProperty("vp8.pythonBin");
-        if (override == null || override.isEmpty())
-            override = System.getenv("VP8_PYTHON_BIN");
-        if (override != null && !override.isEmpty()) {
-            try {
-                ProcessBuilder pb = new ProcessBuilder(override, "-c", script);
-                pb.redirectErrorStream(true);
-                return pb.start();
-            } catch (java.io.IOException ignored) { }
-        }
-        for (String cmd : new String[]{"python3", "python", "py"}) {
-            try {
-                ProcessBuilder pb = new ProcessBuilder(cmd, "-c", script);
-                pb.redirectErrorStream(true);
-                return pb.start();
-            } catch (java.io.IOException ignored) { }
-        }
-        return null;
     }
 
 }

@@ -66,9 +66,8 @@ tasks.jar {
 tasks.test {
     useJUnitPlatform()
     jvmArgs(vectorModuleArgs)
-    // Forward the libwebp-parity harness's Python-interpreter override to the
-    // test JVM so golden-reference tests can locate a Python install with the
-    // `webp` package when the default one on PATH doesn't have it. See
-    // `ConformanceHelper.startPython` for usage.
+    // Forward the libwebp oracle's Python-interpreter override to the test JVM, so
+    // `-Dvp8.pythonBin=<path>` on the Gradle command line names the interpreter
+    // tried first. See `LibwebpOracle` in the test sources for how one is chosen.
     System.getProperty("vp8.pythonBin")?.let { systemProperty("vp8.pythonBin", it) }
 }

@@ -1,6 +1,7 @@
 package dev.simplified.image.codec.webp.vp8;
 
 import dev.simplified.image.PixelBuffer;
+import dev.simplified.image.codec.webp.LibwebpOracle;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -8,17 +9,69 @@ import org.junit.jupiter.api.Test;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
+import java.util.function.IntBinaryOperator;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.is;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
  * Package-private tests for the VP8 (lossy) codec internals: boolean range coder,
  * coefficient token tree, and the full encoder pipeline validated against
- * {@code libwebp} via Python.
+ * {@code libwebp} through {@link LibwebpOracle}.
  */
 public class VP8CodecTest {
+
+    /**
+     * Measures how closely decoded pixels follow their source over the red, green and blue channels.
+     *
+     * @param src the source
+     * @param decoded the decoded {@code ARGB} pixels, row-major at {@code w} per row
+     * @param w the width compared
+     * @param h the height compared
+     * @return the peak signal-to-noise ratio in dB, infinite for an exact match
+     */
+    static double rgbPsnr(PixelBuffer src, int[] decoded, int w, int h) {
+        return rgbPsnr(src, w, h, (x, y) -> decoded[y * w + x]);
+    }
+
+    /**
+     * Measures how closely a decoded buffer follows its source over the red, green and blue channels,
+     * across the source's size.
+     *
+     * @param src the source
+     * @param decoded the decoded buffer
+     * @return the peak signal-to-noise ratio in dB, infinite for an exact match
+     */
+    static double rgbPsnr(PixelBuffer src, PixelBuffer decoded) {
+        return rgbPsnr(src, src.width(), src.height(), decoded::getPixel);
+    }
+
+    /**
+     * Measures the peak signal-to-noise ratio of decoded pixels against a source over a {@code w x h}
+     * area, from the mean squared error of every red, green and blue sample.
+     *
+     * @param src the source
+     * @param w the width compared
+     * @param h the height compared
+     * @param decoded the decoded pixel at {@code (x, y)}
+     * @return the ratio in dB, infinite for an exact match
+     */
+    private static double rgbPsnr(PixelBuffer src, int w, int h, IntBinaryOperator decoded) {
+        long sumSq = 0;
+        int n = 0;
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++) {
+                int s = src.getPixel(x, y);
+                int d = decoded.applyAsInt(x, y);
+                for (int shift : new int[]{0, 8, 16}) {
+                    int diff = ((s >> shift) & 0xFF) - ((d >> shift) & 0xFF);
+                    sumSq += (long) diff * diff;
+                    n++;
+                }
+            }
+        double mse = sumSq / (double) n;
+        return mse == 0 ? Double.POSITIVE_INFINITY : 10.0 * Math.log10(255.0 * 255.0 / mse);
+    }
 
     // ──── BooleanEncoder / BooleanDecoder (VP8 range coder) ────
 
@@ -191,7 +244,7 @@ public class VP8CodecTest {
 
             byte[] riff = wrapInRiff(vp8Payload);
 
-            verifyDecodesInLibwebp(riff, 2, 2, "dc_only_2x2");
+            LibwebpOracle.decodeArgb(riff, 2, 2);
         }
 
         @Test @DisplayName("16x16 DC-only VP8 decodes in libwebp")
@@ -204,64 +257,7 @@ public class VP8CodecTest {
 
             byte[] riff = wrapInRiff(vp8Payload);
 
-            verifyDecodesInLibwebp(riff, 16, 16, "dc_only_16x16");
-        }
-
-        /**
-         * Writes {@code riff} to a temp file, shells out to libwebp via Python, and
-         * asserts the returned dimensions match.
-         */
-        private static void verifyDecodesInLibwebp(byte[] riff, int expectedW, int expectedH, String tag)
-            throws Exception {
-            java.nio.file.Path tmp = java.nio.file.Files.createTempFile("vp8-" + tag + "-", ".webp");
-            try {
-                java.nio.file.Files.write(tmp, riff);
-
-                String script =
-                    "import sys\n" +
-                    "try:\n" +
-                    "    import webp\n" +
-                    "except ImportError:\n" +
-                    "    print('NO_WEBP'); sys.exit(2)\n" +
-                    "img = webp.load_image(r'" + tmp.toAbsolutePath() + "')\n" +
-                    "print(img.size[0], img.size[1])\n";
-
-                Process p = startPython(script);
-                if (p == null)
-                    throw new org.opentest4j.TestAbortedException(
-                        "No python3/python/py executable found on PATH - cannot validate via libwebp");
-                String out = new String(p.getInputStream().readAllBytes()).trim();
-                int exit = p.waitFor();
-
-                if (exit == 2 && out.contains("NO_WEBP"))
-                    throw new org.opentest4j.TestAbortedException("Python webp package not installed");
-                if (exit != 0)
-                    throw new AssertionError("libwebp rejected our VP8 bitstream:\n" + out);
-
-                String[] parts = out.split("\\s+");
-                assertThat("dimensions reported by libwebp", parts.length >= 2, is(true));
-                assertThat("width  (libwebp)", Integer.parseInt(parts[0]), is(expectedW));
-                assertThat("height (libwebp)", Integer.parseInt(parts[1]), is(expectedH));
-            } finally {
-                java.nio.file.Files.deleteIfExists(tmp);
-            }
-        }
-
-        /**
-         * Attempts {@code python3}, {@code python}, and {@code py} in turn so the test
-         * works across Linux, macOS, and Windows shells.
-         */
-        private static Process startPython(String script) {
-            for (String cmd : new String[]{"python3", "python", "py"}) {
-                try {
-                    ProcessBuilder pb = new ProcessBuilder(cmd, "-c", script);
-                    pb.redirectErrorStream(true);
-                    return pb.start();
-                } catch (java.io.IOException ignored) {
-                    // Try next candidate.
-                }
-            }
-            return null;
+            LibwebpOracle.decodeArgb(riff, 16, 16);
         }
 
         @Test @DisplayName("QI=0 solid gray reconstructs losslessly through libwebp")
@@ -289,8 +285,8 @@ public class VP8CodecTest {
             byte[] vp8Payload = VP8Encoder.encode(buf, 1.0f);
             byte[] riff = wrapInRiff(vp8Payload);
 
-            int[] decoded = decodeWithLibwebp(riff, 16, 32);
-            double psnr = computePsnr(buf, decoded, 16, 32);
+            int[] decoded = LibwebpOracle.decodeArgb(riff, 16, 32);
+            double psnr = rgbPsnr(buf, decoded, 16, 32);
             if (psnr < 32.0)
                 throw new AssertionError(String.format(
                     "vertical stripes PSNR = %.2f dB (expected >= 32 dB with V_PRED picked)", psnr));
@@ -323,8 +319,8 @@ public class VP8CodecTest {
             byte[] vp8 = VP8Encoder.encode(buf, 0.9f);
             byte[] riff = wrapInRiff(vp8);
 
-            int[] decoded = decodeWithLibwebp(riff, 32, 48);
-            double psnr = computePsnr(buf, decoded, 32, 48);
+            int[] decoded = LibwebpOracle.decodeArgb(riff, 32, 48);
+            double psnr = rgbPsnr(buf, decoded, 32, 48);
             if (psnr < 28.0)
                 throw new AssertionError(String.format(
                     "filter-on PSNR = %.2f dB (expected >= 28 dB at q=0.9)", psnr));
@@ -359,8 +355,8 @@ public class VP8CodecTest {
             byte[] vp8 = VP8Encoder.encode(buf, 1.0f);
             byte[] riff = wrapInRiff(vp8);
 
-            int[] decoded = decodeWithLibwebp(riff, 16, 16);
-            double psnr = computePsnr(buf, decoded, 16, 16);
+            int[] decoded = LibwebpOracle.decodeArgb(riff, 16, 16);
+            double psnr = rgbPsnr(buf, decoded, 16, 16);
             // Sharp bars are hard at QI=0 with our simple SSE-based B_PRED picker; 20 dB
             // confirms libwebp parses the B_PRED bitstream without rejecting it.
             if (psnr < 20.0)
@@ -378,28 +374,11 @@ public class VP8CodecTest {
             byte[] vp8Payload = VP8Encoder.encode(buf, 1.0f);
             byte[] riff = wrapInRiff(vp8Payload);
 
-            int[] decoded = decodeWithLibwebp(riff, 16, 16);
-            double psnr = computePsnr(buf, decoded, 16, 16);
+            int[] decoded = LibwebpOracle.decodeArgb(riff, 16, 16);
+            double psnr = rgbPsnr(buf, decoded, 16, 16);
             if (psnr < 30.0)
                 throw new AssertionError(String.format(
                     "gradient PSNR = %.2f dB (expected >= 30 dB at quality 1.0)", psnr));
-        }
-
-        private static double computePsnr(PixelBuffer src, int[] decoded, int w, int h) {
-            long sumSq = 0;
-            int n = 0;
-            for (int y = 0; y < h; y++)
-                for (int x = 0; x < w; x++) {
-                    int s = src.getPixel(x, y);
-                    int d = decoded[y * w + x];
-                    for (int shift : new int[]{0, 8, 16}) {
-                        int diff = ((s >> shift) & 0xFF) - ((d >> shift) & 0xFF);
-                        sumSq += (long) diff * diff;
-                        n++;
-                    }
-                }
-            double mse = sumSq / (double) n;
-            return mse == 0 ? Double.POSITIVE_INFINITY : 10.0 * Math.log10(255.0 * 255.0 / mse);
         }
 
         private static void assertLibwebpDecodesPixel(
@@ -408,7 +387,7 @@ public class VP8CodecTest {
             byte[] vp8Payload = VP8Encoder.encode(src, quality);
             byte[] riff = wrapInRiff(vp8Payload);
 
-            int[] decoded = decodeWithLibwebp(riff, src.width(), src.height());
+            int[] decoded = LibwebpOracle.decodeArgb(riff, src.width(), src.height());
             int centerX = src.width() / 2;
             int centerY = src.height() / 2;
             int p = decoded[centerY * src.width() + centerX];
@@ -419,57 +398,6 @@ public class VP8CodecTest {
                 throw new AssertionError(String.format(
                     "center pixel mismatch: expected (%d,%d,%d) got (%d,%d,%d), tolerance=%d",
                     expectR, expectG, expectB, (p >> 16) & 0xFF, (p >> 8) & 0xFF, p & 0xFF, tolerance));
-        }
-
-        /**
-         * Writes {@code riff} to a temp file, shells out to libwebp, and returns the decoded ARGB buffer.
-         */
-        private static int[] decodeWithLibwebp(byte[] riff, int expectedW, int expectedH)
-            throws Exception {
-            java.nio.file.Path tmp = java.nio.file.Files.createTempFile("vp8-px-", ".webp");
-            try {
-                java.nio.file.Files.write(tmp, riff);
-
-                String script =
-                    "import sys\n" +
-                    "try:\n" +
-                    "    import webp\n" +
-                    "except ImportError:\n" +
-                    "    print('NO_WEBP'); sys.exit(2)\n" +
-                    "img = webp.load_image(r'" + tmp.toAbsolutePath() + "').convert('RGBA')\n" +
-                    "w, h = img.size\n" +
-                    "print(w, h)\n" +
-                    "data = img.tobytes()\n" +
-                    "for i in range(0, len(data), 4):\n" +
-                    "    r, g, b, a = data[i], data[i+1], data[i+2], data[i+3]\n" +
-                    "    print(f'{a:02x}{r:02x}{g:02x}{b:02x}')\n";
-
-                Process p = startPython(script);
-                if (p == null)
-                    throw new org.opentest4j.TestAbortedException(
-                        "No python3/python/py executable found on PATH");
-                String out = new String(p.getInputStream().readAllBytes());
-                int exit = p.waitFor();
-                if (exit == 2 && out.contains("NO_WEBP"))
-                    throw new org.opentest4j.TestAbortedException("Python webp package not installed");
-                if (exit != 0)
-                    throw new AssertionError("libwebp rejected our VP8 bitstream:\n" + out);
-
-                String[] lines = out.trim().split("\\R");
-                String[] dims = lines[0].split("\\s+");
-                int w = Integer.parseInt(dims[0]);
-                int h = Integer.parseInt(dims[1]);
-                if (w != expectedW || h != expectedH)
-                    throw new AssertionError(
-                        "decoded dims " + w + "x" + h + " != expected " + expectedW + "x" + expectedH);
-
-                int[] pixels = new int[w * h];
-                for (int i = 0; i < w * h; i++)
-                    pixels[i] = (int) Long.parseLong(lines[i + 1], 16);
-                return pixels;
-            } finally {
-                java.nio.file.Files.deleteIfExists(tmp);
-            }
         }
 
         // ──── Sub-block motion search (Task 11 phase 2) ────
@@ -632,7 +560,7 @@ public class VP8CodecTest {
             byte[] vp8 = VP8Encoder.encode(buf, 1.0f);
             PixelBuffer decoded = VP8Decoder.decode(vp8);
 
-            double psnr = sourcePsnr(buf, decoded);
+            double psnr = rgbPsnr(buf, decoded);
             if (psnr < 30.0)
                 throw new AssertionError(String.format(
                     "self-roundtrip 16x16 gradient PSNR = %.2f dB (expected >= 30 dB)", psnr));
@@ -651,7 +579,7 @@ public class VP8CodecTest {
             byte[] vp8 = VP8Encoder.encode(buf, 0.9f);
             PixelBuffer decoded = VP8Decoder.decode(vp8);
 
-            double psnr = sourcePsnr(buf, decoded);
+            double psnr = rgbPsnr(buf, decoded);
             if (psnr < 28.0)
                 throw new AssertionError(String.format(
                     "self-roundtrip 32x48 PSNR = %.2f dB (expected >= 28 dB)", psnr));
@@ -664,131 +592,16 @@ public class VP8CodecTest {
                 for (int x = 0; x < 32; x++)
                     src.setPixel(x, y, 0xFF000000 | ((x * 8) << 16) | ((y * 8) << 8));
 
-            byte[] vp8 = encodeWithLibwebp(src, 100);
-            assumeTrue(vp8 != null, "Python webp package unavailable - libwebp cannot encode the source");
+            byte[] vp8 = LibwebpOracle.encodeLossy(src, 100);
 
             PixelBuffer decoded = VP8Decoder.decode(vp8);
-            double psnr = sourcePsnr(src, decoded);
+            double psnr = rgbPsnr(src, decoded);
             // Normal-filter support + fancy bilinear chroma upsampling landed in commit
             // 6449249, raising this from the old 20 dB smoke-test threshold to a real
             // parity check. Measured ~31.8 dB locally; 28 dB leaves ~3.5 dB of margin.
             if (psnr < 28.0)
                 throw new AssertionError(String.format(
                     "PSNR decoding libwebp q=100 gradient = %.2f dB (expected >= 28 dB)", psnr));
-        }
-
-        private static double sourcePsnr(PixelBuffer src, PixelBuffer decoded) {
-            long sumSq = 0;
-            int n = 0;
-            int w = src.width(), h = src.height();
-            for (int y = 0; y < h; y++)
-                for (int x = 0; x < w; x++) {
-                    int s = src.getPixel(x, y);
-                    int d = decoded.getPixel(x, y);
-                    for (int shift : new int[]{0, 8, 16}) {
-                        int diff = ((s >> shift) & 0xFF) - ((d >> shift) & 0xFF);
-                        sumSq += (long) diff * diff;
-                        n++;
-                    }
-                }
-            double mse = sumSq / (double) n;
-            return mse == 0 ? Double.POSITIVE_INFINITY : 10.0 * Math.log10(255.0 * 255.0 / mse);
-        }
-
-        /**
-         * Encodes {@code src} via Python's {@code webp} bindings at the given quality
-         * (0..100, higher = better) and returns the bare VP8 payload (strips the RIFF
-         * and VP8 chunk headers).
-         *
-         * @return the VP8 payload, or {@code null} if Python/webp is unavailable
-         */
-        private static byte[] encodeWithLibwebp(PixelBuffer src, int quality) throws Exception {
-            java.nio.file.Path out = java.nio.file.Files.createTempFile("libwebp-enc-", ".webp");
-            try {
-                StringBuilder pixels = new StringBuilder();
-                for (int y = 0; y < src.height(); y++) {
-                    for (int x = 0; x < src.width(); x++) {
-                        int p = src.getPixel(x, y);
-                        pixels.append(String.format("%d,%d,%d,%d,",
-                            (p >> 16) & 0xFF, (p >> 8) & 0xFF, p & 0xFF, (p >>> 24) & 0xFF));
-                    }
-                }
-                String script =
-                    "import sys\n" +
-                    "try:\n" +
-                    "    import webp, numpy as np\n" +
-                    "except ImportError:\n" +
-                    "    print('NO_WEBP'); sys.exit(2)\n" +
-                    "raw = bytes([" + pixels.substring(0, pixels.length() - 1) + "])\n" +
-                    "arr = np.frombuffer(raw, dtype=np.uint8).reshape(" + src.height() + ", " + src.width() + ", 4)\n" +
-                    "pic = webp.WebPPicture.from_numpy(arr, pilmode='RGBA')\n" +
-                    "cfg = webp.WebPConfig.new(quality=" + quality + ")\n" +
-                    "data = pic.encode(cfg).buffer()\n" +
-                    "with open(r'" + out.toAbsolutePath() + "', 'wb') as f: f.write(bytes(data))\n";
-                Process p = startPython(script);
-                if (p == null) return null;
-                int exit = p.waitFor();
-                String stdout = new String(p.getInputStream().readAllBytes());
-                if (exit == 2 && stdout.contains("NO_WEBP")) return null;
-                if (exit != 0) throw new AssertionError("libwebp encode failed:\n" + stdout);
-
-                byte[] riff = java.nio.file.Files.readAllBytes(out);
-                return extractVp8Payload(riff);
-            } finally {
-                java.nio.file.Files.deleteIfExists(out);
-            }
-        }
-
-        /**
-         * Strips RIFF/WEBP/VP8 chunk headers and returns the bare VP8 payload.
-         */
-        private static byte[] extractVp8Payload(byte[] riff) {
-            // RIFF header: 4 + 4 + 4 = 12 bytes (magic + size + "WEBP").
-            int offset = 12;
-            while (offset + 8 <= riff.length) {
-                String tag = new String(riff, offset, 4);
-                int size = (riff[offset + 4] & 0xFF)
-                    | ((riff[offset + 5] & 0xFF) << 8)
-                    | ((riff[offset + 6] & 0xFF) << 16)
-                    | ((riff[offset + 7] & 0xFF) << 24);
-                if (tag.equals("VP8 ")) {
-                    byte[] payload = new byte[size];
-                    System.arraycopy(riff, offset + 8, payload, 0, size);
-                    return payload;
-                }
-                offset += 8 + size + (size & 1);   // chunks are padded to even length
-            }
-            throw new AssertionError("no VP8 chunk found in RIFF");
-        }
-
-        private static Process startPython(String script) {
-            // Environments where the default python3 on PATH doesn't have the
-            // {@code webp} package (e.g. Windows with the Microsoft Store stub
-            // shadowing a working install) can point at a specific interpreter
-            // via the {@code vp8.pythonBin} JVM system property or the
-            // {@code VP8_PYTHON_BIN} env var. Gradle's test fork only forwards
-            // system properties by default, so the property path is preferred;
-            // the env var is a convenience for ad-hoc runs. Falls back to the
-            // usual launchers otherwise. Tests still self-skip when none of
-            // the attempts can {@code import webp}.
-            String override = System.getProperty("vp8.pythonBin");
-            if (override == null || override.isEmpty())
-                override = System.getenv("VP8_PYTHON_BIN");
-            if (override != null && !override.isEmpty()) {
-                try {
-                    ProcessBuilder pb = new ProcessBuilder(override, "-c", script);
-                    pb.redirectErrorStream(true);
-                    return pb.start();
-                } catch (java.io.IOException ignored) { }
-            }
-            for (String cmd : new String[]{"python3", "python", "py"}) {
-                try {
-                    ProcessBuilder pb = new ProcessBuilder(cmd, "-c", script);
-                    pb.redirectErrorStream(true);
-                    return pb.start();
-                } catch (java.io.IOException ignored) { }
-            }
-            return null;
         }
 
     }
@@ -829,10 +642,9 @@ public class VP8CodecTest {
             byte[] vp8 = VP8Encoder.encode(src, 0.9f);
             byte[] riff = wrapInRiff(vp8);
 
-            int[] decoded = ConformanceHelper.decodeWithLibwebp(riff, 32, 32);
-            assumeTrue(decoded != null, "Python webp package unavailable - libwebp cannot decode our stream");
+            int[] decoded = LibwebpOracle.decodeArgb(riff, 32, 32);
 
-            double psnr = ConformanceHelper.pixelPsnr(src, decoded, 32, 32);
+            double psnr = rgbPsnr(src, decoded, 32, 32);
             if (psnr < 30.0)
                 throw new AssertionError(String.format(
                     "libwebp decode of normal-filter output: PSNR = %.2f dB (expected >= 30 dB)",
@@ -846,19 +658,17 @@ public class VP8CodecTest {
                 for (int x = 0; x < 32; x++)
                     src.setPixel(x, y, 0xFF000000 | ((x * 8) << 16) | ((y * 8) << 8));
 
-            byte[] vp8 = ConformanceHelper.encodeWithLibwebp(src, 60);
-            assumeTrue(vp8 != null, "Python webp package unavailable - libwebp cannot encode the source");
+            byte[] vp8 = LibwebpOracle.encodeLossy(src, 60);
 
             PixelBuffer ours = VP8Decoder.decode(vp8);
 
             byte[] riff = wrapInRiff(vp8);
-            int[] libwebp = ConformanceHelper.decodeWithLibwebp(riff, 32, 32);
-            assumeTrue(libwebp != null, "Python webp package unavailable - libwebp cannot decode its own stream");
+            int[] libwebp = LibwebpOracle.decodeArgb(riff, 32, 32);
 
-            // libwebp uses "fancy" bilinear chroma upsampling; we use nearest. That alone
-            // costs a few dB. If ref_lf_delta / mode_lf_delta parsing were broken, filter
-            // application would diverge at MB edges and PSNR would collapse below 25 dB.
-            double psnr = ConformanceHelper.pixelPsnr(ours, libwebp, 32, 32);
+            // Both decoders upsample chroma with libwebp's fancy bilinear filter. If
+            // ref_lf_delta / mode_lf_delta parsing were broken, filter application would
+            // diverge at MB edges and PSNR would collapse below 25 dB.
+            double psnr = rgbPsnr(ours, libwebp, 32, 32);
             if (psnr < 30.0)
                 throw new AssertionError(String.format(
                     "ours-vs-libwebp decode parity PSNR = %.2f dB (expected >= 30 dB)", psnr));
@@ -947,7 +757,7 @@ public class VP8CodecTest {
             // At q=1.0 the reconstruction should stay close to the source. Sharp edges
             // still cost some PSNR due to chroma subsampling + 4x4 block structure, but
             // anything below ~20 dB means the B_PRED-in-P wire format is broken.
-            double psnr = ConformanceHelper.pixelPsnr(bars, toArray(d1), 32, 32);
+            double psnr = rgbPsnr(bars, toArray(d1), 32, 32);
             if (psnr < 20.0)
                 throw new AssertionError(String.format(
                     "B_PRED-in-P self-roundtrip PSNR = %.2f dB (expected >= 20 dB)", psnr));
@@ -2066,8 +1876,6 @@ public class VP8CodecTest {
 
             // Part 2: libwebp-gated comparison.
             GoldenReferenceHelper.Result result = GoldenReferenceHelper.compare(src, 75);
-            assumeTrue(result.libwebp() != null,
-                "Python webp package unavailable - our side checked (" + expectedMbs + " MBs, all intra), libwebp's not");
             System.err.println("[golden-reference smoke] " + GoldenReferenceHelper.formatDiff(result.diff()));
             // No tight assertion on the diff - the whole point of this harness is
             // that future sessions use the measured agreement as the tuning signal.
@@ -2075,186 +1883,6 @@ public class VP8CodecTest {
             var d = result.diff();
             if (d.agreeIntra() + d.agreeInter() + d.disagreeType() != d.totalMbs())
                 throw new AssertionError("diff counts inconsistent: agreeIntra+agreeInter+disagreeType != totalMbs");
-        }
-
-    }
-
-    /**
-     * Shared utilities for the conformance tests - libwebp encode / decode via Python
-     * plus a bit-surgical patch that inserts {@code use_lf_delta=1} + a single
-     * {@code ref_lf_delta[INTRA]} override into an already-encoded stream.
-     */
-    private static final class ConformanceHelper {
-
-        private ConformanceHelper() { }
-
-        /**
-         * PSNR in dB between an RGB {@link PixelBuffer} and a decoded ARGB pixel array of the same dims.
-         */
-        static double pixelPsnr(PixelBuffer src, int[] decoded, int w, int h) {
-            long sumSq = 0;
-            int n = 0;
-            for (int y = 0; y < h; y++)
-                for (int x = 0; x < w; x++) {
-                    int s = src.getPixel(x, y);
-                    int d = decoded[y * w + x];
-                    for (int shift : new int[]{0, 8, 16}) {
-                        int diff = ((s >> shift) & 0xFF) - ((d >> shift) & 0xFF);
-                        sumSq += (long) diff * diff;
-                        n++;
-                    }
-                }
-            double mse = sumSq / (double) n;
-            return mse == 0 ? Double.POSITIVE_INFINITY : 10.0 * Math.log10(255.0 * 255.0 / mse);
-        }
-
-        /**
-         * Shells out to Python's {@code webp} package to encode {@code src} at the given
-         * quality and returns the bare VP8 payload. Returns {@code null} when Python or
-         * the {@code webp} module is unavailable (so the test can self-skip).
-         */
-        static byte[] encodeWithLibwebp(PixelBuffer src, int quality) throws Exception {
-            java.nio.file.Path out = java.nio.file.Files.createTempFile("libwebp-enc-", ".webp");
-            // Pixel data goes through a temp binary file rather than inlining into
-            // the Python script, so sources larger than ~8k pixels don't hit the
-            // Windows 32KB command-line length limit.
-            java.nio.file.Path rawIn = java.nio.file.Files.createTempFile("libwebp-enc-raw-", ".bin");
-            try {
-                byte[] raw = new byte[src.width() * src.height() * 4];
-                int idx = 0;
-                for (int y = 0; y < src.height(); y++) {
-                    for (int x = 0; x < src.width(); x++) {
-                        int p = src.getPixel(x, y);
-                        raw[idx++] = (byte) ((p >> 16) & 0xFF);
-                        raw[idx++] = (byte) ((p >> 8) & 0xFF);
-                        raw[idx++] = (byte) (p & 0xFF);
-                        raw[idx++] = (byte) ((p >>> 24) & 0xFF);
-                    }
-                }
-                java.nio.file.Files.write(rawIn, raw);
-                String script =
-                    "import sys\n" +
-                    "try:\n" +
-                    "    import webp, numpy as np\n" +
-                    "except ImportError:\n" +
-                    "    print('NO_WEBP'); sys.exit(2)\n" +
-                    "with open(r'" + rawIn.toAbsolutePath() + "', 'rb') as f: raw = f.read()\n" +
-                    "arr = np.frombuffer(raw, dtype=np.uint8).reshape(" + src.height() + ", " + src.width() + ", 4)\n" +
-                    "pic = webp.WebPPicture.from_numpy(arr, pilmode='RGBA')\n" +
-                    "cfg = webp.WebPConfig.new(quality=" + quality + ")\n" +
-                    "data = pic.encode(cfg).buffer()\n" +
-                    "with open(r'" + out.toAbsolutePath() + "', 'wb') as f: f.write(bytes(data))\n";
-                Process p = startPython(script);
-                if (p == null) return null;
-                int exit = p.waitFor();
-                String stdout = new String(p.getInputStream().readAllBytes());
-                if (exit == 2 && stdout.contains("NO_WEBP")) return null;
-                if (exit != 0) throw new AssertionError("libwebp encode failed:\n" + stdout);
-
-                byte[] riff = java.nio.file.Files.readAllBytes(out);
-                return extractVp8Payload(riff);
-            } finally {
-                java.nio.file.Files.deleteIfExists(out);
-                java.nio.file.Files.deleteIfExists(rawIn);
-            }
-        }
-
-        /**
-         * Shells out to libwebp to decode a RIFF-wrapped WebP. Returns {@code null} when
-         * Python or the {@code webp} module is unavailable.
-         */
-        static int[] decodeWithLibwebp(byte[] riff, int expectedW, int expectedH) throws Exception {
-            java.nio.file.Path tmp = java.nio.file.Files.createTempFile("vp8-conf-", ".webp");
-            try {
-                java.nio.file.Files.write(tmp, riff);
-
-                String script =
-                    "import sys\n" +
-                    "try:\n" +
-                    "    import webp\n" +
-                    "except ImportError:\n" +
-                    "    print('NO_WEBP'); sys.exit(2)\n" +
-                    "img = webp.load_image(r'" + tmp.toAbsolutePath() + "').convert('RGBA')\n" +
-                    "w, h = img.size\n" +
-                    "print(w, h)\n" +
-                    "data = img.tobytes()\n" +
-                    "for i in range(0, len(data), 4):\n" +
-                    "    r, g, b, a = data[i], data[i+1], data[i+2], data[i+3]\n" +
-                    "    print(f'{a:02x}{r:02x}{g:02x}{b:02x}')\n";
-
-                Process p = startPython(script);
-                if (p == null) return null;
-                String out = new String(p.getInputStream().readAllBytes());
-                int exit = p.waitFor();
-                if (exit == 2 && out.contains("NO_WEBP")) return null;
-                if (exit != 0) throw new AssertionError("libwebp rejected VP8 stream:\n" + out);
-
-                String[] lines = out.trim().split("\\R");
-                String[] dims = lines[0].split("\\s+");
-                int w = Integer.parseInt(dims[0]);
-                int h = Integer.parseInt(dims[1]);
-                if (w != expectedW || h != expectedH)
-                    throw new AssertionError("decoded dims " + w + "x" + h
-                        + " != expected " + expectedW + "x" + expectedH);
-
-                int[] pixels = new int[w * h];
-                for (int i = 0; i < w * h; i++)
-                    pixels[i] = (int) Long.parseLong(lines[i + 1], 16);
-                return pixels;
-            } finally {
-                java.nio.file.Files.deleteIfExists(tmp);
-            }
-        }
-
-        /**
-         * Strips RIFF container headers, returns the bare VP8 payload.
-         */
-        private static byte[] extractVp8Payload(byte[] riff) {
-            int offset = 12;
-            while (offset + 8 <= riff.length) {
-                String tag = new String(riff, offset, 4);
-                int size = (riff[offset + 4] & 0xFF)
-                    | ((riff[offset + 5] & 0xFF) << 8)
-                    | ((riff[offset + 6] & 0xFF) << 16)
-                    | ((riff[offset + 7] & 0xFF) << 24);
-                if (tag.equals("VP8 ")) {
-                    byte[] payload = new byte[size];
-                    System.arraycopy(riff, offset + 8, payload, 0, size);
-                    return payload;
-                }
-                offset += 8 + size + (size & 1);
-            }
-            throw new AssertionError("no VP8 chunk found in RIFF");
-        }
-
-        private static Process startPython(String script) {
-            // Environments where the default python3 on PATH doesn't have the
-            // {@code webp} package (e.g. Windows with the Microsoft Store stub
-            // shadowing a working install) can point at a specific interpreter
-            // via the {@code vp8.pythonBin} JVM system property or the
-            // {@code VP8_PYTHON_BIN} env var. Gradle's test fork only forwards
-            // system properties by default, so the property path is preferred;
-            // the env var is a convenience for ad-hoc runs. Falls back to the
-            // usual launchers otherwise. Tests still self-skip when none of
-            // the attempts can {@code import webp}.
-            String override = System.getProperty("vp8.pythonBin");
-            if (override == null || override.isEmpty())
-                override = System.getenv("VP8_PYTHON_BIN");
-            if (override != null && !override.isEmpty()) {
-                try {
-                    ProcessBuilder pb = new ProcessBuilder(override, "-c", script);
-                    pb.redirectErrorStream(true);
-                    return pb.start();
-                } catch (java.io.IOException ignored) { }
-            }
-            for (String cmd : new String[]{"python3", "python", "py"}) {
-                try {
-                    ProcessBuilder pb = new ProcessBuilder(cmd, "-c", script);
-                    pb.redirectErrorStream(true);
-                    return pb.start();
-                } catch (java.io.IOException ignored) { }
-            }
-            return null;
         }
 
     }
@@ -2297,22 +1925,19 @@ public class VP8CodecTest {
 
         /**
          * Combined result of encoding {@code src} with both encoders and decoding
-         * back through our decoder. {@code null} fields indicate libwebp was
-         * unavailable (Python missing or {@code webp} module not installed).
+         * back through our decoder.
          */
         record Result(
             @org.jetbrains.annotations.NotNull VP8Decoder.FrameMetadata ours,
-            @org.jetbrains.annotations.Nullable VP8Decoder.FrameMetadata libwebp,
-            @org.jetbrains.annotations.Nullable ModeDecisionDiff diff
+            @org.jetbrains.annotations.NotNull VP8Decoder.FrameMetadata libwebp,
+            @org.jetbrains.annotations.NotNull ModeDecisionDiff diff
         ) { }
 
         /**
          * Encodes {@code src} through our encoder and libwebp, decodes both via
-         * {@link VP8Decoder#decodeWithMetadata}, and builds a per-MB diff.
-         * Returns a Result whose libwebp fields are {@code null} when libwebp
-         * tooling is unavailable - callers should self-skip in that case. The
-         * ours-only path still runs so callers can at least inspect our own
-         * encoder's choices.
+         * {@link VP8Decoder#decodeWithMetadata}, and builds a per-MB diff. Aborts
+         * the calling test, after encoding and decoding our side, when libwebp
+         * cannot be consulted.
          *
          * @param src source pixels (tests typically use small natural-ish images)
          * @param quality integer quality in {@code [0, 100]} to match libwebp's
@@ -2323,13 +1948,7 @@ public class VP8CodecTest {
             byte[] oursVp8 = VP8Encoder.encode(src, quality / 100.0f);
             VP8Decoder.DecodedFrame ours = VP8Decoder.decodeWithMetadata(oursVp8);
 
-            byte[] theirsVp8 = ConformanceHelper.encodeWithLibwebp(src, quality);
-            if (theirsVp8 == null) {
-                // libwebp unavailable; return our side only so callers can still
-                // inspect their own output. diff is null because there's nothing
-                // to diff against.
-                return new Result(ours.metadata(), null, null);
-            }
+            byte[] theirsVp8 = LibwebpOracle.encodeLossy(src, quality);
 
             // A libwebp stream our decoder cannot parse is a decoder bug, so it throws
             // rather than reading as an absent oracle.
