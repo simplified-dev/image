@@ -58,6 +58,22 @@ Line 20 says the encoder is keyframe-only 16x16 intra with no B_PRED and no inte
 - Type: **GAP**
 - Status: **OPEN**
 
+## ImageIO's GIF reader decodes interlaced frames shorter than 8 rows wrongly
+`GifImageWriter` writes every frame interlaced, because it takes ImageIO's default image metadata, whose `interlaceFlag` is TRUE. The JDK GIF reader that `GifImageReader` decodes through reads such a frame wrongly when it is shorter than 8 rows. Measured on still GIFs of alternating red and blue rows: a 2x2 frame decodes 2 pixels wrong, 3x3 6, 4x2 4 and 4x4 8; 8x8 and 16x16 decode exactly. A hand LZW decode and Pillow read the same files correctly, so the files are sound, and a short GIF this library writes does not round-trip through its own reader. Writing non-interlaced avoids it and moves every GIF's bytes. HIGH once a caller round-trips frames under 8 rows.
+
+- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:115`, `:134` (`getDefaultImageMetadata`), `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:64` (`reader.read`)
+- Severity: **MEDIUM**
+- Type: **BUG**
+- Status: **OPEN**
+
+## The WebP writer's partial-frame path drops an OVER frame's blend
+When `usePartialFrames` holds - every lossless write, and every lossy write without P-frames - `WebPImageWriter` writes each ANMF chunk as do-not-dispose and do-not-blend over the region that changed. A frame tagged `FrameBlend.OVER` that is transparent where it relies on the frame beneath is therefore written as an overwrite. Measured on an animation whose frame 1 is `OVER`: written as lossless WebP (the default) the relying pixel reads `00000000`, where GIF shows `ffff0000` and lossy WebP with P-frames shows `ffff0005`. A decoded GIF, whose frames read as `OVER`, reaches it when re-encoded as lossless WebP; nothing in the workspace does that today. HIGH once a caller converts GIFs to WebP.
+
+- Affected: `src/main/java/dev/simplified/image/codec/webp/WebPImageWriter.java:155` (`usePartialFrames`), `:272-273`
+- Severity: **MEDIUM**
+- Type: **BUG**
+- Status: **OPEN**
+
 ## WebP write options cannot force infinite looping over a finite count
 `WebPImageWriter` reads a loop count of 0 in `WebPWriteOptions` as "unset" and falls back to the image's own loop count. `withLoopCount(0)`, which means infinite, is therefore ignored whenever the `AnimatedImageData` carries a finite count.
 
@@ -187,9 +203,25 @@ The GIF NETSCAPE loop count and the WebP `ANIM` loop count pass unchanged into `
 - Status: **OPEN**
 
 ## CLAUDE.md package inventory, format list, dependencies and class counts drifted
-Line 3 lists 5 formats where 10 exist (TIFF, ICO, TGA, QOI and PNM are missing), and line 44 says 60 source and 8 test classes where there are 92 and 13. Line 41 names a `reflection` dependency that `build.gradle.kts` does not declare. The package lists omit 15+ classes, including the public `NearLosslessPreprocess`, `VP8EncoderSession` and `VP8DecoderSession`.
+Line 3 lists 5 formats where 10 exist (TIFF, ICO, TGA, QOI and PNM are missing), and line 44 says 60 source and 8 test classes where there are 93 and 21. Line 41 names a `reflection` dependency that `build.gradle.kts` does not declare. The package lists omit 15+ classes, including the public `NearLosslessPreprocess`, `VP8EncoderSession` and `VP8DecoderSession`.
 
 - Affected: `CLAUDE.md:3`, `:7`, `:9`, `:13-16`, `:41`, `:44`
+- Severity: **LOW**
+- Type: **GAP**
+- Status: **OPEN**
+
+## README lists 5 formats and 5 codec packages where 10 ship
+Lines 3 and 28 say the library reads and writes BMP, GIF, JPEG, PNG and WebP, the Supported Formats table lists only those five, and the project tree shows only their five codec packages. TIFF, ICO, TGA, QOI and PNM ship as well: `ImageFormat` holds 10 formats and `ImageFactory` registers a reader and a writer for each.
+
+- Affected: `README.md:3`, `:28`, `:212-218`, `:233-248`
+- Severity: **LOW**
+- Type: **GAP**
+- Status: **OPEN**
+
+## README calls ImageData a sealed type; it is not
+The project tree labels `ImageData.java` the "sealed base type", but `ImageData` is a plain `public interface` with no `sealed` modifier or `permits` clause, so any class may implement it.
+
+- Affected: `README.md:226`, `src/main/java/dev/simplified/image/ImageData.java:19`
 - Severity: **LOW**
 - Type: **GAP**
 - Status: **OPEN**
