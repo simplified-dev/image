@@ -7,7 +7,7 @@ import dev.simplified.image.ImageData;
 import dev.simplified.image.ImageFactory;
 import dev.simplified.image.ImageFormat;
 import dev.simplified.image.PixelBuffer;
-import dev.simplified.image.codec.webp.lossless.VP8LEncoder;
+import dev.simplified.image.codec.webp.vp8l.VP8LEncoder;
 import dev.simplified.image.frame.FrameBlend;
 import dev.simplified.image.frame.FrameDisposal;
 import dev.simplified.image.frame.ImageFrame;
@@ -855,7 +855,7 @@ class WebPRoundTripTest {
             }
 
         // Level 100 = no-op copy.
-        int[] off = dev.simplified.image.codec.webp.lossless.NearLosslessPreprocess
+        int[] off = dev.simplified.image.codec.webp.vp8l.NearLosslessPreprocess
             .apply(src, w, h, 100);
         for (int i = 0; i < src.length; i++)
             if (off[i] != src[i])
@@ -863,7 +863,7 @@ class WebPRoundTripTest {
 
         // Border rows and columns MUST be unchanged at all non-off levels.
         for (int level : new int[] { 0, 40, 60, 80 }) {
-            int[] got = dev.simplified.image.codec.webp.lossless.NearLosslessPreprocess
+            int[] got = dev.simplified.image.codec.webp.vp8l.NearLosslessPreprocess
                 .apply(src, w, h, level);
             // First row, last row
             for (int x = 0; x < w; x++) {
@@ -888,7 +888,7 @@ class WebPRoundTripTest {
 
         // At level 0 (5 bits shaved = bucket 32), per-channel deviation at any
         // interior pixel must be bounded by 31 (bucket_size - 1).
-        int[] got0 = dev.simplified.image.codec.webp.lossless.NearLosslessPreprocess
+        int[] got0 = dev.simplified.image.codec.webp.vp8l.NearLosslessPreprocess
             .apply(src, w, h, 0);
         int maxDev = 0;
         for (int i = 0; i < src.length; i++) {

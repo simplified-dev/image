@@ -30,7 +30,7 @@ Write options live in `.option` and use fluent builders: `WebPWriteOptions.build
 ```bash
 ./gradlew build                                                       # compile + test
 ./gradlew test                                                        # tests only
-./gradlew test --tests dev.simplified.image.codec.webp.lossy.VP8CodecTest
+./gradlew test --tests dev.simplified.image.codec.webp.vp8.VP8CodecTest
 ```
 
 VP8 lossy tests shell out to Python `webp` package (libwebp bindings) for round-trip validation. Tests abort gracefully via `TestAbortedException` when Python or the package is missing, rather than failing.
