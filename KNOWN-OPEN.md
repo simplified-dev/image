@@ -133,7 +133,7 @@ Line 36 promises that the VP8 tests abort via `TestAbortedException` when Python
 ## Python launchers fall through only on `IOException`
 Every launcher copy moves to the next interpreter candidate only when `ProcessBuilder.start()` throws, so the first candidate that launches wins even if it cannot import `webp`. The suspected trigger is a Windows Store `python3` stub; the only evidence for its behaviour is the code comment at `VP8CodecTest.java:777-786`, which says it can shadow a working install (UNVERIFIED that it launches and then fails).
 
-- Affected: `src/test/java/dev/simplified/image/codec/webp/lossy/VP8CodecTest.java:257-268`, `:777-805`, `:2251-2279`, `src/test/java/dev/simplified/image/codec/webp/WebPRoundTripTest.java:1529-1548`
+- Affected: `src/test/java/dev/simplified/image/codec/webp/lossy/VP8CodecTest.java:257-268`, `:777-805`, `:2251-2279`, `src/test/java/dev/simplified/image/codec/webp/WebPRoundTripTest.java:1513-1532`
 - Severity: **LOW**
 - Type: **RISK**
 - Status: **OPEN**
@@ -149,7 +149,7 @@ This launcher tries only `python3`, `python` and `py`, unlike the other copies, 
 ## Test file paths are spliced into Python `r'...'` literals
 The oracle scripts build `webp.load_image(r'<path>')` and `open(r'<path>')` by string concatenation, so a path containing `'` breaks the script. `Files.createTempFile` paths keep it harmless today; passing paths as argv removes it.
 
-- Affected: `src/test/java/dev/simplified/image/codec/webp/lossy/VP8CodecTest.java:229`, `:452`, `:740`, `:2162`, `:2167`, `:2198`, `src/test/java/dev/simplified/image/codec/webp/WebPRoundTripTest.java:1180`, `:1240`
+- Affected: `src/test/java/dev/simplified/image/codec/webp/lossy/VP8CodecTest.java:229`, `:452`, `:740`, `:2162`, `:2167`, `:2198`, `src/test/java/dev/simplified/image/codec/webp/WebPRoundTripTest.java:1165`, `:1225`
 - Severity: **LOW**
 - Type: **RISK**
 - Status: **OPEN**
@@ -157,15 +157,15 @@ The oracle scripts build `webp.load_image(r'<path>')` and `open(r'<path>')` by s
 ## Python launcher and PSNR helper are duplicated across test classes
 There are four copies of the interpreter launcher and three of the PSNR loop, which is how the override and fall-through behaviour above drifted apart.
 
-- Affected: `src/test/java/dev/simplified/image/codec/webp/lossy/VP8CodecTest.java:257-268`, `:777-805`, `:2251-2279`, `src/test/java/dev/simplified/image/codec/webp/WebPRoundTripTest.java:1529-1548` (launchers); `VP8CodecTest.java:399` (`computePsnr`), `:693` (`sourcePsnr`), `:2115` (`pixelPsnr`)
+- Affected: `src/test/java/dev/simplified/image/codec/webp/lossy/VP8CodecTest.java:257-268`, `:777-805`, `:2251-2279`, `src/test/java/dev/simplified/image/codec/webp/WebPRoundTripTest.java:1513-1532` (launchers); `VP8CodecTest.java:399` (`computePsnr`), `:693` (`sourcePsnr`), `:2115` (`pixelPsnr`)
 - Severity: **LOW**
 - Type: **GAP**
 - Status: **OPEN**
 
 ## ICO magic collides with a 256-byte ISOBMFF `ftyp` box
-The ICO arm of `ImageFormat.matches` accepts `00 00 01 00`, which is also the big-endian size field of a 256-byte `ftyp` box, and `ImageFactory` registers the ICO reader before any format added later. No ISOBMFF-based format is registered today; MEDIUM once one (AVIF, HEIF) is added after ICO.
+The ICO arm of `ImageFormat.matches` accepts `00 00 01 00`, which is also the big-endian size field of a 256-byte `ftyp` box, and `ImageFactory` lists the ICO reader ahead of any format added later, so `detectFormat` tries ICO before it. No ISOBMFF-based format ships today; MEDIUM once one (AVIF, HEIF) is added after ICO.
 
-- Affected: `src/main/java/dev/simplified/image/ImageFormat.java:81-85`, `src/main/java/dev/simplified/image/ImageFactory.java:76`
+- Affected: `src/main/java/dev/simplified/image/ImageFormat.java:81-85`, `src/main/java/dev/simplified/image/ImageFactory.java:77`
 - Severity: **LOW**
 - Type: **RISK**
 - Status: **OPEN**
@@ -211,7 +211,7 @@ Line 3 lists 5 formats where 10 exist (TIFF, ICO, TGA, QOI and PNM are missing),
 - Status: **OPEN**
 
 ## README lists 5 formats and 5 codec packages where 10 ship
-Lines 3 and 28 say the library reads and writes BMP, GIF, JPEG, PNG and WebP, the Supported Formats table lists only those five, and the project tree shows only their five codec packages. TIFF, ICO, TGA, QOI and PNM ship as well: `ImageFormat` holds 10 formats and `ImageFactory` registers a reader and a writer for each.
+Lines 3 and 28 say the library reads and writes BMP, GIF, JPEG, PNG and WebP, the Supported Formats table lists only those five, and the project tree shows only their five codec packages. TIFF, ICO, TGA, QOI and PNM ship as well: `ImageFormat` holds 10 formats and `ImageFactory` holds a built-in reader and writer for each.
 
 - Affected: `README.md:3`, `:28`, `:212-218`, `:233-248`
 - Severity: **LOW**
@@ -222,14 +222,6 @@ Lines 3 and 28 say the library reads and writes BMP, GIF, JPEG, PNG and WebP, th
 The project tree labels `ImageData.java` the "sealed base type", but `ImageData` is a plain `public interface` with no `sealed` modifier or `permits` clause, so any class may implement it.
 
 - Affected: `README.md:226`, `src/main/java/dev/simplified/image/ImageData.java:16`
-- Severity: **LOW**
-- Type: **GAP**
-- Status: **OPEN**
-
-## `ImageFactory` javadoc lists 5 auto-registered formats; 10 are registered
-The class javadoc names JPEG, PNG, BMP, GIF and WebP, while the constructor registers 10 readers and 10 writers.
-
-- Affected: `src/main/java/dev/simplified/image/ImageFactory.java:53`
 - Severity: **LOW**
 - Type: **GAP**
 - Status: **OPEN**

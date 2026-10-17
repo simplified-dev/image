@@ -65,14 +65,13 @@ class ImageDataAlphaModeTest {
     @Test
     @DisplayName("every reader decodes to straight colour")
     void decodedImagesAreStraight() {
-        ImageFactory factory = new ImageFactory();
         ImageData source = StaticImageData.of(square(16, 0xC0336699));
 
         for (ImageFormat format : new ImageFormat[] {
             ImageFormat.PNG, ImageFormat.JPEG, ImageFormat.BMP, ImageFormat.GIF, ImageFormat.WEBP,
             ImageFormat.TIFF, ImageFormat.ICO, ImageFormat.QOI, ImageFormat.TGA, ImageFormat.PNM
         }) {
-            ImageData decoded = factory.fromByteArray(factory.toByteArray(source, format));
+            ImageData decoded = ImageFactory.fromByteArray(ImageFactory.toByteArray(source, format));
             assertThat(format.name(), decoded.getAlphaMode(), equalTo(AlphaMode.STRAIGHT));
         }
     }

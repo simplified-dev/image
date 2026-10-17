@@ -1,8 +1,7 @@
 package dev.simplified.image;
 
-
-import dev.simplified.annotations.Getter;
 import dev.simplified.annotations.SilentThrows;
+import dev.simplified.annotations.UtilityClass;
 import dev.simplified.collection.Concurrent;
 import dev.simplified.collection.ConcurrentList;
 import dev.simplified.image.codec.ImageReader;
@@ -45,69 +44,54 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.URL;
 import java.nio.file.Files;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 /**
  * Central facade for reading and writing images across all supported formats.
  * <p>
- * Built-in readers and writers for JPEG, PNG, BMP, GIF, and WebP are registered
- * automatically. Custom format support can be added at runtime via
- * {@link #registerReader(ImageReader)} and {@link #registerWriter(ImageWriter)}.
+ * The ten built-in formats - JPEG, PNG, BMP, GIF, WebP, TIFF, ICO, TGA, QOI and PNM - each have
+ * one reader and one writer, created once when the class initialises and shared by every call.
+ * The set is closed: nothing adds or replaces a codec at run time.
  * <p>
  * All input methods converge to {@link #fromByteArray(byte[], ImageFormat, ImageReadOptions)}.
  * All output methods start from {@link #toByteArray(ImageData, ImageFormat, ImageWriteOptions)}.
  */
-@Getter
+@UtilityClass
 public class ImageFactory {
 
-    private final @NotNull ConcurrentList<ImageReader> readers = Concurrent.newList();
-    private final @NotNull ConcurrentList<ImageWriter> writers = Concurrent.newList();
+    /** the built-in readers, in the order {@link #detectFormat} tries them */
+    private static final @NotNull List<ImageReader> READERS;
 
-    /**
-     * Registers all built-in readers and writers.
-     */
-    public ImageFactory() {
-        this.readers.add(new JpegImageReader());
-        this.readers.add(new PngImageReader());
-        this.readers.add(new BmpImageReader());
-        this.readers.add(new GifImageReader());
-        this.readers.add(new WebPImageReader());
-        this.readers.add(new TiffImageReader());
-        this.readers.add(new IcoImageReader());
-        this.readers.add(new TgaImageReader());
-        this.readers.add(new QoiImageReader());
-        this.readers.add(new PnmImageReader());
+    /** the built-in writers, one per format */
+    private static final @NotNull List<ImageWriter> WRITERS;
 
-        this.writers.add(new JpegImageWriter());
-        this.writers.add(new PngImageWriter());
-        this.writers.add(new BmpImageWriter());
-        this.writers.add(new GifImageWriter());
-        this.writers.add(new WebPImageWriter());
-        this.writers.add(new TiffImageWriter());
-        this.writers.add(new IcoImageWriter());
-        this.writers.add(new TgaImageWriter());
-        this.writers.add(new QoiImageWriter());
-        this.writers.add(new PnmImageWriter());
-    }
+    static {
+        READERS = List.of(
+            new JpegImageReader(),
+            new PngImageReader(),
+            new BmpImageReader(),
+            new GifImageReader(),
+            new WebPImageReader(),
+            new TiffImageReader(),
+            new IcoImageReader(),
+            new TgaImageReader(),
+            new QoiImageReader(),
+            new PnmImageReader()
+        );
 
-    // === Registry ===
-
-    /**
-     * Registers a custom image reader.
-     *
-     * @param reader the reader to register
-     */
-    public void registerReader(@NotNull ImageReader reader) {
-        this.readers.add(reader);
-    }
-
-    /**
-     * Registers a custom image writer.
-     *
-     * @param writer the writer to register
-     */
-    public void registerWriter(@NotNull ImageWriter writer) {
-        this.writers.add(writer);
+        WRITERS = List.of(
+            new JpegImageWriter(),
+            new PngImageWriter(),
+            new BmpImageWriter(),
+            new GifImageWriter(),
+            new WebPImageWriter(),
+            new TiffImageWriter(),
+            new IcoImageWriter(),
+            new TgaImageWriter(),
+            new QoiImageWriter(),
+            new PnmImageWriter()
+        );
     }
 
     // === Input Methods ===
@@ -119,8 +103,8 @@ public class ImageFactory {
      * @return the decoded image data
      * @throws ImageException if decoding fails or format is unrecognized
      */
-    public @NotNull ImageData fromByteArray(byte @NotNull [] bytes) {
-        return this.fromByteArray(bytes, this.detectFormat(bytes), null);
+    public static @NotNull ImageData fromByteArray(byte @NotNull [] bytes) {
+        return fromByteArray(bytes, detectFormat(bytes), null);
     }
 
     /**
@@ -131,8 +115,8 @@ public class ImageFactory {
      * @return the decoded image data
      * @throws ImageException if decoding fails
      */
-    public @NotNull ImageData fromByteArray(byte @NotNull [] bytes, @NotNull ImageFormat format) {
-        return this.fromByteArray(bytes, format, null);
+    public static @NotNull ImageData fromByteArray(byte @NotNull [] bytes, @NotNull ImageFormat format) {
+        return fromByteArray(bytes, format, null);
     }
 
     /**
@@ -143,8 +127,8 @@ public class ImageFactory {
      * @return the decoded image data
      * @throws ImageException if decoding fails or format is unrecognized
      */
-    public @NotNull ImageData fromByteArray(byte @NotNull [] bytes, @Nullable ImageReadOptions options) {
-        return this.fromByteArray(bytes, this.detectFormat(bytes), options);
+    public static @NotNull ImageData fromByteArray(byte @NotNull [] bytes, @Nullable ImageReadOptions options) {
+        return fromByteArray(bytes, detectFormat(bytes), options);
     }
 
     /**
@@ -156,8 +140,8 @@ public class ImageFactory {
      * @return the decoded image data
      * @throws ImageException if decoding fails or no reader is registered for the format
      */
-    public @NotNull ImageData fromByteArray(byte @NotNull [] bytes, @NotNull ImageFormat format, @Nullable ImageReadOptions options) {
-        ImageReader reader = this.readers.stream()
+    public static @NotNull ImageData fromByteArray(byte @NotNull [] bytes, @NotNull ImageFormat format, @Nullable ImageReadOptions options) {
+        ImageReader reader = READERS.stream()
             .filter(r -> r.getFormat() == format)
             .findFirst()
             .orElseThrow(() -> new UnsupportedFormatException("No reader registered for format '%s'", format.getFormatName()));
@@ -172,8 +156,8 @@ public class ImageFactory {
      * @return the decoded image data
      * @throws ImageException if decoding fails
      */
-    public @NotNull ImageData fromBase64(@NotNull String encoded) {
-        return this.fromByteArray(StringUtil.decodeBase64(encoded));
+    public static @NotNull ImageData fromBase64(@NotNull String encoded) {
+        return fromByteArray(StringUtil.decodeBase64(encoded));
     }
 
     /**
@@ -184,8 +168,8 @@ public class ImageFactory {
      * @throws ImageException if reading or decoding fails
      */
     @SilentThrows
-    public @NotNull ImageData fromFile(@NotNull File file) {
-        return this.fromByteArray(Files.readAllBytes(file.toPath()));
+    public static @NotNull ImageData fromFile(@NotNull File file) {
+        return fromByteArray(Files.readAllBytes(file.toPath()));
     }
 
     /**
@@ -195,13 +179,13 @@ public class ImageFactory {
      * @return the decoded image data
      * @throws ImageException if the resource is not found or decoding fails
      */
-    public @NotNull ImageData fromResource(@NotNull String path) {
+    public static @NotNull ImageData fromResource(@NotNull String path) {
         InputStream stream = SystemUtil.getResource(path);
 
         if (stream == null)
             throw new ImageDecodeException("Resource not found: '%s'", path);
 
-        return this.fromStream(stream);
+        return fromStream(stream);
     }
 
     /**
@@ -212,10 +196,10 @@ public class ImageFactory {
      * @throws ImageException if reading or decoding fails
      */
     @SilentThrows
-    public @NotNull ImageData fromStream(@NotNull InputStream inputStream) {
+    public static @NotNull ImageData fromStream(@NotNull InputStream inputStream) {
         ByteArrayDataOutput buffer = new ByteArrayDataOutput();
         inputStream.transferTo(buffer);
-        return this.fromByteArray(buffer.toByteArray());
+        return fromByteArray(buffer.toByteArray());
     }
 
     /**
@@ -226,9 +210,9 @@ public class ImageFactory {
      * @throws ImageException if reading or decoding fails
      */
     @SilentThrows
-    public @NotNull ImageData fromUrl(@NotNull URL url) {
+    public static @NotNull ImageData fromUrl(@NotNull URL url) {
         try (InputStream stream = url.openStream()) {
-            return this.fromStream(stream);
+            return fromStream(stream);
         }
     }
 
@@ -238,7 +222,7 @@ public class ImageFactory {
      * @param image the source image
      * @return a static image data instance
      */
-    public @NotNull StaticImageData fromImage(@NotNull BufferedImage image) {
+    public static @NotNull StaticImageData fromImage(@NotNull BufferedImage image) {
         return StaticImageData.of(PixelBuffer.wrap(image));
     }
 
@@ -249,7 +233,7 @@ public class ImageFactory {
      * @param delayMs the display duration per frame in milliseconds
      * @return an animated image data instance
      */
-    public @NotNull AnimatedImageData fromImages(@NotNull ConcurrentList<BufferedImage> images, int delayMs) {
+    public static @NotNull AnimatedImageData fromImages(@NotNull ConcurrentList<BufferedImage> images, int delayMs) {
         AnimatedImageData.Builder builder = AnimatedImageData.builder();
 
         for (BufferedImage image : images)
@@ -268,8 +252,8 @@ public class ImageFactory {
      * @return the encoded bytes
      * @throws ImageException if encoding fails
      */
-    public byte @NotNull [] toByteArray(@NotNull ImageData data, @NotNull ImageFormat format) {
-        return this.toByteArray(data, format, null);
+    public static byte @NotNull [] toByteArray(@NotNull ImageData data, @NotNull ImageFormat format) {
+        return toByteArray(data, format, null);
     }
 
     /**
@@ -281,8 +265,8 @@ public class ImageFactory {
      * @return the encoded bytes
      * @throws ImageException if encoding fails or no writer is registered for the format
      */
-    public byte @NotNull [] toByteArray(@NotNull ImageData data, @NotNull ImageFormat format, @Nullable ImageWriteOptions options) {
-        ImageWriter writer = this.writers.stream()
+    public static byte @NotNull [] toByteArray(@NotNull ImageData data, @NotNull ImageFormat format, @Nullable ImageWriteOptions options) {
+        ImageWriter writer = WRITERS.stream()
             .filter(w -> w.getFormat() == format)
             .findFirst()
             .orElseThrow(() -> new UnsupportedFormatException("No writer registered for format '%s'", format.getFormatName()));
@@ -298,8 +282,8 @@ public class ImageFactory {
      * @return the Base64-encoded string
      * @throws ImageException if encoding fails
      */
-    public @NotNull String toBase64(@NotNull ImageData data, @NotNull ImageFormat format) {
-        return StringUtil.encodeBase64ToString(this.toByteArray(data, format));
+    public static @NotNull String toBase64(@NotNull ImageData data, @NotNull ImageFormat format) {
+        return StringUtil.encodeBase64ToString(toByteArray(data, format));
     }
 
     /**
@@ -310,8 +294,8 @@ public class ImageFactory {
      * @param file the output file
      * @throws ImageException if encoding fails
      */
-    public void toFile(@NotNull ImageData data, @NotNull ImageFormat format, @NotNull File file) {
-        this.toFile(data, format, file, null);
+    public static void toFile(@NotNull ImageData data, @NotNull ImageFormat format, @NotNull File file) {
+        toFile(data, format, file, null);
     }
 
     /**
@@ -324,8 +308,8 @@ public class ImageFactory {
      * @throws ImageException if encoding fails
      */
     @SilentThrows
-    public void toFile(@NotNull ImageData data, @NotNull ImageFormat format, @NotNull File file, @Nullable ImageWriteOptions options) {
-        Files.write(file.toPath(), this.toByteArray(data, format, options));
+    public static void toFile(@NotNull ImageData data, @NotNull ImageFormat format, @NotNull File file, @Nullable ImageWriteOptions options) {
+        Files.write(file.toPath(), toByteArray(data, format, options));
     }
 
     /**
@@ -337,8 +321,8 @@ public class ImageFactory {
      * @throws ImageException if encoding fails
      */
     @SilentThrows
-    public void toStream(@NotNull ImageData data, @NotNull ImageFormat format, @NotNull OutputStream outputStream) {
-        outputStream.write(this.toByteArray(data, format));
+    public static void toStream(@NotNull ImageData data, @NotNull ImageFormat format, @NotNull OutputStream outputStream) {
+        outputStream.write(toByteArray(data, format));
     }
 
     /**
@@ -347,7 +331,7 @@ public class ImageFactory {
      * @param data the image data
      * @return the first frame's pixel data
      */
-    public @NotNull BufferedImage toImage(@NotNull ImageData data) {
+    public static @NotNull BufferedImage toImage(@NotNull ImageData data) {
         return data.toBufferedImage();
     }
 
@@ -361,9 +345,9 @@ public class ImageFactory {
      * @throws ImageException if any file fails to decode
      */
     @SilentThrows
-    public @NotNull ConcurrentList<ImageData> fromFiles(@NotNull ConcurrentList<File> files) {
+    public static @NotNull ConcurrentList<ImageData> fromFiles(@NotNull ConcurrentList<File> files) {
         var futures = files.stream()
-            .map(file -> CompletableFuture.supplyAsync(() -> this.fromFile(file), java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()))
+            .map(file -> CompletableFuture.supplyAsync(() -> fromFile(file), java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()))
             .collect(Concurrent.toList());
 
         return futures.stream()
@@ -378,9 +362,9 @@ public class ImageFactory {
      * @return a list of decoded image data in the same order as the input arrays
      * @throws ImageException if any array fails to decode
      */
-    public @NotNull ConcurrentList<ImageData> fromByteArrays(@NotNull ConcurrentList<byte[]> arrays) {
+    public static @NotNull ConcurrentList<ImageData> fromByteArrays(@NotNull ConcurrentList<byte[]> arrays) {
         var futures = arrays.stream()
-            .map(bytes -> CompletableFuture.supplyAsync(() -> this.fromByteArray(bytes), java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()))
+            .map(bytes -> CompletableFuture.supplyAsync(() -> fromByteArray(bytes), java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()))
             .collect(Concurrent.toList());
 
         return futures.stream()
@@ -396,8 +380,8 @@ public class ImageFactory {
      * @return a list of encoded byte arrays in the same order as the input images
      * @throws ImageException if any image fails to encode
      */
-    public @NotNull ConcurrentList<byte[]> toByteArrays(@NotNull ConcurrentList<ImageData> data, @NotNull ImageFormat format) {
-        return this.toByteArrays(data, format, null);
+    public static @NotNull ConcurrentList<byte[]> toByteArrays(@NotNull ConcurrentList<ImageData> data, @NotNull ImageFormat format) {
+        return toByteArrays(data, format, null);
     }
 
     /**
@@ -409,13 +393,13 @@ public class ImageFactory {
      * @return a list of encoded byte arrays in the same order as the input images
      * @throws ImageException if any image fails to encode
      */
-    public @NotNull ConcurrentList<byte[]> toByteArrays(
+    public static @NotNull ConcurrentList<byte[]> toByteArrays(
         @NotNull ConcurrentList<ImageData> data,
         @NotNull ImageFormat format,
         @Nullable ImageWriteOptions options
     ) {
         var futures = data.stream()
-            .map(img -> CompletableFuture.supplyAsync(() -> this.toByteArray(img, format, options), java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()))
+            .map(img -> CompletableFuture.supplyAsync(() -> toByteArray(img, format, options), java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()))
             .collect(Concurrent.toList());
 
         return futures.stream()
@@ -432,7 +416,7 @@ public class ImageFactory {
      * @throws ImageException if any image fails to encode
      * @throws IllegalArgumentException if data and files have different sizes
      */
-    public void toFiles(@NotNull ConcurrentList<ImageData> data, @NotNull ImageFormat format, @NotNull ConcurrentList<File> files) {
+    public static void toFiles(@NotNull ConcurrentList<ImageData> data, @NotNull ImageFormat format, @NotNull ConcurrentList<File> files) {
         if (data.size() != files.size())
             throw new IllegalArgumentException("Data and file lists must have the same size");
 
@@ -441,7 +425,7 @@ public class ImageFactory {
         for (int i = 0; i < data.size(); i++) {
             int index = i;
             futures.add(CompletableFuture.runAsync(
-                () -> this.toFile(data.get(index), format, files.get(index)),
+                () -> toFile(data.get(index), format, files.get(index)),
                 java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()
             ));
         }
@@ -458,8 +442,8 @@ public class ImageFactory {
      * @return the detected format
      * @throws UnsupportedFormatException if no format matches
      */
-    public @NotNull ImageFormat detectFormat(byte @NotNull [] bytes) {
-        return this.readers.stream()
+    public static @NotNull ImageFormat detectFormat(byte @NotNull [] bytes) {
+        return READERS.stream()
             .filter(reader -> reader.canRead(bytes))
             .map(ImageReader::getFormat)
             .findFirst()

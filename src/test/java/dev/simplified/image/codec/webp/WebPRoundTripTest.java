@@ -45,7 +45,7 @@ class WebPRoundTripTest {
         ImageFrame frame = ImageFrame.of(buf);
         var image = new StaticImageData(frame);
         File out = outputDir.resolve("solid_2x2_red.webp").toFile();
-        new ImageFactory().toFile(image, ImageFormat.WEBP, out, WebPWriteOptions.builder().isLossless().build());
+        ImageFactory.toFile(image, ImageFormat.WEBP, out, WebPWriteOptions.builder().isLossless().build());
 
         byte[] bytes = Files.readAllBytes(out.toPath());
         assertThat("file written", bytes.length, is(greaterThan(12)));
@@ -64,7 +64,7 @@ class WebPRoundTripTest {
         ImageFrame frame = ImageFrame.of(buf);
         var image = new StaticImageData(frame);
         File out = outputDir.resolve("gradient_16x16.webp").toFile();
-        new ImageFactory().toFile(image, ImageFormat.WEBP, out, WebPWriteOptions.builder().isLossless().build());
+        ImageFactory.toFile(image, ImageFormat.WEBP, out, WebPWriteOptions.builder().isLossless().build());
 
         byte[] bytes = Files.readAllBytes(out.toPath());
         assertThat("file written", bytes.length, is(greaterThan(12)));
@@ -83,7 +83,7 @@ class WebPRoundTripTest {
             }
         var image = new StaticImageData(ImageFrame.of(buf));
         File out = outputDir.resolve("gradient_100x100.webp").toFile();
-        new ImageFactory().toFile(image, ImageFormat.WEBP, out, WebPWriteOptions.builder().isLossless().build());
+        ImageFactory.toFile(image, ImageFormat.WEBP, out, WebPWriteOptions.builder().isLossless().build());
         assertThat("file written", Files.size(out.toPath()), is(greaterThan(12L)));
     }
 
@@ -104,7 +104,7 @@ class WebPRoundTripTest {
             }
         var image = new StaticImageData(ImageFrame.of(buf));
         File out = outputDir.resolve("tooltip_many_colors.webp").toFile();
-        new ImageFactory().toFile(image, ImageFormat.WEBP, out, WebPWriteOptions.builder().isLossless().build());
+        ImageFactory.toFile(image, ImageFormat.WEBP, out, WebPWriteOptions.builder().isLossless().build());
         assertThat("file written", Files.size(out.toPath()), is(greaterThan(12L)));
     }
 
@@ -118,7 +118,7 @@ class WebPRoundTripTest {
 
         var image = new StaticImageData(ImageFrame.of(buf));
         File out = outputDir.resolve("lossy_vp8.webp").toFile();
-        new ImageFactory().toFile(image, ImageFormat.WEBP, out,
+        ImageFactory.toFile(image, ImageFormat.WEBP, out,
             WebPWriteOptions.builder().isLossless(false).withQuality(0.9f).build());
 
         byte[] bytes = Files.readAllBytes(out.toPath());
@@ -136,10 +136,9 @@ class WebPRoundTripTest {
                 buf.setPixel(x, y, 0xFF000000 | ((x * 8) << 16) | ((y * 8) << 8) | ((x + y) * 4));
         var image = new StaticImageData(ImageFrame.of(buf));
         File out = outputDir.resolve("self_roundtrip.webp").toFile();
-        ImageFactory factory = new ImageFactory();
-        factory.toFile(image, ImageFormat.WEBP, out, WebPWriteOptions.builder().isLossless().build());
+        ImageFactory.toFile(image, ImageFormat.WEBP, out, WebPWriteOptions.builder().isLossless().build());
 
-        ImageData decoded = factory.fromFile(out);
+        ImageData decoded = ImageFactory.fromFile(out);
         PixelBuffer got = decoded.getFrames().getFirst().pixels();
         assertThat(got.width(), is(32));
         assertThat(got.height(), is(32));
@@ -163,11 +162,10 @@ class WebPRoundTripTest {
 
         var image = new StaticImageData(ImageFrame.of(buf));
         File out = outputDir.resolve("lossy_alpha_selfrt.webp").toFile();
-        ImageFactory factory = new ImageFactory();
-        factory.toFile(image, ImageFormat.WEBP, out,
+        ImageFactory.toFile(image, ImageFormat.WEBP, out,
             WebPWriteOptions.builder().isLossless(false).withQuality(0.9f).build());
 
-        ImageData decoded = factory.fromFile(out);
+        ImageData decoded = ImageFactory.fromFile(out);
         PixelBuffer got = decoded.getFrames().getFirst().pixels();
         assertThat(got.width(), is(16));
         assertThat(got.height(), is(16));
@@ -194,7 +192,7 @@ class WebPRoundTripTest {
 
         var image = new StaticImageData(ImageFrame.of(buf));
         File out = outputDir.resolve("lossy_alpha_libwebp.webp").toFile();
-        new ImageFactory().toFile(image, ImageFormat.WEBP, out,
+        ImageFactory.toFile(image, ImageFormat.WEBP, out,
             WebPWriteOptions.builder().isLossless(false).withQuality(0.9f).build());
 
         int[] decoded;
@@ -241,11 +239,10 @@ class WebPRoundTripTest {
             .build();
 
         File out = outputDir.resolve("anim_alpha_selfrt.webp").toFile();
-        ImageFactory factory = new ImageFactory();
-        factory.toFile(anim, ImageFormat.WEBP, out,
+        ImageFactory.toFile(anim, ImageFormat.WEBP, out,
             WebPWriteOptions.builder().isLossless(false).withQuality(0.9f).build());
 
-        ImageData decoded = factory.fromFile(out);
+        ImageData decoded = ImageFactory.fromFile(out);
         if (!(decoded instanceof AnimatedImageData decAnim))
             throw new AssertionError("expected AnimatedImageData, got " + decoded.getClass());
 
@@ -291,10 +288,9 @@ class WebPRoundTripTest {
 
         File pFrameOut = outputDir.resolve("anim_pframes.webp").toFile();
         File keyOnlyOut = outputDir.resolve("anim_keyonly.webp").toFile();
-        ImageFactory factory = new ImageFactory();
-        factory.toFile(anim, ImageFormat.WEBP, pFrameOut,
+        ImageFactory.toFile(anim, ImageFormat.WEBP, pFrameOut,
             WebPWriteOptions.builder().isLossless(false).withQuality(1.0f).usePFrames(true).build());
-        factory.toFile(anim, ImageFormat.WEBP, keyOnlyOut,
+        ImageFactory.toFile(anim, ImageFormat.WEBP, keyOnlyOut,
             WebPWriteOptions.builder().isLossless(false).withQuality(1.0f).build());
 
         // Both outputs must be small on stationary content. Prior to
@@ -314,7 +310,7 @@ class WebPRoundTripTest {
                 pFrameOut.length(), keyOnlyOut.length(), maxExpected));
 
         // Round-trip: reader must decode our P-frame WebP correctly.
-        ImageData decoded = factory.fromFile(pFrameOut);
+        ImageData decoded = ImageFactory.fromFile(pFrameOut);
         if (!(decoded instanceof AnimatedImageData decAnim))
             throw new AssertionError("expected AnimatedImageData, got " + decoded.getClass());
         if (decAnim.getFrames().size() != 4)
@@ -361,13 +357,12 @@ class WebPRoundTripTest {
             }
         }
         StaticImageData image = new StaticImageData(ImageFrame.of(buf));
-        ImageFactory factory = new ImageFactory();
 
         File baselineOut = outputDir.resolve("static_autoSeg_off.webp").toFile();
         File autoSegOut = outputDir.resolve("static_autoSeg_on.webp").toFile();
-        factory.toFile(image, ImageFormat.WEBP, baselineOut,
+        ImageFactory.toFile(image, ImageFormat.WEBP, baselineOut,
             WebPWriteOptions.builder().isLossless(false).withQuality(0.5f).build());
-        factory.toFile(image, ImageFormat.WEBP, autoSegOut,
+        ImageFactory.toFile(image, ImageFormat.WEBP, autoSegOut,
             WebPWriteOptions.builder().isLossless(false).withQuality(0.5f)
                 .withAutoSegment(true).build());
 
@@ -378,7 +373,7 @@ class WebPRoundTripTest {
                 baselineOut.length(), autoSegOut.length()));
 
         // Round-trip: decode the autoSegment stream and sanity-check PSNR.
-        ImageData decoded = factory.fromFile(autoSegOut);
+        ImageData decoded = ImageFactory.fromFile(autoSegOut);
         PixelBuffer dec = decoded.toPixelBuffer();
         long sse = 0;
         long pixelCount = (long) W * H * 3;
@@ -411,13 +406,12 @@ class WebPRoundTripTest {
         PixelBuffer buf = PixelBuffer.create(W, H);
         buf.fill(0xFF808080);
         StaticImageData image = new StaticImageData(ImageFrame.of(buf));
-        ImageFactory factory = new ImageFactory();
 
         File offOut = outputDir.resolve("flat_autoSeg_off.webp").toFile();
         File onOut = outputDir.resolve("flat_autoSeg_on.webp").toFile();
-        factory.toFile(image, ImageFormat.WEBP, offOut,
+        ImageFactory.toFile(image, ImageFormat.WEBP, offOut,
             WebPWriteOptions.builder().isLossless(false).withQuality(0.5f).build());
-        factory.toFile(image, ImageFormat.WEBP, onOut,
+        ImageFactory.toFile(image, ImageFormat.WEBP, onOut,
             WebPWriteOptions.builder().isLossless(false).withQuality(0.5f)
                 .withAutoSegment(true).build());
 
@@ -440,7 +434,7 @@ class WebPRoundTripTest {
         // 3-frame animation with high-variance content per frame (so the autoSegment
         // spread gate clears on both keyframe and P-frame paths). Asserts the writer
         // plumbs autoSegment through VP8EncoderSession for both frame types and the
-        // resulting WebP decodes without error via the roundtrip factory.fromFile.
+        // resulting WebP decodes without error via the roundtrip ImageFactory.fromFile.
         int W = 64, H = 64;
         ConcurrentList<ImageFrame> frames = Concurrent.newList();
         for (int f = 0; f < 3; f++) {
@@ -469,12 +463,11 @@ class WebPRoundTripTest {
             .build();
 
         File out = outputDir.resolve("anim_autoSeg.webp").toFile();
-        ImageFactory factory = new ImageFactory();
-        factory.toFile(anim, ImageFormat.WEBP, out,
+        ImageFactory.toFile(anim, ImageFormat.WEBP, out,
             WebPWriteOptions.builder().isLossless(false).withQuality(0.5f)
                 .usePFrames(true).withAutoSegment(true).build());
 
-        ImageData decoded = factory.fromFile(out);
+        ImageData decoded = ImageFactory.fromFile(out);
         if (!(decoded instanceof AnimatedImageData decAnim))
             throw new AssertionError("expected AnimatedImageData, got " + decoded.getClass());
         if (decAnim.getFrames().size() != 3)
@@ -519,9 +512,8 @@ class WebPRoundTripTest {
                 "testLore cache files not present - diagnostic only");
         java.nio.file.Files.createDirectories(java.nio.file.Path.of("W:/tmp"));
 
-        ImageFactory factory = new ImageFactory();
-        ImageData dec = factory.fromFile(pframeIn.toFile());
-        ImageData refDec = factory.fromFile(losslessIn.toFile());
+        ImageData dec = ImageFactory.fromFile(pframeIn.toFile());
+        ImageData refDec = ImageFactory.fromFile(losslessIn.toFile());
         if (!(dec instanceof AnimatedImageData anim) || !(refDec instanceof AnimatedImageData refAnim))
             throw new AssertionError("expected AnimatedImageData from both files");
         System.err.println("[pframe-diag] P-frame file decoded via our reader: "
@@ -598,7 +590,7 @@ class WebPRoundTripTest {
             .build();
 
         File out = outputDir.resolve("tooltip_reencode_partial.webp").toFile();
-        new ImageFactory().toFile(anim, ImageFormat.WEBP, out,
+        ImageFactory.toFile(anim, ImageFormat.WEBP, out,
             WebPWriteOptions.builder().isLossless().build());
         System.err.println("[partial-reencode] ours animated lossless: "
             + out.length() + " bytes (prior full-frame encode was 1,699,930 B; "
@@ -640,7 +632,7 @@ class WebPRoundTripTest {
             .build();
 
         File out = outputDir.resolve("partial_frame_tooltip_like.webp").toFile();
-        new ImageFactory().toFile(anim, ImageFormat.WEBP, out,
+        ImageFactory.toFile(anim, ImageFormat.WEBP, out,
             WebPWriteOptions.builder().isLossless().build());
 
         // Inspect the RIFF: frame 0 must be full canvas (W x H), frames 1-4
@@ -707,7 +699,7 @@ class WebPRoundTripTest {
 
         // Round-trip via our own reader to verify the partial frames compose
         // back to the right pixels.
-        ImageData dec = new ImageFactory().fromFile(out);
+        ImageData dec = ImageFactory.fromFile(out);
         if (!(dec instanceof AnimatedImageData decAnim))
             throw new AssertionError("expected AnimatedImageData");
         if (decAnim.getFrames().size() != 5)
@@ -745,13 +737,12 @@ class WebPRoundTripTest {
     void nearLosslessLevel100IsNoOp() throws IOException {
         PixelBuffer buf = buildGradientWithEdges(128, 128);
         StaticImageData image = new StaticImageData(ImageFrame.of(buf));
-        ImageFactory factory = new ImageFactory();
 
         File baselineOut = outputDir.resolve("nl_baseline.webp").toFile();
         File level100Out = outputDir.resolve("nl_level100.webp").toFile();
-        factory.toFile(image, ImageFormat.WEBP, baselineOut,
+        ImageFactory.toFile(image, ImageFormat.WEBP, baselineOut,
             WebPWriteOptions.builder().isLossless().build());
-        factory.toFile(image, ImageFormat.WEBP, level100Out,
+        ImageFactory.toFile(image, ImageFormat.WEBP, level100Out,
             WebPWriteOptions.builder().isLossless().withNearLossless(100).build());
 
         byte[] a = Files.readAllBytes(baselineOut.toPath());
@@ -773,17 +764,16 @@ class WebPRoundTripTest {
         // the smooth background passes through. Non-trivially compressible.
         PixelBuffer buf = buildGradientWithEdges(128, 128);
         StaticImageData image = new StaticImageData(ImageFrame.of(buf));
-        ImageFactory factory = new ImageFactory();
 
         File baselineOut = outputDir.resolve("nl_baseline_shrink.webp").toFile();
         File nl60Out = outputDir.resolve("nl_level60.webp").toFile();
-        factory.toFile(image, ImageFormat.WEBP, baselineOut,
+        ImageFactory.toFile(image, ImageFormat.WEBP, baselineOut,
             WebPWriteOptions.builder().isLossless().build());
-        factory.toFile(image, ImageFormat.WEBP, nl60Out,
+        ImageFactory.toFile(image, ImageFormat.WEBP, nl60Out,
             WebPWriteOptions.builder().isLossless().withNearLossless(60).build());
 
         // Output must be a valid VP8L stream + decode back through our reader.
-        ImageData dec = factory.fromFile(nl60Out);
+        ImageData dec = ImageFactory.fromFile(nl60Out);
         PixelBuffer decPixels = dec.toPixelBuffer();
         if (decPixels.width() != 128 || decPixels.height() != 128)
             throw new AssertionError("near-lossless round-trip dims "
@@ -803,13 +793,12 @@ class WebPRoundTripTest {
         // The preprocessing is skipped; output bytes must match baseline lossless.
         PixelBuffer buf = buildGradientWithEdges(32, 32);
         StaticImageData image = new StaticImageData(ImageFrame.of(buf));
-        ImageFactory factory = new ImageFactory();
 
         File baselineOut = outputDir.resolve("nl_small_baseline.webp").toFile();
         File nl0Out = outputDir.resolve("nl_small_level0.webp").toFile();
-        factory.toFile(image, ImageFormat.WEBP, baselineOut,
+        ImageFactory.toFile(image, ImageFormat.WEBP, baselineOut,
             WebPWriteOptions.builder().isLossless().build());
-        factory.toFile(image, ImageFormat.WEBP, nl0Out,
+        ImageFactory.toFile(image, ImageFormat.WEBP, nl0Out,
             WebPWriteOptions.builder().isLossless().withNearLossless(0).build());
 
         if (baselineOut.length() != nl0Out.length())
@@ -829,16 +818,15 @@ class WebPRoundTripTest {
         PixelBuffer buf = PixelBuffer.create(w, h);
         buf.fill(0xFF808080);
         StaticImageData image = new StaticImageData(ImageFrame.of(buf));
-        ImageFactory factory = new ImageFactory();
 
         File baselineOut = outputDir.resolve("nl_flat_baseline.webp").toFile();
-        factory.toFile(image, ImageFormat.WEBP, baselineOut,
+        ImageFactory.toFile(image, ImageFormat.WEBP, baselineOut,
             WebPWriteOptions.builder().isLossless().build());
         byte[] baseline = Files.readAllBytes(baselineOut.toPath());
 
         for (int level : new int[] { 0, 40, 60, 80 }) {
             File out = outputDir.resolve("nl_flat_level" + level + ".webp").toFile();
-            factory.toFile(image, ImageFormat.WEBP, out,
+            ImageFactory.toFile(image, ImageFormat.WEBP, out,
                 WebPWriteOptions.builder().isLossless().withNearLossless(level).build());
             byte[] got = Files.readAllBytes(out.toPath());
             if (got.length != baseline.length)
@@ -976,7 +964,7 @@ class WebPRoundTripTest {
             .build();
 
         File out = outputDir.resolve("default_animated_lossy.webp").toFile();
-        new ImageFactory().toFile(anim, ImageFormat.WEBP, out,
+        ImageFactory.toFile(anim, ImageFormat.WEBP, out,
             WebPWriteOptions.builder().isLossless(false).withQuality(0.75f).build());
 
         // decodeAnimatedAlphaWithLibwebp throws AssertionError when libwebp rejects
@@ -1011,13 +999,12 @@ class WebPRoundTripTest {
             .withBackgroundColor(0)
             .build();
 
-        ImageFactory factory = new ImageFactory();
         File singleKey = outputDir.resolve("anim_forcekey_0.webp").toFile();
         File everyThree = outputDir.resolve("anim_forcekey_3.webp").toFile();
-        factory.toFile(anim, ImageFormat.WEBP, singleKey,
+        ImageFactory.toFile(anim, ImageFormat.WEBP, singleKey,
             WebPWriteOptions.builder().isLossless(false).withQuality(1.0f).usePFrames(true)
                 .withForceKeyframeEvery(0).build());
-        factory.toFile(anim, ImageFormat.WEBP, everyThree,
+        ImageFactory.toFile(anim, ImageFormat.WEBP, everyThree,
             WebPWriteOptions.builder().isLossless(false).withQuality(1.0f).usePFrames(true)
                 .withForceKeyframeEvery(3).build());
 
@@ -1027,7 +1014,7 @@ class WebPRoundTripTest {
                 everyThree.length(), singleKey.length()));
 
         // Round-trip: reader must decode the interspersed-keyframe output correctly.
-        ImageData decoded = factory.fromFile(everyThree);
+        ImageData decoded = ImageFactory.fromFile(everyThree);
         if (!(decoded instanceof AnimatedImageData decAnim))
             throw new AssertionError("expected AnimatedImageData, got " + decoded.getClass());
         if (decAnim.getFrames().size() != 6)
@@ -1066,13 +1053,12 @@ class WebPRoundTripTest {
             .withBackgroundColor(0)
             .build();
 
-        ImageFactory factory = new ImageFactory();
         File explicitZero = outputDir.resolve("anim_default_explicit0.webp").toFile();
         File leftDefault = outputDir.resolve("anim_default_auto.webp").toFile();
-        factory.toFile(anim, ImageFormat.WEBP, explicitZero,
+        ImageFactory.toFile(anim, ImageFormat.WEBP, explicitZero,
             WebPWriteOptions.builder().isLossless(false).withQuality(1.0f).usePFrames(true)
                 .withForceKeyframeEvery(0).build());
-        factory.toFile(anim, ImageFormat.WEBP, leftDefault,
+        ImageFactory.toFile(anim, ImageFormat.WEBP, leftDefault,
             WebPWriteOptions.builder().isLossless(false).withQuality(1.0f).usePFrames(true).build());
 
         try {
@@ -1114,7 +1100,7 @@ class WebPRoundTripTest {
             .build();
 
         File out = outputDir.resolve("anim_alpha_libwebp.webp").toFile();
-        new ImageFactory().toFile(anim, ImageFormat.WEBP, out,
+        ImageFactory.toFile(anim, ImageFormat.WEBP, out,
             WebPWriteOptions.builder().isLossless(false).withQuality(0.9f).build());
 
         int[][] decoded = decodeAnimatedAlphaWithLibwebp(out, 16, 16, 3);
@@ -1145,14 +1131,13 @@ class WebPRoundTripTest {
 
         var image = new StaticImageData(ImageFrame.of(buf));
         File out = outputDir.resolve("uncompressed_alpha.webp").toFile();
-        ImageFactory factory = new ImageFactory();
-        factory.toFile(image, ImageFormat.WEBP, out,
+        ImageFactory.toFile(image, ImageFormat.WEBP, out,
             WebPWriteOptions.builder()
                 .isLossless(false).withQuality(0.9f)
                 .isAlphaCompression(false)
                 .build());
 
-        ImageData decoded = factory.fromFile(out);
+        ImageData decoded = ImageFactory.fromFile(out);
         PixelBuffer got = decoded.getFrames().getFirst().pixels();
         for (int y = 0; y < 8; y++)
             for (int x = 0; x < 8; x++) {
@@ -1311,8 +1296,7 @@ class WebPRoundTripTest {
             throw new org.opentest4j.TestAbortedException(
                 "weapon_ss4.webp not present - diagnostic only");
 
-        ImageFactory factory = new ImageFactory();
-        ImageData src_decoded = factory.fromFile(src.toFile());
+        ImageData src_decoded = ImageFactory.fromFile(src.toFile());
         if (!(src_decoded instanceof AnimatedImageData anim))
             throw new AssertionError("expected AnimatedImageData, got " + src_decoded.getClass());
 
@@ -1322,7 +1306,7 @@ class WebPRoundTripTest {
         long srcSize = java.nio.file.Files.size(src);
 
         File out = outputDir.resolve("weapon_ss4_reencoded.webp").toFile();
-        factory.toFile(anim, ImageFormat.WEBP, out,
+        ImageFactory.toFile(anim, ImageFormat.WEBP, out,
             WebPWriteOptions.builder().isLossless().build());
 
         long outSize = out.length();
@@ -1380,7 +1364,7 @@ class WebPRoundTripTest {
 
         // Round-trip sanity: our re-encoded output must decode back to the same pixels
         // as the reference input on every frame.
-        ImageData roundTripped = factory.fromFile(out);
+        ImageData roundTripped = ImageFactory.fromFile(out);
         if (!(roundTripped instanceof AnimatedImageData rtAnim))
             throw new AssertionError("round-trip expected AnimatedImageData");
         if (rtAnim.getFrames().size() != frameCount)
@@ -1443,7 +1427,7 @@ class WebPRoundTripTest {
 
         var image = new StaticImageData(ImageFrame.of(buf));
         File out = outputDir.resolve("palette_lossless_libwebp.webp").toFile();
-        new ImageFactory().toFile(image, ImageFormat.WEBP, out,
+        ImageFactory.toFile(image, ImageFormat.WEBP, out,
             WebPWriteOptions.builder().isLossless().build());
 
         int[] decoded;
@@ -1480,7 +1464,7 @@ class WebPRoundTripTest {
             }
         var image = new StaticImageData(ImageFrame.of(buf));
         File out = outputDir.resolve("tooltip_454x260.webp").toFile();
-        new ImageFactory().toFile(image, ImageFormat.WEBP, out, WebPWriteOptions.builder().isLossless().build());
+        ImageFactory.toFile(image, ImageFormat.WEBP, out, WebPWriteOptions.builder().isLossless().build());
         assertThat("file written", Files.size(out.toPath()), is(greaterThan(12L)));
     }
 

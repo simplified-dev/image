@@ -129,12 +129,11 @@ class StraightEncodeBytesTest {
 
     @TestFactory
     Stream<DynamicTest> factoryWritesTheWriterBytes() {
-        ImageFactory factory = new ImageFactory();
 
         return CASES.stream()
             .map(entry -> DynamicTest.dynamicTest(entry.name(), () -> {
                 ImageData image = image(entry.animated(), null);
-                assertThat(factory.toByteArray(image, entry.format(), entry.options()), equalTo(entry.write(image)));
+                assertThat(ImageFactory.toByteArray(image, entry.format(), entry.options()), equalTo(entry.write(image)));
             }));
     }
 

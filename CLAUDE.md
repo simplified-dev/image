@@ -4,7 +4,7 @@ Pure-Java codec library: BMP, GIF, JPEG, PNG, WebP (VP8 lossy + VP8L lossless). 
 
 ## Packages
 
-- `dev.simplified.image` - `ImageData`, `ImageFormat`, `ImageFactory` (instance facade - `fromFile`/`toFile`/`fromByteArray`/`toByteArray` plus `*s` batch variants)
+- `dev.simplified.image` - `ImageData`, `ImageFormat`, `ImageFactory` (static facade over a closed set of built-in codecs - `fromFile`/`toFile`/`fromByteArray`/`toByteArray` plus `*s` batch variants)
 - `.data` - `StaticImageData`, `AnimatedImageData`, `ImageFrame`, `FrameBlend`, `FrameDisposal`
 - `.pixel` - `PixelBuffer`, `PixelGraphics`, `ColorMath`, `BlendMode`, `Resample`
 - `.transform` - `FrameNormalizer`, `FitMode`

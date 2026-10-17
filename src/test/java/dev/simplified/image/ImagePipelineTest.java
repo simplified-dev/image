@@ -520,12 +520,10 @@ public class ImagePipelineTest {
     @Nested
     class ImageFactoryTests {
 
-        private final ImageFactory factory = new ImageFactory();
-
         @Test
         void fromImageWrapsBufferedImage() {
             BufferedImage image = createArgbTestImage(4, 4, Color.CYAN);
-            StaticImageData data = factory.fromImage(image);
+            StaticImageData data = ImageFactory.fromImage(image);
 
             assertThat(data.getWidth(), is(4));
             assertThat(data.isAnimated(), is(false));
@@ -537,7 +535,7 @@ public class ImagePipelineTest {
             images.add(createArgbTestImage(4, 4, Color.RED));
             images.add(createArgbTestImage(4, 4, Color.BLUE));
 
-            AnimatedImageData data = factory.fromImages(images, 100);
+            AnimatedImageData data = ImageFactory.fromImages(images, 100);
 
             assertThat(data.isAnimated(), is(true));
             assertThat(data.getFrames(), hasSize(2));
@@ -549,7 +547,7 @@ public class ImagePipelineTest {
             BufferedImage image = createRgbTestImage(4, 4, Color.RED);
             byte[] pngBytes = new PngImageWriter().write(StaticImageData.of(image));
 
-            ImageFormat format = factory.detectFormat(pngBytes);
+            ImageFormat format = ImageFactory.detectFormat(pngBytes);
             assertThat(format, is(ImageFormat.PNG));
         }
 
@@ -558,8 +556,8 @@ public class ImagePipelineTest {
             BufferedImage original = createRgbTestImage(8, 8, Color.GREEN);
             StaticImageData data = StaticImageData.of(original);
 
-            byte[] encoded = factory.toByteArray(data, ImageFormat.PNG);
-            ImageData decoded = factory.fromByteArray(encoded);
+            byte[] encoded = ImageFactory.toByteArray(data, ImageFormat.PNG);
+            ImageData decoded = ImageFactory.fromByteArray(encoded);
 
             assertThat(decoded.getWidth(), is(8));
             assertThat(decoded.getHeight(), is(8));
@@ -570,8 +568,8 @@ public class ImagePipelineTest {
             BufferedImage original = createRgbTestImage(4, 4, Color.BLUE);
             StaticImageData data = StaticImageData.of(original);
 
-            String base64 = factory.toBase64(data, ImageFormat.PNG);
-            ImageData decoded = factory.fromBase64(base64);
+            String base64 = ImageFactory.toBase64(data, ImageFormat.PNG);
+            ImageData decoded = ImageFactory.fromBase64(base64);
 
             assertThat(decoded.getWidth(), is(4));
             assertThat(decoded.getHeight(), is(4));
@@ -616,9 +614,8 @@ public class ImagePipelineTest {
 
         @Test
         void factoryDetectsQoiByMagic() {
-            ImageFactory factory = new ImageFactory();
             byte[] encoded = new QoiImageWriter().write(StaticImageData.of(createRgbTestImage(4, 4, Color.CYAN)));
-            assertThat(factory.detectFormat(encoded), is(ImageFormat.QOI));
+            assertThat(ImageFactory.detectFormat(encoded), is(ImageFormat.QOI));
         }
 
     }
@@ -832,9 +829,8 @@ public class ImagePipelineTest {
 
         @Test
         void factoryDetectsTgaByFooter() {
-            ImageFactory factory = new ImageFactory();
             byte[] encoded = new TgaImageWriter().write(StaticImageData.of(createRgbTestImage(4, 4, Color.PINK)));
-            assertThat(factory.detectFormat(encoded), is(ImageFormat.TGA));
+            assertThat(ImageFactory.detectFormat(encoded), is(ImageFormat.TGA));
         }
 
     }
@@ -879,9 +875,8 @@ public class ImagePipelineTest {
 
         @Test
         void factoryDetectsIcoByMagic() {
-            ImageFactory factory = new ImageFactory();
             byte[] encoded = new IcoImageWriter().write(StaticImageData.of(createArgbTestImage(16, 16, Color.WHITE)));
-            assertThat(factory.detectFormat(encoded), is(ImageFormat.ICO));
+            assertThat(ImageFactory.detectFormat(encoded), is(ImageFormat.ICO));
         }
 
     }
