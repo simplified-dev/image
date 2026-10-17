@@ -15,15 +15,38 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 class ImageFrameTest {
 
     @Test
-    @DisplayName("of(pixels) produces a zero-delay static frame")
+    @DisplayName("of(pixels) produces a zero-delay whole-canvas frame that replaces the one before it")
     void ofPixelsDefaults() {
         PixelBuffer pixels = PixelBuffer.create(2, 2);
         ImageFrame frame = ImageFrame.of(pixels);
+        assertThat(frame.pixels(), sameInstance(pixels));
         assertThat(frame.delayMs(), equalTo(0));
         assertThat(frame.offsetX(), equalTo(0));
         assertThat(frame.offsetY(), equalTo(0));
-        assertThat(frame.disposal(), equalTo(FrameDisposal.NONE));
+        assertThat(frame.disposal(), equalTo(FrameDisposal.RESTORE_TO_BACKGROUND));
         assertThat(frame.blend(), equalTo(FrameBlend.SOURCE));
+    }
+
+    @Test
+    @DisplayName("of(pixels, delayMs) produces a timed whole-canvas frame that replaces the one before it")
+    void ofPixelsDelayDefaults() {
+        PixelBuffer pixels = PixelBuffer.create(2, 2);
+        ImageFrame frame = ImageFrame.of(pixels, 40);
+        assertThat(frame.pixels(), sameInstance(pixels));
+        assertThat(frame.delayMs(), equalTo(40));
+        assertThat(frame.offsetX(), equalTo(0));
+        assertThat(frame.offsetY(), equalTo(0));
+        assertThat(frame.disposal(), equalTo(FrameDisposal.RESTORE_TO_BACKGROUND));
+        assertThat(frame.blend(), equalTo(FrameBlend.SOURCE));
+    }
+
+    @Test
+    @DisplayName("the six-argument of keeps the disposal and blend it is given")
+    void ofFullKeepsDisposalAndBlend() {
+        PixelBuffer pixels = PixelBuffer.create(2, 2);
+        ImageFrame frame = ImageFrame.of(pixels, 40, 1, 2, FrameDisposal.NONE, FrameBlend.OVER);
+        assertThat(frame.disposal(), equalTo(FrameDisposal.NONE));
+        assertThat(frame.blend(), equalTo(FrameBlend.OVER));
     }
 
     @Test
