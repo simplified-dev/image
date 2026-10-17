@@ -1,5 +1,8 @@
-package dev.simplified.image.pixel;
+package dev.simplified.image;
 
+import dev.simplified.image.pixel.AlphaMode;
+import dev.simplified.image.pixel.BlendMode;
+import dev.simplified.image.pixel.Resample;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -204,7 +207,7 @@ class PixelBufferRowScheduleTest {
         operations.put("premultiplyAlpha", inPlace(PixelBuffer::premultiplyAlpha));
         operations.put("unpremultiplyAlpha", inPlace(PixelBuffer::unpremultiplyAlpha));
         operations.put("lerp", buffer -> PixelBuffer.lerp(buffer, other, 0.35f));
-        operations.put("tint", buffer -> ColorMath.tint(buffer, 0xFF80C0E0));
+        operations.put("tint", buffer -> buffer.tint(0xFF80C0E0));
 
         for (BlendMode mode : BlendMode.values()) {
             operations.put("blit " + mode, inPlace(buffer -> buffer.blit(source, -5, 30, mode)));

@@ -1,7 +1,7 @@
 package dev.simplified.image.codec.webp.lossless;
 
+import dev.simplified.image.PixelBuffer;
 import dev.simplified.image.codec.webp.RiffContainer;
-import dev.simplified.image.pixel.PixelBuffer;
 import org.jetbrains.annotations.NotNull;
 
 /**

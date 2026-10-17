@@ -1,4 +1,4 @@
-package dev.simplified.image.pixel;
+package dev.simplified.image;
 
 import jdk.incubator.vector.FloatVector;
 import jdk.incubator.vector.IntVector;

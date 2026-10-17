@@ -2,9 +2,9 @@ package dev.simplified.image.codec.webp.lossy;
 
 import dev.simplified.collection.Concurrent;
 import dev.simplified.collection.ConcurrentList;
+import dev.simplified.image.PixelBuffer;
 import dev.simplified.image.codec.webp.RiffContainer;
 import dev.simplified.image.codec.webp.WebPChunk;
-import dev.simplified.image.pixel.PixelBuffer;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;

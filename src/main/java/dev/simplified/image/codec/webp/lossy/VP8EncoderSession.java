@@ -1,6 +1,6 @@
 package dev.simplified.image.codec.webp.lossy;
 
-import dev.simplified.image.pixel.PixelBuffer;
+import dev.simplified.image.PixelBuffer;
 import org.jetbrains.annotations.NotNull;
 
 import java.util.concurrent.ForkJoinPool;

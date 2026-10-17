@@ -2,9 +2,9 @@ package dev.simplified.image.codec.gif;
 
 import dev.simplified.image.AnimatedImageData;
 import dev.simplified.image.ImageData;
+import dev.simplified.image.PixelBuffer;
 import dev.simplified.image.frame.ImageFrame;
 import dev.simplified.image.option.GifWriteOptions;
-import dev.simplified.image.pixel.PixelBuffer;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.junit.jupiter.api.DisplayName;

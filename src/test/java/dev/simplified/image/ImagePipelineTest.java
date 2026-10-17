@@ -29,7 +29,6 @@ import dev.simplified.image.option.PnmWriteOptions;
 import dev.simplified.image.option.TgaWriteOptions;
 import dev.simplified.image.option.TiffWriteOptions;
 import dev.simplified.image.pixel.AlphaMode;
-import dev.simplified.image.pixel.PixelBuffer;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 

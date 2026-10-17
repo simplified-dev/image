@@ -1,8 +1,5 @@
-package dev.simplified.image;
+package dev.simplified.image.pixel;
 
-import dev.simplified.image.pixel.BlendMode;
-import dev.simplified.image.pixel.ColorMath;
-import dev.simplified.image.pixel.PixelBuffer;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -169,17 +166,6 @@ class ColorMathTest {
     }
 
     @Test
-    @DisplayName("tint multiplies RGB channels and preserves alpha")
-    void tintPreservesAlpha() {
-        PixelBuffer source = PixelBuffer.of(new int[]{ 0x80FFFFFF }, 1, 1);
-        PixelBuffer tinted = ColorMath.tint(source, 0xFFFF0000);
-        assertThat(ColorMath.alpha(tinted.getPixel(0, 0)), equalTo(0x80));
-        assertThat(ColorMath.red(tinted.getPixel(0, 0)), equalTo(0xFF));
-        assertThat(ColorMath.green(tinted.getPixel(0, 0)), equalTo(0x00));
-        assertThat(ColorMath.blue(tinted.getPixel(0, 0)), equalTo(0x00));
-    }
-
-    @Test
     @DisplayName("blend MULTIPLY rounds half-up to match OpenGL normalized fixed-point")
     void blendMultiplyRoundsHalfUp() {
         // 200 * 200 / 255 = 156.862... Truncation gives 156, round-half-up gives 157.
@@ -230,29 +216,6 @@ class ColorMathTest {
     void blendQuadraticAddTransparentSourceNoOp() {
         int dst = 0xFF123456;
         assertThat(ColorMath.blend(0x00FFFFFF, dst, BlendMode.QUADRATIC_ADD), equalTo(dst));
-    }
-
-    @Test
-    @DisplayName("tint SIMD prefix and scalar tail produce bit-identical per-pixel output")
-    void tintSimdScalarParity() {
-        // SPECIES_PREFERRED is typically 4-8 int lanes. A 1-pixel buffer exercises only the
-        // scalar fallback (loopBound(1) = 0). A 64-pixel buffer exercises the SIMD prefix for
-        // most/all pixels. Both should produce identical per-pixel output - this catches drift
-        // between scalar and SIMD rounding conventions.
-        int sourcePixel = 0xC0C8C8C8; // alpha=192, RGB=200; mid-range to expose rounding
-        int tint = 0xFFC8C8C8;        // tint=200 per channel
-
-        PixelBuffer scalarOnly = PixelBuffer.of(new int[]{ sourcePixel }, 1, 1);
-        PixelBuffer scalarTinted = ColorMath.tint(scalarOnly, tint);
-        int scalarResult = scalarTinted.getPixel(0, 0);
-
-        int[] bulk = new int[64];
-        java.util.Arrays.fill(bulk, sourcePixel);
-        PixelBuffer simdInput = PixelBuffer.of(bulk, 64, 1);
-        PixelBuffer simdTinted = ColorMath.tint(simdInput, tint);
-        for (int i = 0; i < 64; i++)
-            assertThat("pixel " + i + " (SIMD lane vs scalar)",
-                simdTinted.getPixel(i, 0), equalTo(scalarResult));
     }
 
 }

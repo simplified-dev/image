@@ -1,4 +1,4 @@
-package dev.simplified.image.pixel;
+package dev.simplified.image;
 
 import dev.simplified.annotations.UtilityClass;
 import org.jetbrains.annotations.NotNull;

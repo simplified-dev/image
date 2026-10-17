@@ -2,6 +2,7 @@ package dev.simplified.image.codec;
 
 import dev.simplified.image.AnimatedImageData;
 import dev.simplified.image.ImageData;
+import dev.simplified.image.PixelBuffer;
 import dev.simplified.image.StaticImageData;
 import dev.simplified.image.codec.bmp.BmpImageWriter;
 import dev.simplified.image.codec.ico.IcoImageReader;
@@ -23,7 +24,6 @@ import dev.simplified.image.frame.FrameDisposal;
 import dev.simplified.image.frame.ImageFrame;
 import dev.simplified.image.option.WebPWriteOptions;
 import dev.simplified.image.pixel.AlphaMode;
-import dev.simplified.image.pixel.PixelBuffer;
 import org.jetbrains.annotations.NotNull;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

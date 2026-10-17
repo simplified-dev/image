@@ -33,7 +33,6 @@ import dev.simplified.image.exception.UnsupportedFormatException;
 import dev.simplified.image.frame.ImageFrame;
 import dev.simplified.image.option.ImageReadOptions;
 import dev.simplified.image.option.ImageWriteOptions;
-import dev.simplified.image.pixel.PixelBuffer;
 import dev.simplified.util.StringUtil;
 import dev.simplified.util.SystemUtil;
 import dev.simplified.util.io.ByteArrayDataOutput;

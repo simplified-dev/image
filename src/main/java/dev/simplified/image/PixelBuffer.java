@@ -1,8 +1,16 @@
-package dev.simplified.image.pixel;
+package dev.simplified.image;
 
 import dev.simplified.annotations.EqualsAndHashCode;
 import dev.simplified.annotations.Getter;
 import dev.simplified.annotations.NamingStyle;
+import dev.simplified.image.pixel.AlphaMode;
+import dev.simplified.image.pixel.BlendMode;
+import dev.simplified.image.pixel.ColorMath;
+import dev.simplified.image.pixel.DiffType;
+import dev.simplified.image.pixel.PixelDiff;
+import dev.simplified.image.pixel.PixelGraphics;
+import dev.simplified.image.pixel.PixelMask;
+import dev.simplified.image.pixel.Resample;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -32,7 +40,7 @@ import java.util.stream.IntStream;
  * <h2>SIMD acceleration</h2>
  * <p>
  * Selected per-pixel methods ({@link #grayscale}, {@link #multiplyAlpha}, {@link #premultiplyAlpha},
- * {@link #lerp}, and {@link ColorMath#tint}) transparently use the JDK Vector API when the
+ * {@link #lerp}, and {@link #tint}) transparently use the JDK Vector API when the
  * incubator module is resolvable at runtime. To opt in, pass the following flag to the consuming
  * JVM:
  * <pre><code>--add-modules jdk.incubator.vector</code></pre>
@@ -595,6 +603,27 @@ public class PixelBuffer {
         });
     }
 
+    /**
+     * Multiplies every pixel's RGB channels by the given tint, preserving alpha.
+     *
+     * @param argbTint the packed ARGB tint colour
+     * @return a new tinted pixel buffer with the same dimensions
+     */
+    public @NotNull PixelBuffer tint(int argbTint) {
+        int w = this.width;
+        int h = this.height;
+        int[] result = new int[w * h];
+        int[] src = this.data;
+
+        int tr = ColorMath.red(argbTint);
+        int tg = ColorMath.green(argbTint);
+        int tb = ColorMath.blue(argbTint);
+
+        forEachRow(0, h, y -> PixelVector.tint(src, result, y * w, w, tr, tg, tb));
+
+        return of(result, w, h);
+    }
+
     // --- compositing ---
 
     /**
@@ -828,7 +857,7 @@ public class PixelBuffer {
      * @param mode the blend mode to use for compositing
      */
     public void blitTinted(@NotNull PixelBuffer source, int dx, int dy, int argbTint, @NotNull BlendMode mode) {
-        blit(ColorMath.tint(source, argbTint), dx, dy, mode);
+        blit(source.tint(argbTint), dx, dy, mode);
     }
 
     // --- diff ---

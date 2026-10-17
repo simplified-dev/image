@@ -1,4 +1,6 @@
-package dev.simplified.image.pixel;
+package dev.simplified.image;
+
+import dev.simplified.image.pixel.ColorMath;
 
 /**
  * Dispatches per-pixel operations to a SIMD implementation when the JDK Vector API is resolvable

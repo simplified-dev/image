@@ -1,5 +1,7 @@
 package dev.simplified.image.pixel;
 
+import dev.simplified.image.PixelBuffer;
+
 /**
  * Per-pixel difference visualisations between two {@link PixelBuffer}s.
  * <p>
