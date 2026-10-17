@@ -104,10 +104,10 @@ class StraightEncodeBytesTest {
         Map.entry("TIFF_NONE_STILL", "8dc6591655bd62af99881727fb9e64f5809dbec0cdf4838f4be5e1fce4d6f09e"),
         Map.entry("TIFF_NONE_ANIMATED", "ea02eaab2c1328f3b8756cc8c195613439ee61cee8028f546793ca4d13656155"),
         Map.entry("WEBP_LOSSLESS_STILL", "642ce11754e544861cfe26efc47cd952fc33e4c8fd38139fed9d87977722dc5d"),
-        Map.entry("WEBP_LOSSY_STILL", "957cabbb37b4474f15bdb55a05658f42498cf91c4fc21df6ede4d36643edbf94"),
+        Map.entry("WEBP_LOSSY_STILL", "7bf8af47ab03f93d62c91daf976ba85e1bfd93beb75bb67c5e9d5593fa56e8ca"),
         Map.entry("WEBP_LOSSLESS_ANIMATED", "0b137cc105d6423c9378f3720288c9021e887e67f71893213025020ae81b90f0"),
-        Map.entry("WEBP_LOSSY_ANIMATED", "4a817ee2674fe2fc6438d70365ba6a25928095c56e8a2cebd1c58702f8517112"),
-        Map.entry("WEBP_LOSSY_ANIMATED_P_FRAMES", "87a3207aee2bf1d291e965f4a961700fcfd5afc2982e88ced35196fa3b25b114")
+        Map.entry("WEBP_LOSSY_ANIMATED", "3371ca46adb294e0aba25e47185baa231e9d6728e8f8211a4aaa05dcddc46e7f"),
+        Map.entry("WEBP_LOSSY_ANIMATED_P_FRAMES", "01fc1410fc2a3dbb8eab219cb587b03f4019ef6f36ea15ff6add294365c456ca")
     );
 
     @TestFactory

@@ -25,7 +25,7 @@ Every package has a `package-info.java` charter saying what belongs in it. `guar
 
 ## VP8 codec state
 
-The encoder writes keyframes and, opt-in, P-frames. A keyframe macroblock is coded either whole, as 16x16 DC/V/H/TM picked by distortion plus mode cost, or as B_PRED, each 4x4 sub-block taking the best of the ten sub-block modes by rate-distortion score; the lower score of the two wins. Chroma takes one of the four 8x8 modes the same way. Coefficients are trellis-quantized against the frame's token costs, the normal loop filter runs at a level derived from the quantizer (zero, so off, at the top of the quality range), and tokens go out over four partitions.
+The encoder writes keyframes and, opt-in, P-frames. Each source chroma sample averages its 2x2 block of pixels, weighting a partly transparent block by alpha as libwebp's `AccumulateRGBA` does. A keyframe macroblock is coded either whole, as 16x16 DC/V/H/TM picked by distortion plus mode cost, or as B_PRED, each 4x4 sub-block taking the best of the ten sub-block modes by rate-distortion score; the lower score of the two wins. Chroma takes one of the four 8x8 modes the same way. Coefficients are trellis-quantized against the frame's token costs, the normal loop filter runs at a level derived from the quantizer (zero, so off, at the top of the quality range), and tokens go out over four partitions.
 
 P-frames (`WebPWriteOptions.usePFrames`, through `VP8EncoderSession`) predict from the LAST reference only. Each macroblock takes the best rate-distortion score of ZEROMV skip, NEAREST and NEAR with and without residual, NEWMV from a motion search, SPLITMV, and intra 16x16 or B_PRED, and the motion-vector, mode and token probabilities update with a one-frame lag. GOLDEN and ALTREF are filled by each keyframe and are never refreshed or predicted from. `WebPWriteOptions.autoSegment` adds variance-based segmentation: four segments, each with its own quantizer delta. libwebp decodes the keyframe output and rejects every P-frame, so P-frame output reads back only through this library and libvpx-based decoders.
 
@@ -54,4 +54,4 @@ The VP8 and WebP tests check this library's output against libwebp through Pytho
 - External deps: Log4j2, Simplified Annotations, JetBrains annotations
 - Third-party code: `NOTICE` names every class ported from libwebp, libvpx or RFC 6386 and carries their licences; the jar packs it into `META-INF` with `LICENSE.md`, the Apache-2.0 text it points to. Code or tables taken from another codec get a line there too
 - Tests: JUnit 5 + Hamcrest
-- 93 main sources plus a `package-info.java` per package; 34 test sources
+- 93 main sources plus a `package-info.java` per package; 35 test sources
