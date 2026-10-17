@@ -14,13 +14,13 @@ import java.util.concurrent.ForkJoinPool;
  * applies the same loop filter the decoder will. A keyframe populates all three
  * slots identically. A P-frame's emitted {@code refresh_last} / {@code refresh_golden}
  * / {@code refresh_alt} flags and {@code copy_buffer_to_golden} / {@code copy_buffer_to_alt}
- * selectors decide which slots update at the end of encode. Our default encoder emits
+ * selectors decide which slots update at the end of encode. The encoder emits
  * {@code refresh_last = 1} and {@code refresh_golden = refresh_alt = 0} with no
- * buffer copies, so only LAST updates per P-frame; extension to long-range prediction
- * via GOLDEN / ALTREF is left to future work.
+ * buffer copies, so only LAST updates per P-frame, and no P-frame predicts from
+ * GOLDEN or ALTREF.
  * <p>
  * For stateless single-frame encoding prefer {@link VP8Encoder#encode(PixelBuffer, float)},
- * which internally allocates a throwaway session.
+ * which codes a keyframe and keeps no reference.
  *
  * @see VP8Encoder
  * @see VP8DecoderSession

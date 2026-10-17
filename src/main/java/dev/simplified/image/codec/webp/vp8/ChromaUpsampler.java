@@ -18,8 +18,6 @@ import org.jetbrains.annotations.NotNull;
  *   BL = (3a +  b + 9c + 3d + 8) / 16
  *   BR = ( a + 3b + 3c + 9d + 8) / 16
  * </pre>
- * Replaces the prior nearest-neighbor sampling, which produced ~10 LSB per-channel
- * drift against libwebp on smooth chroma gradients.
  *
  * @see <a href="https://chromium.googlesource.com/webm/libwebp/+/refs/heads/main/src/dsp/upsampling.c">libwebp upsampling.c</a>
  */

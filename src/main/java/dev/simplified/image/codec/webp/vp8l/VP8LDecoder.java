@@ -11,9 +11,9 @@ import java.util.List;
 /**
  * Pure Java VP8L (WebP lossless) decoder.
  * <p>
- * Decodes a VP8L bitstream into ARGB pixel data using Huffman coding,
- * LZ77 backward references, color cache, and four reversible transforms
- * (predictor, color, subtract-green, color-indexing).
+ * Decodes a VP8L bitstream into ARGB pixel data using Huffman coding, with
+ * meta-Huffman groups selected per tile, LZ77 backward references, color cache,
+ * and four reversible transforms (predictor, color, subtract-green, color-indexing).
  */
 @ApiStatus.Internal
 public final class VP8LDecoder {

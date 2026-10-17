@@ -8,20 +8,26 @@ import org.jetbrains.annotations.NotNull;
  * Pure Java VP8L (WebP lossless) encoder.
  * <p>
  * Emits a spec-compliant bitstream that reference {@code libwebp} decoders accept.
- * Supports LZ77 backward references on top of literal pixel emission: a hash-chain
- * match finder locates repeated pixel runs, and matches of length
+ * {@link #encode(PixelBuffer)} tries every combination of one reversible transform -
+ * none, the {@link VP8LTransform.ColorIndexing} palette when the source has at most 256
+ * unique colors, the spatial predictor, subtract-green or the cross-color transform -
+ * with the color cache off or at 10 bits, and with one Huffman group for the whole image
+ * or meta-Huffman groups over 256x256 tiles, and keeps the smallest output. The other
+ * overloads fix those choices.
+ * <p>
+ * Pixels are coded with LZ77 backward references on top of literal pixel emission: a
+ * hash-chain match finder locates repeated pixel runs, and matches of length
  * {@value LZ77#MIN_MATCH} or longer are emitted as length/distance symbol pairs
  * in the extended green alphabet (literal bytes at positions 0..255, length
  * codes at 256..279). Distances are mapped to libwebp's 2-D plane-code space
- * via {@link LZ77#distanceToPlaneCode} before prefix encoding.
+ * via {@link LZ77#distanceToPlaneCode} before prefix encoding. With one Huffman group, a
+ * second pass re-decides every literal, match and cache hit by dynamic programming over
+ * bit costs estimated from the first, and the cheaper of the two token streams is written.
  * <p>
- * Applies the {@link VP8LTransform.ColorIndexing} palette transform automatically when
- * the source has at most 256 unique colors: each pixel's ARGB is replaced by its
- * palette index in the green channel, sub-bit packed horizontally (1/2/4 bits per pixel
- * for palettes of 2/4/16 entries respectively), and the palette itself is emitted as
- * a delta-encoded {@code 1xN} sub-image after the transform header. Matches libwebp
- * {@code -m 3} method behaviour at a simplified feature subset: no multi-Huffman tile
- * groups, no color-cache, no predictor / cross-color / subtract-green transforms yet.
+ * The palette transform replaces each pixel's ARGB by its palette index in the green
+ * channel, sub-bit packed horizontally (1/2/4 bits per pixel for palettes of 2/4/16
+ * entries respectively), and emits the palette itself as a delta-encoded {@code 1xN}
+ * sub-image after the transform header.
  * <p>
  * The encoder uses <i>simple prefix codes</i> (is_simple = 1) for alphabets with one or
  * two distinct used symbols, and normal prefix codes with a proper Huffman tree for
@@ -69,13 +75,6 @@ public final class VP8LEncoder {
     private VP8LEncoder() { }
 
     /**
-     * Encodes {@code pixels} into a VP8L payload suitable for wrapping in a {@code VP8L}
-     * WebP chunk (via {@code RiffContainer#createChunk}).
-     *
-     * @param pixels the ARGB source buffer
-     * @return the encoded VP8L bitstream
-     */
-    /**
      * Color-cache trial sizes, in bits. 0 = cache disabled.
      */
     private static final int[] CACHE_BITS_TRIALS = { 0, 10 };
@@ -121,6 +120,14 @@ public final class VP8LEncoder {
         CROSS_COLOR
     }
 
+    /**
+     * Encodes {@code pixels} into a VP8L payload suitable for wrapping in a {@code VP8L}
+     * WebP chunk (via {@code RiffContainer#createChunk}), keeping the smallest of every
+     * transform, color-cache and meta-Huffman combination tried.
+     *
+     * @param pixels the ARGB source buffer
+     * @return the encoded VP8L bitstream
+     */
     public static byte @NotNull [] encode(@NotNull PixelBuffer pixels) {
         // Try every combination of (transform in {none, palette, predictor}) x
         // (cache off / cache 10-bit) and keep the smallest output. Palette helps when a

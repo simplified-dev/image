@@ -13,7 +13,7 @@ Defects present in the current tree and not yet fixed, most severe first. Each e
 ## VP8 encoder point-samples 4:2:0 chroma instead of averaging
 `Macroblock.fromARGB` takes each 2x2 block's Cb/Cr from its top-left pixel rather than averaging the four pixels, so every lossy WebP encode aliases thin colour detail such as one-pixel lines and coloured text edges. The bitstream stays valid; the cost is fidelity.
 
-- Affected: `src/main/java/dev/simplified/image/codec/webp/vp8/Macroblock.java:76-81` (`fromARGB`); callers `src/main/java/dev/simplified/image/codec/webp/vp8/VP8Encoder.java:1598`, `:2212`, `:3107`
+- Affected: `src/main/java/dev/simplified/image/codec/webp/vp8/Macroblock.java:76-81` (`fromARGB`); callers `src/main/java/dev/simplified/image/codec/webp/vp8/VP8Encoder.java:1602`, `:2216`, `:3111`
 - Severity: **MEDIUM**
 - Type: **BUG**
 - Status: **OPEN**
@@ -192,14 +192,6 @@ The GIF NETSCAPE loop count and the WebP `ANIM` loop count pass unchanged into `
 - Affected: repository root, `src/main/java/dev/simplified/image/codec/webp/vp8/VP8Tables.java`, `src/main/java/dev/simplified/image/codec/webp/vp8/VP8Costs.java`
 - Severity: **LOW**
 - Type: **RISK**
-- Status: **OPEN**
-
-## Stale class javadocs on VP8/VP8L codec classes
-Four class headers describe shipped features as absent or future work: `VP8Encoder` calls V/H/TM and B_PRED future work, `VP8Decoder` says only keyframes are supported, `VP8LEncoder` says there are no multi-Huffman groups, colour cache or transforms, and `VP8TokenDecoder` anticipates a spec-compliant decoder that already exists.
-
-- Affected: `src/main/java/dev/simplified/image/codec/webp/vp8/VP8Encoder.java:11-14`, `src/main/java/dev/simplified/image/codec/webp/vp8/VP8Decoder.java:20-22`, `src/main/java/dev/simplified/image/codec/webp/vp8l/VP8LEncoder.java:22-24`, `src/main/java/dev/simplified/image/codec/webp/vp8/VP8TokenDecoder.java:9-11`
-- Severity: **LOW**
-- Type: **GAP**
 - Status: **OPEN**
 
 ## `resize` takes no alpha convention, and its two smoothing filters assume opposite ones

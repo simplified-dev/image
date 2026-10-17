@@ -1,10 +1,15 @@
 package dev.simplified.image.codec.webp.vp8;
 
 /**
- * Default probability tables used by VP8 keyframe encoding and decoding.
+ * Constant tables of the VP8 bitstream, shared by the encoder and the decoder, for
+ * keyframes and inter frames alike: coefficient bands, zig-zag order and token
+ * categories, quantizer steps, the intra and inter mode trees with their
+ * probabilities, and the motion-vector and SPLITMV tables.
  * <p>
- * Copied verbatim from libwebp's {@code src/dec/tree_dec.c}. Exact values are
- * required for libwebp-compatible bitstreams; do not adjust.
+ * The keyframe token and mode tables are copied verbatim from libwebp's
+ * {@code src/dec/tree_dec.c}, and the inter-frame mode, motion-vector and SPLITMV
+ * tables from libvpx. Exact values are required for a bitstream any VP8 decoder
+ * reads; do not adjust.
  *
  * @see <a href="https://datatracker.ietf.org/doc/html/rfc6386#section-13">RFC 6386 section 13</a>
  */
