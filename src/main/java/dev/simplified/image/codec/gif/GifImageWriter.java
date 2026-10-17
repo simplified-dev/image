@@ -8,6 +8,8 @@ import dev.simplified.image.ImageFormat;
 import dev.simplified.image.codec.ImageWriteOptions;
 import dev.simplified.image.codec.ImageWriter;
 import dev.simplified.image.data.AnimatedImageData;
+import dev.simplified.image.data.FrameBlend;
+import dev.simplified.image.data.FrameDisposal;
 import dev.simplified.image.data.ImageFrame;
 import dev.simplified.util.io.ByteArrayDataOutput;
 import org.jetbrains.annotations.NotNull;
@@ -33,6 +35,11 @@ import java.util.Map;
 /**
  * Writes GIF images (static and animated) via {@link ImageIO}, configuring
  * per-frame disposal, delay, and loop count metadata.
+ * <p>
+ * GIF has no blend flag, so a frame's {@link FrameBlend} is written through the disposal of the
+ * frame before it: a frame that blends {@link FrameBlend#SOURCE} follows one declared
+ * {@link FrameDisposal#RESTORE_TO_BACKGROUND}, and so starts from a clear canvas rather than showing
+ * the frame before it through its transparent pixels.
  */
 public class GifImageWriter implements ImageWriter {
 
@@ -103,7 +110,7 @@ public class GifImageWriter implements ImageWriter {
 
             for (ImageFrame frame : data.getFrames()) {
                 IIOMetadata metadata = writer.getDefaultImageMetadata(specifier, param);
-                configureFrameMetadata(metadata, frame, delaysCs[frameIdx], transparent, transparentColorIndex);
+                configureFrameMetadata(metadata, writtenDisposal(data.getFrames(), frameIdx), delaysCs[frameIdx], transparent, transparentColorIndex);
 
                 if (firstFrame) {
                     configureLoopMetadata(metadata, loopCount);
@@ -122,7 +129,7 @@ public class GifImageWriter implements ImageWriter {
         } else {
             ImageFrame frame = data.getFrames().getFirst();
             IIOMetadata metadata = writer.getDefaultImageMetadata(specifier, param);
-            configureFrameMetadata(metadata, frame, delaysCs[0], transparent, transparentColorIndex);
+            configureFrameMetadata(metadata, frame.disposal(), delaysCs[0], transparent, transparentColorIndex);
             BufferedImage indexedFrame = buildIndexedFrame(
                 flattenedPixels, 0, frame.pixels().width(), frame.pixels().height(),
                 palette, transparent, transparentColorIndex);
@@ -517,10 +524,34 @@ public class GifImageWriter implements ImageWriter {
         return delaysCs;
     }
 
+    /**
+     * Resolves the disposal frame {@code index} of an animation is declared with.
+     * <p>
+     * Every frame is laid over what the frame before it left, so the only way for a frame to start
+     * from a clear canvas is the previous frame's disposal. A frame followed by one that blends
+     * {@link FrameBlend#SOURCE} is therefore declared {@link FrameDisposal#RESTORE_TO_BACKGROUND}, and
+     * a frame followed by one that blends {@link FrameBlend#OVER} is declared with its own disposal.
+     * The last frame is followed by the first, every animation written here declaring a loop count
+     * that has a player start it over. A lone frame is followed by nothing and keeps its own disposal.
+     *
+     * @param frames the animation's frames, in playback order
+     * @param index the index of the frame being written
+     * @return the disposal to declare for the frame
+     */
+    private static @NotNull FrameDisposal writtenDisposal(@NotNull ConcurrentList<ImageFrame> frames, int index) {
+        ImageFrame frame = frames.get(index);
+
+        if (frames.size() == 1)
+            return frame.disposal();
+
+        ImageFrame next = frames.get((index + 1) % frames.size());
+        return next.blend() == FrameBlend.SOURCE ? FrameDisposal.RESTORE_TO_BACKGROUND : frame.disposal();
+    }
+
     @SilentThrows
     private static void configureFrameMetadata(
         @NotNull IIOMetadata metadata,
-        @NotNull ImageFrame frame,
+        @NotNull FrameDisposal disposal,
         int delayCs,
         boolean transparent,
         int transparentColorIndex
@@ -529,7 +560,7 @@ public class GifImageWriter implements ImageWriter {
         IIOMetadataNode root = (IIOMetadataNode) metadata.getAsTree(formatName);
 
         IIOMetadataNode gce = getOrCreateNode(root, "GraphicControlExtension");
-        gce.setAttribute("disposalMethod", frame.disposal().getMethod());
+        gce.setAttribute("disposalMethod", disposal.getMethod());
         gce.setAttribute("userInputFlag", "FALSE");
         gce.setAttribute("transparentColorFlag", String.valueOf(transparent));
         gce.setAttribute("delayTime", Integer.toString(delayCs));
