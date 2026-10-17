@@ -310,3 +310,8 @@ guidelines, and how to submit a pull request.
 
 This project is licensed under the **Apache License 2.0** - see
 [LICENSE.md](LICENSE.md) for the full text.
+
+The WebP codecs port code and tables from [libwebp](https://chromium.googlesource.com/webm/libwebp)
+and [libvpx](https://chromium.googlesource.com/webm/libvpx), both BSD-licensed, and from RFC 6386.
+[NOTICE](NOTICE) names what each one supplies and carries their copyright notices and licence
+terms; the jar ships it under `META-INF`.

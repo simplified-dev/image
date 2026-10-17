@@ -57,6 +57,12 @@ tasks.withType<Javadoc>().configureEach {
     (options as StandardJavadocDocletOptions).addStringOption("-add-modules", "jdk.incubator.vector")
 }
 
+// NOTICE carries the libwebp, libvpx and RFC 6386 attributions, whose licences require them to
+// travel with a binary as well as with the source.
+tasks.jar {
+    metaInf { from("NOTICE") }
+}
+
 tasks.test {
     useJUnitPlatform()
     jvmArgs(vectorModuleArgs)

@@ -52,5 +52,6 @@ VP8 lossy tests shell out to Python `webp` package (libwebp bindings) for round-
 - Java 21 toolchain (`build.gradle.kts`)
 - Internal deps: Simplified-Dev `collections`, `utils` (both pulled via JitPack, pinned to a commit)
 - External deps: Log4j2, Simplified Annotations, JetBrains annotations
+- Third-party code: `NOTICE` names every class ported from libwebp, libvpx or RFC 6386 and carries their licences; the jar packs it into `META-INF`. Code or tables taken from another codec get a line there too
 - Tests: JUnit 5 + Hamcrest
 - 94 main sources plus a `package-info.java` per package; 22 test sources

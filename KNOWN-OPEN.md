@@ -186,10 +186,10 @@ The GIF NETSCAPE loop count and the WebP `ANIM` loop count pass unchanged into `
 - Type: **GAP**
 - Status: **OPEN**
 
-## No NOTICE / third-party attribution file
-`VP8Tables` and `VP8Costs` carry tables copied from libwebp, whose BSD licence requires its copyright notice to travel with redistributed source and binaries. The repo root holds only `LICENSE.md` (Apache-2.0), `README.md`, `CONTRIBUTING.md` and `CLAUDE.md`, and no libwebp notice appears anywhere in the tree. Tables taken from further BSD-licensed codecs would need the same.
+## NOTICE names no licence for the RFC 6386 code `BooleanEncoder` ports
+`NOTICE` carries libwebp's and libvpx's copyright notices and BSD licences for the classes ported from each, and the jar ships it under `META-INF`. `BooleanEncoder` ports the boolean entropy encoder section 7.3 of RFC 6386 sets out, and for that `NOTICE` records only the RFC's copyright line and the IETF Trust provisions it is subject to. RFC 6386 is an Independent Submission; its section 20.26 licenses the reference decoder source it attaches under Google's BSD terms, and nothing in this repo says whether those terms, the Trust's code-component licence, or neither reaches the encoder fragment in the RFC's body (UNVERIFIED either way). Until that is settled `NOTICE` may owe a licence text for the port. MEDIUM once a redistributor needs every licence named.
 
-- Affected: repository root, `src/main/java/dev/simplified/image/codec/webp/vp8/VP8Tables.java`, `src/main/java/dev/simplified/image/codec/webp/vp8/VP8Costs.java`
+- Affected: `NOTICE`, `src/main/java/dev/simplified/image/codec/webp/vp8/BooleanEncoder.java`
 - Severity: **LOW**
 - Type: **RISK**
 - Status: **OPEN**
