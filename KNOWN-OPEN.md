@@ -13,7 +13,7 @@ Defects present in the current tree and not yet fixed, most severe first. Each e
 ## GIF writer misreads frames of different sizes and drops frame offsets
 `flattenAllFrames` packs every frame's pixels back to back, but the write loop reads frame i at `i * frameStride`, where `frameStride` is the largest frame's area, so an animation whose frames differ in size is written from the wrong slices and the last one overruns the array: frames of 4x4, 2x2 and 2x2 throw `ArrayIndexOutOfBoundsException: Index 32 out of bounds for length 24`. `configureFrameMetadata` writes only the GraphicControlExtension and never the ImageDescriptor's `imageLeftPosition` / `imageTopPosition`, so every frame is written at the origin. A GIF this library decodes - partial frames at offsets - therefore cannot be re-encoded: it throws, or, where its partial frames happen to share one size, it is written with every frame moved to the top-left corner. The writer hands ImageIO no stream metadata either, so the Logical Screen Descriptor declares the first frame's size rather than the image's canvas: two 8x8 frames on a 16x16 canvas are written with an 8x8 screen and read back 8x8, and a decoded GIF whose screen is larger than its first frame is written with the smaller one. HIGH once a caller re-encodes decoded GIFs.
 
-- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:117-143` (`write`, the `frameStride` read, and `prepareWriteSequence(null)` at `:119`), `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:179` (`flattenAllFrames`), `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:589-607` (`configureFrameMetadata`)
+- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:117-143` (`write`, the `frameStride` read, and `prepareWriteSequence(null)` at `:119`), `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:179` (`flattenAllFrames`), `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:576-594` (`configureFrameMetadata`)
 - Severity: **MEDIUM**
 - Type: **BUG**
 - Status: **OPEN**
@@ -48,14 +48,6 @@ When `usePartialFrames` holds - every lossless write, and every lossy write with
 - Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:190-191` (`read`), `:248` (`onCanvas`), `src/main/java/dev/simplified/image/codec/pnm/PnmImageReader.java:64`, `src/main/java/dev/simplified/image/codec/qoi/QoiImageReader.java:60`, `src/main/java/dev/simplified/image/codec/tga/TgaImageReader.java:69`, `src/main/java/dev/simplified/image/codec/webp/WebPImageReader.java:88-89`
 - Severity: **MEDIUM**
 - Type: **RISK**
-- Status: **OPEN**
-
-## GIF writer floors the flatten of a straight image
-`flattenAllFrames` lays a partly transparent straight pixel over the background as `(c * a + bg * (255 - a)) / 255`, an integer division, so every such pixel lands up to a level low: at worst 0.996 of a level from the exact composite over 455,168 cases (backgrounds 0, 1, 16, 127, 128, 198 and 255, every partial alpha, every straight level), where the premultiplied flatten beside it, rounded once, lands within 0.498. A straight image and its premultiplied twin therefore flatten up to a level apart. Rounding it moves the bytes of every GIF written from a straight image with partial alpha. MEDIUM once a caller holds GIF output to an exact composite.
-
-- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:215-217` (`flattenAllFrames`)
-- Severity: **LOW**
-- Type: **BUG**
 - Status: **OPEN**
 
 ## ICO magic collides with a 256-byte ISOBMFF `ftyp` box

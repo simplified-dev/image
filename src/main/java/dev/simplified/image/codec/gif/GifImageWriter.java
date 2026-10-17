@@ -167,8 +167,8 @@ public class GifImageWriter implements ImageWriter {
      * <p>
      * A partly transparent pixel is blended by the convention {@link ImageData#getAlphaMode()}
      * reports: premultiplied colour is laid over the background with
-     * {@link BlendMode#PREMULTIPLIED}, rounded once, and straight colour is weighted by its alpha
-     * against the background.
+     * {@link BlendMode#PREMULTIPLIED} and straight colour with {@link BlendMode#STRAIGHT}, each
+     * rounded once.
      *
      * @param data the image whose frames are flattened
      * @param backgroundRgb the RGB a pixel below full alpha is laid over
@@ -182,11 +182,8 @@ public class GifImageWriter implements ImageWriter {
         boolean transparent,
         int alphaThreshold
     ) {
-        boolean premultiplied = data.getAlphaMode() == AlphaMode.PREMULTIPLIED;
+        BlendMode over = data.getAlphaMode() == AlphaMode.PREMULTIPLIED ? BlendMode.PREMULTIPLIED : BlendMode.STRAIGHT;
         int opaqueBackground = 0xFF000000 | backgroundRgb;
-        int bgR = (backgroundRgb >> 16) & 0xFF;
-        int bgG = (backgroundRgb >> 8) & 0xFF;
-        int bgB = backgroundRgb & 0xFF;
         int totalPixels = 0;
         for (ImageFrame frame : data.getFrames())
             totalPixels += frame.pixels().data().length;
@@ -205,17 +202,7 @@ public class GifImageWriter implements ImageWriter {
                     out[offset + i] = 0xFF000000 | (argb & 0xFFFFFF);
                     continue;
                 }
-                if (premultiplied) {
-                    out[offset + i] = 0xFF000000 | ColorMath.blend(argb, opaqueBackground, BlendMode.PREMULTIPLIED);
-                    continue;
-                }
-                int r = (argb >> 16) & 0xFF;
-                int g = (argb >> 8) & 0xFF;
-                int b = argb & 0xFF;
-                int outR = (r * a + bgR * (255 - a)) / 255;
-                int outG = (g * a + bgG * (255 - a)) / 255;
-                int outB = (b * a + bgB * (255 - a)) / 255;
-                out[offset + i] = 0xFF000000 | (outR << 16) | (outG << 8) | outB;
+                out[offset + i] = 0xFF000000 | ColorMath.blend(argb, opaqueBackground, over);
             }
             offset += src.length;
         }

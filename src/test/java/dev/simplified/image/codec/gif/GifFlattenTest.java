@@ -54,9 +54,8 @@ class GifFlattenTest {
     @Test
     @DisplayName("premultiplied colour is laid over a grey background, rounded once")
     void premultipliedOverGrey() {
-        // Converting to straight colour first and flattening that would give FF870707 and FF101010 at
-        // the first and third pixels - one more rounding and a floor - and reading the premultiplied
-        // colour as straight would give FF480707 and FF0F0F0F.
+        // Reading the premultiplied colour as straight would give FF480808 and FF101010 at the first
+        // and third pixels.
         assertFlattens(0x101010, false, AlphaMode.PREMULTIPLIED, 0xFF880808, 0xFF2C2C2C, 0xFF111111, 0xFF101010, 0xFF336699, 0xFF484848);
     }
 
@@ -74,15 +73,16 @@ class GifFlattenTest {
         // Alpha 128 is the threshold: a pixel there is flattened rather than turned transparent, by the
         // rule of the convention the image holds.
         assertFlattens(0x101010, true, AlphaMode.PREMULTIPLIED, 0xFF880808, CLEAR, CLEAR, CLEAR, 0xFF336699, 0xFF484848);
-        assertFlattens(0x101010, true, AlphaMode.STRAIGHT, 0xFF480707, CLEAR, CLEAR, CLEAR, 0xFF336699, 0xFF282828);
+        assertFlattens(0x101010, true, AlphaMode.STRAIGHT, 0xFF480808, CLEAR, CLEAR, CLEAR, 0xFF336699, 0xFF282828);
     }
 
     // ──── straight colour over the background ────
 
     @Test
-    @DisplayName("straight colour is laid over the background as straight colour")
+    @DisplayName("straight colour is laid over the background as straight colour, rounded once")
     void straightOverGrey() {
-        assertFlattens(0x101010, false, AlphaMode.STRAIGHT, 0xFF480707, 0xFF141414, 0xFF0F0F0F, 0xFF101010, 0xFF336699, 0xFF282828);
+        // Flooring the composite would give FF480707 and FF0F0F0F at the first and third pixels.
+        assertFlattens(0x101010, false, AlphaMode.STRAIGHT, 0xFF480808, 0xFF141414, 0xFF101010, 0xFF101010, 0xFF336699, 0xFF282828);
     }
 
     // ──── animations ────
