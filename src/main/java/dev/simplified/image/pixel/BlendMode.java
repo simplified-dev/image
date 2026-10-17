@@ -4,7 +4,8 @@ package dev.simplified.image.pixel;
  * Per-pixel alpha compositing modes for ARGB pixel blending.
  * <p>
  * Mode semantics operate on ARGB pixel pairs where {@code src} is the incoming pixel and
- * {@code dst} is the pixel already on the surface. Alpha is always premultiplied into the output.
+ * {@code dst} is the pixel already on the surface. Each mode states which convention its colour is
+ * read and answered in.
  */
 public enum BlendMode {
 
@@ -44,6 +45,20 @@ public enum BlendMode {
      * two can differ only where the source carries partial alpha.
      */
     PREMULTIPLIED,
+
+    /**
+     * Source-over with both pixels held in straight colour, answered in straight colour. The result
+     * alpha equals {@code src.a + dst.a * (1 - src.a)}, and each colour channel equals
+     * {@code (src * src.a + dst * dst.a * (1 - src.a)) / alpha}, rounded to nearest.
+     * <p>
+     * This is how one straight image is laid over another - a decoded image over a fill, or a frame
+     * over the canvas an animation has drawn so far. A fully transparent destination takes the source
+     * unchanged, so a translucent pixel keeps its own colour rather than darkening.
+     * <p>
+     * It agrees with {@link #NORMAL} on every source whose alpha is {@code 0} or {@code 255}, and over
+     * an opaque destination the two differ only by rounding.
+     */
+    STRAIGHT,
 
     /**
      * Additive blend, clamped to byte range. The result equals

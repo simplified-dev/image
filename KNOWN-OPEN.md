@@ -19,7 +19,7 @@ Defects present in the current tree and not yet fixed, most severe first. Each e
 - Status: **OPEN**
 
 ## WebP writer refuses an animation whose frames do not cover its canvas from the origin
-`writeAnimated` encodes every frame as though its pixels spanned the canvas from the origin - frame 0's ANMF is declared canvas-sized and each later frame is diffed pixel for pixel against the one before - so `requireCanvasFrames` refuses with `ImageEncodeException` any animation holding a frame of another size or at an offset. A decoded GIF whose first frame is smaller than its logical screen, or whose later frames are partial, is such an animation, and cannot be written as WebP at all: two 4x4 frames on an 8x8 screen, the second at (4, 4), are refused at frame 0, and a 4x4 frame followed by a 2x2 one at (1, 1) at frame 1. An ANMF chunk carries its own offset, at even coordinates, and its own blend and disposal flags, so the container can hold such frames as they are; GIF's `RESTORE_TO_PREVIOUS` disposal has no WebP flag, and a frame disposed so needs the timeline renderer this library lacks. Nothing in the workspace re-encodes a decoded GIF as WebP today. HIGH once a caller converts GIFs to WebP.
+`writeAnimated` encodes every frame as though its pixels spanned the canvas from the origin - frame 0's ANMF is declared canvas-sized and each later frame is diffed pixel for pixel against the one before - so `requireCanvasFrames` refuses with `ImageEncodeException` any animation holding a frame of another size or at an offset. A decoded GIF whose first frame is smaller than its logical screen, or whose later frames are partial, is such an animation, and cannot be written as WebP at all: two 4x4 frames on an 8x8 screen, the second at (4, 4), are refused at frame 0, and a 4x4 frame followed by a 2x2 one at (1, 1) at frame 1. An ANMF chunk carries its own offset, at even coordinates, and its own blend and disposal flags, so the container can hold such frames as they are; GIF's `RESTORE_TO_PREVIOUS` disposal has no WebP flag. `ImageData#toCanvasFrames` composes such an animation into whole-canvas frames the writer accepts, but the writer does not call it, so a caller must. Nothing in the workspace re-encodes a decoded GIF as WebP today. HIGH once a caller converts GIFs to WebP.
 
 - Affected: `src/main/java/dev/simplified/image/codec/webp/WebPImageWriter.java:145` (`writeAnimated`), `:309-320` (`requireCanvasFrames`)
 - Severity: **MEDIUM**
@@ -29,7 +29,7 @@ Defects present in the current tree and not yet fixed, most severe first. Each e
 ## No downscale averages: `blitScaled` decimates
 `blitScaled` and `blitScaledFxaa` map each destination pixel to one source pixel (`x * sw / dw`, read from the column table `sourceColumns` builds) and offer no other filter, and `resize` offers `NEAREST`, a 2x2 `BILINEAR` with no prefilter, and AWT `BICUBIC`. The library's one box filter, `PixelMask.downsample`, is boolean. A supersampled render scaled down through either composite keeps one sample of each block and discards the rest, so the supersampling averages nothing, and a `BILINEAR` downscale beyond 2x aliases the same way. asset-renderer's `RasterPass` scales down through `blitScaledFxaa` when it anti-aliases and through `blitScaled` when it does not: FXAA smooths the hi-res pixels the scale-down samples, and the scale-down still keeps one sample per block - a decimation of a filtered source. What such a caller needs is an area-averaging downsample of premultiplied colour.
 
-- Affected: `src/main/java/dev/simplified/image/PixelBuffer.java:715-788` (`blitScaled`), `src/main/java/dev/simplified/image/PixelBuffer.java:813-848` (`blitScaledFxaa`), `src/main/java/dev/simplified/image/PixelBuffer.java:1241-1248` (`sourceColumns`), `src/main/java/dev/simplified/image/PixelBuffer.java:384-428` (`resize`), `src/main/java/dev/simplified/image/pixel/PixelMask.java:90` (`downsample`)
+- Affected: `src/main/java/dev/simplified/image/PixelBuffer.java:728-801` (`blitScaled`), `src/main/java/dev/simplified/image/PixelBuffer.java:826-861` (`blitScaledFxaa`), `src/main/java/dev/simplified/image/PixelBuffer.java:1254-1261` (`sourceColumns`), `src/main/java/dev/simplified/image/PixelBuffer.java:384-428` (`resize`), `src/main/java/dev/simplified/image/pixel/PixelMask.java:90` (`downsample`)
 - Severity: **MEDIUM**
 - Type: **GAP**
 - Status: **OPEN**
@@ -58,22 +58,6 @@ When `usePartialFrames` holds - every lossless write, and every lossy write with
 - Type: **BUG**
 - Status: **OPEN**
 
-## `Background.composite` lays every image down as premultiplied colour, whatever it holds
-`composite` blits each frame onto the fill with `BlendMode.PREMULTIPLIED`, on the assumption that a finished render's colours already carry their alpha, and premultiplies the fill only under an image declared `PREMULTIPLIED`. A straight image - anything decoded - is therefore laid down with its colour unscaled and comes out too bright wherever it is partly transparent. `getAlphaMode` would let it blend a straight image with `NORMAL`, but every caller in the workspace passes asset-renderer renders, which hold premultiplied colour under the default `STRAIGHT` until that consumer declares them, so honouring the label now would move their bytes. MEDIUM once a caller composites a decoded image.
-
-- Affected: `src/main/java/dev/simplified/image/pixel/Background.java:91-110` (`composite`), `src/main/java/dev/simplified/image/pixel/Background.java:121-130` (`over`)
-- Severity: **LOW**
-- Type: **RISK**
-- Status: **OPEN**
-
-## `Background.composite` backgrounds each frame's rectangle rather than the canvas
-`over` fills a buffer the size of each frame, so the canvas outside every frame keeps no fill, and a partial `OVER` frame comes out opaque over its rectangle under an opaque fill, hiding what earlier frames drew where it was transparent. A checkerboard is anchored at each frame's own corner, so its cells shift between frames at different offsets. A decoded GIF, partial `OVER` frames at offsets, reaches it; nothing in the workspace composites one, every animation asset-renderer composites placing its frames at the origin. MEDIUM once a caller composites a decoded GIF. The code fix waits on the disposal/blend-aware timeline renderer this library lacks.
-
-- Affected: `src/main/java/dev/simplified/image/pixel/Background.java:91-110` (`composite`), `src/main/java/dev/simplified/image/pixel/Background.java:121-130` (`over`)
-- Severity: **LOW**
-- Type: **BUG**
-- Status: **OPEN**
-
 ## ICO magic collides with a 256-byte ISOBMFF `ftyp` box
 The ICO arm of `ImageFormat.matches` accepts `00 00 01 00`, which is also the big-endian size field of a 256-byte `ftyp` box, and `ImageFactory` lists the ICO reader ahead of any format added later, so `detectFormat` tries ICO before it. No ISOBMFF-based format ships today; MEDIUM once one (AVIF, HEIF) is added after ICO.
 
@@ -86,14 +70,6 @@ The ICO arm of `ImageFormat.matches` accepts `00 00 01 00`, which is also the bi
 `WebPChunk.Type` names `ICCP`, `EXIF` and `XMP `, but no reader or writer carries them and `ImageData` has no metadata field, so colour profiles and Exif are lost on every WebP round trip. MEDIUM once a wide-gamut or HDR format depends on its colour metadata.
 
 - Affected: `src/main/java/dev/simplified/image/codec/webp/WebPChunk.java:39-54`, `src/main/java/dev/simplified/image/codec/webp/WebPImageReader.java`, `src/main/java/dev/simplified/image/codec/webp/WebPImageWriter.java`, `src/main/java/dev/simplified/image/ImageData.java`
-- Severity: **LOW**
-- Type: **GAP**
-- Status: **OPEN**
-
-## No disposal/blend-aware timeline renderer
-`FrameNormalizer` resizes and positions frames but passes disposal and blend through unchanged, and nothing composites a GIF/WebP timeline (offsets, `OVER` blending, `RESTORE_*` disposal) into full canvases. A target format that only carries full-canvas frames cannot be written from such input without one.
-
-- Affected: `src/main/java/dev/simplified/image/frame/FrameNormalizer.java:31-137`
 - Severity: **LOW**
 - Type: **GAP**
 - Status: **OPEN**
@@ -117,7 +93,7 @@ The ICO arm of `ImageFormat.matches` accepts `00 00 01 00`, which is also the bi
 ## FXAA's absolute thresholds are 0-to-1 luma constants read against a 0-to-255 luma
 `fxaaPixel`, the per-pixel body `applyFxaa` and `blitScaledFxaa` share, skips a neighbourhood whose contrast is under `max(0.0156, lumaMax * 0.0312)` and floors its direction reduction at `1/128`. Those are FXAA's values for luma in `[0, 1]`, but the luma here is in `[0, 255]`, so both floors are effectively inert: the relative threshold decides every case above near-black, and the direction floor never binds there. Not checked against a reference shader; changing either moves every FXAA output.
 
-- Affected: `src/main/java/dev/simplified/image/PixelBuffer.java:983-984`, `src/main/java/dev/simplified/image/PixelBuffer.java:1008`, `src/main/java/dev/simplified/image/PixelBuffer.java:1014-1017` (`fxaaPixel`)
+- Affected: `src/main/java/dev/simplified/image/PixelBuffer.java:996-997`, `src/main/java/dev/simplified/image/PixelBuffer.java:1021`, `src/main/java/dev/simplified/image/PixelBuffer.java:1027-1030` (`fxaaPixel`)
 - Severity: **LOW**
 - Type: **RISK**
 - Status: **OPEN**

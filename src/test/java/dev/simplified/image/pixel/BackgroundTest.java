@@ -16,6 +16,7 @@ import org.junit.jupiter.api.Test;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.instanceOf;
 import static org.hamcrest.Matchers.is;
+import static org.hamcrest.Matchers.lessThanOrEqualTo;
 import static org.hamcrest.Matchers.sameInstance;
 
 class BackgroundTest {
@@ -66,16 +67,26 @@ class BackgroundTest {
     }
 
     @Test
-    @DisplayName("composite shows the fill through a translucent render as drawing it over the fill would")
+    @DisplayName("composite shows the fill through a translucent premultiplied render as drawing it over the fill would")
     void compositesTranslucentRenderAsDrawnOverFill() {
         int source = 0x80FFFFFF;
         int fill = 0xFF204060;
         PixelBuffer rendered = PixelBuffer.create(1, 1);
         rendered.setPixel(0, 0, ColorMath.blend(source, ColorMath.TRANSPARENT, BlendMode.NORMAL));
 
-        PixelBuffer result = Background.solid(fill).composite(StaticImageData.of(rendered)).toPixelBuffer();
+        PixelBuffer result = Background.solid(fill).composite(StaticImageData.of(rendered, AlphaMode.PREMULTIPLIED)).toPixelBuffer();
         assertThat(result.getPixel(0, 0), is(0xFF90A0B0));
         assertThat(result.getPixel(0, 0), is(ColorMath.blend(source, fill, BlendMode.NORMAL)));
+    }
+
+    @Test
+    @DisplayName("composite lays a straight image down as straight colour")
+    void compositesStraightImageAsStraightColour() {
+        PixelBuffer rendered = PixelBuffer.create(1, 1);
+        rendered.setPixel(0, 0, 0x80FF0000);
+
+        PixelBuffer result = Background.solid(0xFF0000FF).composite(StaticImageData.of(rendered)).toPixelBuffer();
+        assertThat(result.getPixel(0, 0), is(0xFF80007F));
     }
 
     @Test
@@ -120,16 +131,50 @@ class BackgroundTest {
         assertThat(composited.getFrames().size(), is(2));
 
         for (int i = 0; i < 2; i++) {
-            ImageFrame source = animated.getFrames().get(i);
             ImageFrame frame = composited.getFrames().get(i);
-            assertThat(frame.width(), is(source.width()));
-            assertThat(frame.height(), is(source.height()));
-            assertThat(frame.delayMs(), is(source.delayMs()));
-            assertThat(frame.offsetX(), is(source.offsetX()));
-            assertThat(frame.offsetY(), is(source.offsetY()));
-            assertThat(frame.disposal(), is(source.disposal()));
-            assertThat(frame.blend(), is(source.blend()));
+            assertThat(frame.width(), is(8));
+            assertThat(frame.height(), is(6));
+            assertThat(frame.delayMs(), is(animated.getFrames().get(i).delayMs()));
+            assertThat(frame.offsetX(), is(0));
+            assertThat(frame.offsetY(), is(0));
+            assertThat(frame.disposal(), is(FrameDisposal.RESTORE_TO_BACKGROUND));
+            assertThat(frame.blend(), is(FrameBlend.SOURCE));
         }
+    }
+
+    @Test
+    @DisplayName("composite fills the whole canvas, outside every frame too, with a checkerboard anchored at the canvas origin")
+    void fillsTheWholeCanvasFromItsOrigin() {
+        AnimatedImageData animated = AnimatedImageData.builder()
+            .withWidth(8)
+            .withHeight(6)
+            .withFrame(ImageFrame.of(PixelBuffer.create(2, 2), 40, 4, 2, FrameDisposal.DO_NOT_DISPOSE, FrameBlend.OVER))
+            .withFrame(ImageFrame.of(PixelBuffer.create(2, 2), 40, 0, 0, FrameDisposal.DO_NOT_DISPOSE, FrameBlend.OVER))
+            .build();
+
+        PixelBuffer solid = Background.solid(0xFF222222).composite(animated).getFrames().getFirst().pixels();
+        assertThat(solid.getPixel(0, 0), is(0xFF222222));
+        assertThat(solid.getPixel(7, 5), is(0xFF222222));
+
+        PixelBuffer board = Background.checkerboard(0xFFAAAAAA, 0xFF555555, 2).composite(animated).getFrames().getFirst().pixels();
+        assertThat(board.getPixel(4, 2), is(0xFF555555));
+        assertThat(board.getPixel(0, 0), is(0xFFAAAAAA));
+    }
+
+    @Test
+    @DisplayName("a partly transparent OVER frame shows the frame beneath it, not the fill")
+    void overFrameShowsTheFrameBeneath() {
+        PixelBuffer red = PixelBuffer.create(4, 4);
+        red.fill(0xFFFF0000);
+        AnimatedImageData animated = AnimatedImageData.builder()
+            .withWidth(4)
+            .withHeight(4)
+            .withFrame(ImageFrame.of(red, 40, 0, 0, FrameDisposal.DO_NOT_DISPOSE, FrameBlend.SOURCE))
+            .withFrame(ImageFrame.of(PixelBuffer.create(2, 2), 40, 0, 0, FrameDisposal.DO_NOT_DISPOSE, FrameBlend.OVER))
+            .build();
+
+        PixelBuffer second = Background.solid(0xFF222222).composite(animated).getFrames().getLast().pixels();
+        assertThat(second.getPixel(0, 0), is(0xFFFF0000));
     }
 
     @Test
@@ -191,16 +236,20 @@ class BackgroundTest {
     }
 
     @Test
-    @DisplayName("an opaque fill composites the same pixels whichever convention the image is held in")
-    void opaqueFillIgnoresTheConvention() {
-        PixelBuffer rendered = PixelBuffer.create(4, 4);
+    @DisplayName("a straight image and its premultiplied copy composite to the same colours over an opaque fill")
+    void straightAndPremultipliedCompositeAlike() {
+        PixelBuffer straight = PixelBuffer.create(4, 4);
         for (int i = 0; i < 16; i++)
-            rendered.data()[i] = ((i * 17) << 24) | ((i * 7) << 16) | ((i * 3) << 8) | i;
+            straight.data()[i] = ((i * 17) << 24) | ((i * 7) << 16) | ((i * 3) << 8) | i;
+        PixelBuffer premultiplied = straight.copy();
+        premultiplied.premultiplyAlpha();
 
         for (Background background : new Background[] { Background.solid(0xFF204060), Background.checkerboard() }) {
-            PixelBuffer straight = background.composite(StaticImageData.of(rendered)).toPixelBuffer();
-            PixelBuffer premultiplied = background.composite(StaticImageData.of(rendered, AlphaMode.PREMULTIPLIED)).toPixelBuffer();
-            assertThat(premultiplied.data(), is(straight.data()));
+            int[] fromStraight = background.composite(StaticImageData.of(straight)).toPixelBuffer().data();
+            int[] fromPremultiplied = background.composite(StaticImageData.of(premultiplied, AlphaMode.PREMULTIPLIED)).toPixelBuffer().data();
+            for (int i = 0; i < 16; i++)
+                for (int shift = 0; shift <= 24; shift += 8)
+                    assertThat(Math.abs(((fromStraight[i] >>> shift) & 0xFF) - ((fromPremultiplied[i] >>> shift) & 0xFF)), is(lessThanOrEqualTo(1)));
         }
     }
 

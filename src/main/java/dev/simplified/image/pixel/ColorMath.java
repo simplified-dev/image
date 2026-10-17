@@ -158,6 +158,7 @@ public class ColorMath {
             case NORMAL -> blendNormal(src, dst);
             case REPLACE -> src;
             case PREMULTIPLIED -> blendPremultiplied(src, dst);
+            case STRAIGHT -> blendStraight(src, dst);
             case ADD -> blendAdd(src, dst);
             case MULTIPLY -> blendMultiply(src, dst);
             case OVERLAY -> blendOverlay(src, dst);
@@ -233,6 +234,28 @@ public class ColorMath {
         int g = Math.min(255, green(src) + Math.round(green(dst) * invSrcA));
         int b = Math.min(255, blue(src) + Math.round(blue(dst) * invSrcA));
         int a = Math.round(sa + alpha(dst) * invSrcA);
+        return pack(a, r, g, b);
+    }
+
+    private static int blendStraight(int src, int dst) {
+        int sa = alpha(src);
+        if (sa == 0xFF) return src;
+        if (sa == 0) return dst;
+
+        int da = alpha(dst);
+        if (da == 0) return src;
+
+        // Weights in units of 255 * 255: the source's colour counts sa * 255, the destination's
+        // da * (255 - sa), and their sum is the output alpha in the same units.
+        int srcWeight = sa * 255;
+        int dstWeight = da * (255 - sa);
+        int outWeight = srcWeight + dstWeight;
+        int half = outWeight >> 1;
+
+        int r = (red(src) * srcWeight + red(dst) * dstWeight + half) / outWeight;
+        int g = (green(src) * srcWeight + green(dst) * dstWeight + half) / outWeight;
+        int b = (blue(src) * srcWeight + blue(dst) * dstWeight + half) / outWeight;
+        int a = (outWeight + 127) / 255;
         return pack(a, r, g, b);
     }
 
