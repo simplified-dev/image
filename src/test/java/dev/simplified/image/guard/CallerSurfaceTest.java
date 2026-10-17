@@ -29,7 +29,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
@@ -58,15 +57,17 @@ import static org.hamcrest.Matchers.is;
  *   however it is spelled and whether it is written or generated.</li>
  *   <li><b>Kinds.</b> Every options type lives in {@code option}, and every concrete reader and writer in
  *   a format's package one level below {@code codec}.</li>
- *   <li><b>Shared helpers.</b> {@code codec.common} names no format, so no format depends on another
- *   through it.</li>
+ *   <li><b>Shared helpers.</b> {@code codec.common} and every package below it name no format, so no
+ *   format depends on another through them.</li>
  *   <li><b>Public internals.</b> Every type declared public in an internal package carries
  *   {@code @ApiStatus.Internal} and is named from another package. One that is not named elsewhere should
  *   be package-private.</li>
  * </ul>
  * <p>
  * An import counts when the file's code uses it: comments, text blocks and string and character literals
- * are stripped before the imported simple name is looked for, so a javadoc-only import is not an edge.
+ * are stripped before the imports are read and the imported simple name is looked for, so a javadoc-only
+ * import is not an edge and a trailing comment hides none. An on-demand import of an internal package
+ * always counts, because the text cannot say which of the names it supplies the code uses.
  * Test sources sit outside every rule, because the white-box tests reach package-private members by
  * design.
  * <p>
@@ -93,7 +94,7 @@ class CallerSurfaceTest {
     /** The prefix every internal package carries, relative to the root. */
     private static final String INTERNAL = "codec.";
 
-    /** The package the codecs share helpers through, which names no format. */
+    /** The package the codecs share helpers through, which names no format, and nor does any package below it. */
     private static final String COMMON = "codec.common";
 
     /** The package every options type lives in. */
@@ -109,8 +110,8 @@ class CallerSurfaceTest {
     /** A package declaration. */
     private static final Pattern PACKAGE = Pattern.compile("(?m)^package\\s+([\\w.]+)\\s*;");
 
-    /** An import, static or not. */
-    private static final Pattern IMPORT = Pattern.compile("(?m)^import\\s+(static\\s+)?([\\w.]+)\\s*;[ \\t]*$");
+    /** An import, static or not, of one name or on demand, read from a source's stripped text. */
+    private static final Pattern IMPORT = Pattern.compile("(?m)^import\\s+(static\\s+)?([\\w.]+(?:\\.\\*)?)\\s*;[ \\t]*$");
 
     /** Comments, text blocks, string and character literals - text a type name can sit in without being used. */
     private static final Pattern NOISE = Pattern.compile(
@@ -129,11 +130,10 @@ class CallerSurfaceTest {
      *
      * @param path where it is
      * @param pkg its declared package
-     * @param text its text as written
-     * @param stripped its text with comments and literals blanked, annotations and declarations intact
+     * @param stripped its text with comments and literals blanked, imports, annotations and declarations intact
      * @param code its stripped text with the import lines blanked too, which is what a use is looked for in
      */
-    private record Source(Path path, String pkg, String text, String stripped, String code) {}
+    private record Source(Path path, String pkg, String stripped, String code) {}
 
     /**
      * One type declared in an internal source.
@@ -187,7 +187,7 @@ class CallerSurfaceTest {
             .map(edge -> edge.key() + " (" + edge.path() + ")")
             .toList();
 
-        assertThat("codec.common sources importing a type of another codec package. A shared helper names no "
+        assertThat("sources in or below codec.common importing a type of another codec package. A shared helper names no "
             + "format, so that no format comes to depend on another through it", unrecorded, is(empty()));
     }
 
@@ -252,18 +252,18 @@ class CallerSurfaceTest {
     }
 
     /**
-     * Collects every import by which a {@code codec.common} source's code names a type of another internal
-     * package.
+     * Collects every import by which the code of a source in {@code codec.common}, or in a package below it,
+     * names a type of another internal package.
      *
      * @return the edges
      */
     private static List<Edge> commonEdges() {
         List<Edge> edges = new ArrayList<>();
         for (Source source : sources()) {
-            if (!relative(source.pkg()).orElse("").equals(COMMON) || isCharter(source)) continue;
+            if (relative(source.pkg()).filter(CallerSurfaceTest::isCommon).isEmpty() || isCharter(source)) continue;
             for (String imported : usedImports(source)) {
                 Optional<String> to = packageOf(imported).flatMap(CallerSurfaceTest::relative);
-                if (to.isPresent() && isInternal(to.get()) && !to.get().equals(COMMON))
+                if (to.isPresent() && isInternal(to.get()) && !isCommon(to.get()))
                     edges.add(new Edge(typeName(source), imported.substring(BASE.length() + 1), source.path()));
             }
         }
@@ -510,7 +510,8 @@ class CallerSurfaceTest {
 
     /**
      * Answers whether a main source outside a type's package names it in code - by importing it, or by
-     * importing a type it is nested in and writing the rest of the chain through that type.
+     * importing a type it is nested in and writing the rest of the chain through that type. An on-demand
+     * import imports every type declared directly in the package or type it names.
      *
      * @param pkg the type's package
      * @param chain the type's simple name, preceded by those of the types it is nested in
@@ -519,14 +520,16 @@ class CallerSurfaceTest {
     private static boolean isNamedElsewhere(String pkg, List<String> chain) {
         for (Source source : sources()) {
             if (source.pkg().equals(pkg)) continue;
-            Matcher imports = IMPORT.matcher(source.text());
+            Matcher imports = IMPORT.matcher(source.stripped());
             while (imports.find()) {
                 String imported = imports.group(2);
+                boolean onDemand = imported.endsWith(".*");
                 for (int i = 0; i < chain.size(); i++) {
                     String head = pkg + "." + String.join(".", chain.subList(0, i + 1));
-                    if (imports.group(1) != null && imported.startsWith(head + ".") && uses(source, last(imported)))
+                    if (!onDemand && imports.group(1) != null && imported.startsWith(head + ".") && uses(source, last(imported)))
                         return true;
-                    if (!imported.equals(head)) continue;
+                    String reached = onDemand ? imported.substring(0, imported.length() - 1) + chain.get(i) : imported;
+                    if (!reached.equals(head)) continue;
                     String spelled = String.join("\\s*\\.\\s*", chain.subList(i, chain.size()).stream().map(Pattern::quote).toList());
                     if (Pattern.compile("\\b" + spelled + "\\b").matcher(source.code()).find()) return true;
                 }
@@ -568,6 +571,16 @@ class CallerSurfaceTest {
     }
 
     /**
+     * Answers whether a package is the one the codecs share helpers through, or one below it.
+     *
+     * @param name the package, relative to the root
+     * @return {@code true} for {@link #COMMON} and every package below it
+     */
+    private static boolean isCommon(String name) {
+        return name.equals(COMMON) || name.startsWith(COMMON + ".");
+    }
+
+    /**
      * Resolves the package an imported name belongs to, walking nested types and static members back to it.
      *
      * @param imported the imported name
@@ -583,16 +596,18 @@ class CallerSurfaceTest {
     }
 
     /**
-     * Lists the imports of a source its code uses.
+     * Lists the imports of a source its code uses, counting every on-demand import as used.
      *
      * @param source the source
-     * @return each imported name whose last segment the code names
+     * @return each on-demand import, and each other imported name whose last segment the code names
      */
     private static List<String> usedImports(Source source) {
         List<String> used = new ArrayList<>();
-        Matcher imports = IMPORT.matcher(source.text());
-        while (imports.find())
-            if (uses(source, last(imports.group(2)))) used.add(imports.group(2));
+        Matcher imports = IMPORT.matcher(source.stripped());
+        while (imports.find()) {
+            String imported = imports.group(2);
+            if (imported.endsWith(".*") || uses(source, last(imported))) used.add(imported);
+        }
         return used;
     }
 
@@ -676,7 +691,7 @@ class CallerSurfaceTest {
         Matcher pkg = PACKAGE.matcher(text);
         if (!pkg.find()) return false;
         String head = text.substring(0, pkg.start());
-        return head.contains("/**") && head.contains("*/") && !IMPORT.matcher(text).find();
+        return head.contains("/**") && head.contains("*/") && !IMPORT.matcher(NOISE.matcher(text).replaceAll(" ")).find();
     }
 
     /** Every package a main source declares, read once. */
@@ -715,7 +730,7 @@ class CallerSurfaceTest {
                     Matcher pkg = PACKAGE.matcher(text);
                     if (!pkg.find()) continue;
                     String stripped = NOISE.matcher(text).replaceAll(" ");
-                    read.add(new Source(file, pkg.group(1), text, stripped, IMPORT.matcher(stripped).replaceAll(" ")));
+                    read.add(new Source(file, pkg.group(1), stripped, IMPORT.matcher(stripped).replaceAll(" ")));
                 }
             } catch (IOException ex) {
                 throw new UncheckedIOException(ex);
