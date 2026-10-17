@@ -29,7 +29,7 @@ Defects present in the current tree and not yet fixed, most severe first. Each e
 ## WebP reader keeps each frame's disposal and blend on frames it has already composed
 `readExtended` composites every ANMF frame onto the canvas - applying its blend and the prior frame's disposal - and emits the whole canvas at offset 0, but tags that full picture with the frame's original `disposal` and `blend`. A consumer that honours the flags composites each frame a second time: an `OVER` frame is blended over itself, and a `RESTORE_TO_BACKGROUND` frame clears a rectangle of a picture that is already whole. A composed frame carries no blend or disposal of its own to apply. HIGH once a consumer composites decoded WebPs by the flags.
 
-- Affected: `src/main/java/dev/simplified/image/codec/webp/WebPImageReader.java:251` (`readExtended`)
+- Affected: `src/main/java/dev/simplified/image/codec/webp/WebPImageReader.java:252` (`readExtended`)
 - Severity: **MEDIUM**
 - Type: **BUG**
 - Status: **OPEN**

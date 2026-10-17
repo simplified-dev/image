@@ -116,7 +116,7 @@ class WebPLoopCountTest {
     }
 
     @Test
-    @DisplayName("an animation with no ANIM chunk reads as playing once, as libwebp's demuxer assumes")
+    @DisplayName("an animation with no ANIM chunk, which the container forbids, reads as playing once")
     void missingAnimReadsAsPlayingOnce() {
         ConcurrentList<WebPChunk> chunks = Concurrent.newList();
         for (WebPChunk chunk : RiffContainer.parse(write(animation(LoopCount.Preset.INFINITE), null))) {

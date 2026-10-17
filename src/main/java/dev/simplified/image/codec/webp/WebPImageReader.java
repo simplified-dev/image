@@ -100,8 +100,9 @@ public class WebPImageReader implements ImageReader {
         // Animated
         WebPChunk animChunk = findChunk(chunks, WebPChunk.Type.ANIM);
         int backgroundColor = 0;
-        // ANIM counts plays, the first included, and 0 plays forever. A file with no ANIM chunk plays
-        // once, the count libwebp's demuxer starts from.
+        // ANIM counts plays, the first included, and 0 plays forever. The container requires an
+        // ANIM chunk in an animated file and libwebp rejects one without it; this reader accepts
+        // such a file and reads it as playing once.
         LoopCount loopCount = LoopCount.Preset.NONE;
 
         if (animChunk != null && animChunk.payloadLength() >= 6) {
