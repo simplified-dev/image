@@ -61,6 +61,20 @@ class PixelBufferTest {
     }
 
     @Test
+    @DisplayName("create refuses dimensions whose pixel count overflows an int")
+    void createRefusesAnOverflowingPixelCount() {
+        // 65535 * 65535 wraps to a negative count, 65536 * 65537 to the positive 65536.
+        assertThrows(ArithmeticException.class, () -> PixelBuffer.create(65535, 65535));
+        assertThrows(ArithmeticException.class, () -> PixelBuffer.create(65536, 65537));
+    }
+
+    @Test
+    @DisplayName("of refuses an array whose length matches the dimensions only once their product wraps")
+    void ofRefusesALengthMatchingAWrappedPixelCount() {
+        assertThrows(IllegalArgumentException.class, () -> PixelBuffer.of(new int[65536], 65536, 65537));
+    }
+
+    @Test
     @DisplayName("getRow / setRow roundtrip")
     void rowRoundtrip() {
         PixelBuffer buffer = PixelBuffer.create(3, 2);

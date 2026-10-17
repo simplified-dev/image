@@ -38,7 +38,7 @@ import java.util.stream.IntStream;
  * The canvas is the logical screen the GIF's Logical Screen Descriptor declares, grown to hold any
  * frame that reaches past it, as Pillow grows it. An animation's frames keep their own sizes and
  * offsets on it; a still's one frame is laid on it at its offset, the rest of the canvas left
- * transparent.
+ * transparent. A canvas longer than 16383 on a side is refused.
  * <p>
  * GIF has no blend flag: every frame is laid over what the previous frame's disposal left, a pixel
  * at the transparent index showing what lies beneath, so every frame is read
@@ -58,6 +58,12 @@ public class GifImageReader implements ImageReader {
      * The bit of an image descriptor's packed field that declares its frame interlaced.
      */
     private static final int INTERLACE_FLAG = 0x40;
+
+    /**
+     * The longest side of a canvas this reader decodes onto, the bound the WebP reader holds a VP8X
+     * canvas to.
+     */
+    private static final int MAX_CANVAS_SIDE = 16383;
 
     /**
      * The tallest interlaced frame ImageIO misplaces rows of, the pass starting at row 4 holding
@@ -180,6 +186,9 @@ public class GifImageReader implements ImageReader {
         }
 
         reader.dispose();
+
+        if (canvasWidth > MAX_CANVAS_SIDE || canvasHeight > MAX_CANVAS_SIDE)
+            throw new ImageDecodeException("GIF canvas '%dx%d' exceeds '%d' on a side", canvasWidth, canvasHeight, MAX_CANVAS_SIDE);
 
         if (frames.size() == 1)
             return StaticImageData.of(onCanvas(frames.getFirst(), canvasWidth, canvasHeight));

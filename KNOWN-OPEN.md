@@ -29,7 +29,7 @@ Defects present in the current tree and not yet fixed, most severe first. Each e
 ## No downscale averages: `blitScaled` decimates
 `blitScaled` and `blitScaledFxaa` map each destination pixel to one source pixel (`x * sw / dw`, read from the column table `sourceColumns` builds) and offer no other filter, and `resize` offers `NEAREST`, a 2x2 `BILINEAR` with no prefilter, and AWT `BICUBIC`. The library's one box filter, `PixelMask.downsample`, is boolean. A supersampled render scaled down through either composite keeps one sample of each block and discards the rest, so the supersampling averages nothing, and a `BILINEAR` downscale beyond 2x aliases the same way. asset-renderer's `RasterPass` scales down through `blitScaledFxaa` when it anti-aliases and through `blitScaled` when it does not: FXAA smooths the hi-res pixels the scale-down samples, and the scale-down still keeps one sample per block - a decimation of a filtered source. What such a caller needs is an area-averaging downsample of premultiplied colour.
 
-- Affected: `src/main/java/dev/simplified/image/PixelBuffer.java:714-787` (`blitScaled`), `src/main/java/dev/simplified/image/PixelBuffer.java:812-847` (`blitScaledFxaa`), `src/main/java/dev/simplified/image/PixelBuffer.java:1240-1247` (`sourceColumns`), `src/main/java/dev/simplified/image/PixelBuffer.java:383-427` (`resize`), `src/main/java/dev/simplified/image/pixel/PixelMask.java:90` (`downsample`)
+- Affected: `src/main/java/dev/simplified/image/PixelBuffer.java:715-788` (`blitScaled`), `src/main/java/dev/simplified/image/PixelBuffer.java:813-848` (`blitScaledFxaa`), `src/main/java/dev/simplified/image/PixelBuffer.java:1241-1248` (`sourceColumns`), `src/main/java/dev/simplified/image/PixelBuffer.java:384-428` (`resize`), `src/main/java/dev/simplified/image/pixel/PixelMask.java:90` (`downsample`)
 - Severity: **MEDIUM**
 - Type: **GAP**
 - Status: **OPEN**
@@ -40,6 +40,14 @@ When `usePartialFrames` holds - every lossless write, and every lossy write with
 - Affected: `src/main/java/dev/simplified/image/codec/webp/WebPImageWriter.java:164` (`usePartialFrames`), `:281-282`
 - Severity: **MEDIUM**
 - Type: **BUG**
+- Status: **OPEN**
+
+## No reader bounds the pixels a header asks for
+`GifImageReader` refuses a canvas longer than 16383 on a side, as `WebPImageReader` refuses a VP8X canvas, and the PNM, QOI and TGA readers throw `ArithmeticException` on a pixel count that overflows an `int`, but no reader bounds how many pixels it allocates, so a few header bytes can ask for gigabytes. Measured on a 512 MB heap: a 41-byte still GIF whose logical screen is 16383x16383, over one 1x1 frame, is laid on a canvas of 268,402,689 pixels, 1 GiB of `int`, and throws `OutOfMemoryError`, and so does the 19-byte PNM header `P6 40000 40000 255`. An animated GIF declares such a canvas without allocating it, leaving the allocation to whatever composites it. A pixel budget each reader checks before it allocates, as Pillow's `MAX_IMAGE_PIXELS` is, would bound it. asset-renderer decodes pack textures and skins by format detection, so a crafted file in a pack it is handed reaches a reader. HIGH once a service renders packs or skins it does not vet.
+
+- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:190-191` (`read`), `:248` (`onCanvas`), `src/main/java/dev/simplified/image/codec/pnm/PnmImageReader.java:64`, `src/main/java/dev/simplified/image/codec/qoi/QoiImageReader.java:60`, `src/main/java/dev/simplified/image/codec/tga/TgaImageReader.java:69`, `src/main/java/dev/simplified/image/codec/webp/WebPImageReader.java:88-89`
+- Severity: **MEDIUM**
+- Type: **RISK**
 - Status: **OPEN**
 
 ## GIF writer floors the flatten of a straight image
@@ -93,7 +101,7 @@ The ICO arm of `ImageFormat.matches` accepts `00 00 01 00`, which is also the bi
 ## `resize` takes no alpha convention, and its two smoothing filters assume opposite ones
 `BILINEAR` mixes every channel as it is held, which is correct for premultiplied colour and darkens a straight pixel beside a transparent one toward the transparent pixel's colour. `BICUBIC` draws through AWT with the raster declared straight, which is correct for straight colour and weights a premultiplied buffer by alpha twice. A caller cannot say which it holds, and switching filter switches the convention assumed. Nothing in the workspace resizes with either today. `resize(w, h, Resample, AlphaMode)` would route the bilinear sampler's alpha weighting and declare the AWT raster premultiplied where asked. `FrameNormalizer` scales frames through the same AWT bicubic from a straight-declared image, so it weights a premultiplied animation's colour by alpha twice, and fills its letterbox with a straight `Color`; it carries the animation's convention onto its output without honouring it. Nothing in the workspace normalizes premultiplied frames.
 
-- Affected: `src/main/java/dev/simplified/image/PixelBuffer.java:383-427` (`resize`), `src/main/java/dev/simplified/image/frame/FrameNormalizer.java:86-137` (`normalize`)
+- Affected: `src/main/java/dev/simplified/image/PixelBuffer.java:384-428` (`resize`), `src/main/java/dev/simplified/image/frame/FrameNormalizer.java:86-137` (`normalize`)
 - Severity: **LOW**
 - Type: **GAP**
 - Status: **OPEN**
@@ -101,7 +109,7 @@ The ICO arm of `ImageFormat.matches` accepts `00 00 01 00`, which is also the bi
 ## FXAA's absolute thresholds are 0-to-1 luma constants read against a 0-to-255 luma
 `fxaaPixel`, the per-pixel body `applyFxaa` and `blitScaledFxaa` share, skips a neighbourhood whose contrast is under `max(0.0156, lumaMax * 0.0312)` and floors its direction reduction at `1/128`. Those are FXAA's values for luma in `[0, 1]`, but the luma here is in `[0, 255]`, so both floors are effectively inert: the relative threshold decides every case above near-black, and the direction floor never binds there. Not checked against a reference shader; changing either moves every FXAA output.
 
-- Affected: `src/main/java/dev/simplified/image/PixelBuffer.java:982-983`, `src/main/java/dev/simplified/image/PixelBuffer.java:1007`, `src/main/java/dev/simplified/image/PixelBuffer.java:1013-1016` (`fxaaPixel`)
+- Affected: `src/main/java/dev/simplified/image/PixelBuffer.java:983-984`, `src/main/java/dev/simplified/image/PixelBuffer.java:1008`, `src/main/java/dev/simplified/image/PixelBuffer.java:1014-1017` (`fxaaPixel`)
 - Severity: **LOW**
 - Type: **RISK**
 - Status: **OPEN**
@@ -109,7 +117,7 @@ The ICO arm of `ImageFormat.matches` accepts `00 00 01 00`, which is also the bi
 ## `resize(BICUBIC)` always reports `hasAlpha = true`
 `NEAREST` and `BILINEAR` keep the source's `hasAlpha`; `BICUBIC` wraps a `TYPE_INT_ARGB` image, so an opaque buffer comes back flagged as carrying alpha and loses `blit`'s opaque fast path.
 
-- Affected: `src/main/java/dev/simplified/image/PixelBuffer.java:389`, `:400` (`resize`)
+- Affected: `src/main/java/dev/simplified/image/PixelBuffer.java:390`, `:401` (`resize`)
 - Severity: **LOW**
 - Type: **BUG**
 - Status: **OPEN**

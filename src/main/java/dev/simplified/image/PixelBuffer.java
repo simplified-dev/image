@@ -86,7 +86,7 @@ public class PixelBuffer {
     private @NotNull Optional<PixelMask> mask = Optional.empty();
 
     private PixelBuffer(int @NotNull [] data, int width, int height, boolean hasAlpha) {
-        if (data.length != width * height)
+        if (data.length != (long) width * height)
             throw new IllegalArgumentException("Pixel array length %d does not match dimensions %dx%d".formatted(data.length, width, height));
 
         this.data = data;
@@ -102,9 +102,10 @@ public class PixelBuffer {
      * @param width the buffer width in pixels
      * @param height the buffer height in pixels
      * @return a new pixel buffer
+     * @throws ArithmeticException if {@code width * height} overflows an int
      */
     public static @NotNull PixelBuffer create(int width, int height) {
-        return new PixelBuffer(new int[width * height], width, height, true);
+        return new PixelBuffer(new int[Math.multiplyExact(width, height)], width, height, true);
     }
 
     /**

@@ -4,6 +4,7 @@ import dev.simplified.image.AnimatedImageData;
 import dev.simplified.image.ImageData;
 import dev.simplified.image.PixelBuffer;
 import dev.simplified.image.StaticImageData;
+import dev.simplified.image.exception.ImageDecodeException;
 import dev.simplified.image.frame.ImageFrame;
 import org.jetbrains.annotations.NotNull;
 import org.junit.jupiter.api.DisplayName;
@@ -19,10 +20,12 @@ import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.instanceOf;
 import static org.hamcrest.Matchers.is;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
  * Pins the canvas {@link GifImageReader} decodes a GIF onto: the logical screen its Logical Screen
- * Descriptor declares, each frame kept at its own size and offset on it.
+ * Descriptor declares, each frame kept at its own size and offset on it, and no longer than 16383
+ * on a side.
  * <p>
  * Every fixture is a {@link HandBuiltGif}, so it declares a screen and frame offsets no writer here
  * produces. A picture is read as rows of characters: {@code R}, {@code B} and {@code G} for opaque
@@ -173,6 +176,45 @@ class GifCanvasTest {
             "RB",
             "G."
         ));
+    }
+
+    // ──── a canvas past the bound ────
+
+    @Test
+    @DisplayName("a still whose logical screen is longer than 16383 on a side is refused")
+    void stillOnAScreenPastTheBoundIsRefused() {
+        byte[] gif = HandBuiltGif.screen(65535, 65535).frame(0, 0, 1, 1, R).bytes();
+
+        ImageDecodeException refused = assertThrows(ImageDecodeException.class, () -> read(gif));
+        assertThat(refused.getMessage(), is("GIF canvas '65535x65535' exceeds '16383' on a side"));
+    }
+
+    @Test
+    @DisplayName("an animation whose logical screen is longer than 16383 on a side is refused")
+    void animationOnAScreenPastTheBoundIsRefused() {
+        byte[] gif = HandBuiltGif.screen(1, 16384)
+            .frame(0, 0, 1, 1, R)
+            .frame(0, 0, 1, 1, B)
+            .bytes();
+
+        assertThrows(ImageDecodeException.class, () -> read(gif));
+    }
+
+    @Test
+    @DisplayName("a frame whose offset grows the canvas past 16383 on a side is refused")
+    void frameGrowingTheCanvasPastTheBoundIsRefused() {
+        byte[] gif = HandBuiltGif.screen(1, 1).frame(16383, 0, 1, 1, R).bytes();
+
+        assertThrows(ImageDecodeException.class, () -> read(gif));
+    }
+
+    @Test
+    @DisplayName("a canvas 16383 long on a side is decoded")
+    void canvasAtTheBoundIsDecoded() {
+        ImageData decoded = read(HandBuiltGif.screen(16383, 1).frame(0, 0, 1, 1, R).bytes());
+
+        assertThat(decoded.getWidth(), is(16383));
+        assertThat(decoded.getHeight(), is(1));
     }
 
     // ──── fixtures ────
