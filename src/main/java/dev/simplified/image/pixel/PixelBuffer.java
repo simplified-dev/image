@@ -18,6 +18,7 @@ import java.awt.image.Raster;
 import java.awt.image.SinglePixelPackedSampleModel;
 import java.util.Arrays;
 import java.util.Optional;
+import java.util.concurrent.ForkJoinTask;
 import java.util.function.IntConsumer;
 import java.util.stream.IntStream;
 
@@ -43,10 +44,18 @@ import java.util.stream.IntStream;
 public class PixelBuffer {
 
     /**
-     * Minimum row count before row-parallel loops dispatch to the common fork-join pool.
-     * Below this, the fork-join overhead dominates the per-row work.
+     * Minimum row count before a row loop splits its rows across a fork-join pool. Below this, the
+     * fork-join overhead dominates the per-row work. {@link #forEachRow} splits only when called off
+     * every pool, and called on a fork-join worker runs its rows on that worker whatever their count;
+     * {@link #forEachRowAcrossPool} splits wherever it is called.
      */
     private static final int MIN_PARALLEL_ROWS = 64;
+
+    /**
+     * The value {@link #fxaaPixel} answers for a pixel FXAA leaves as it is, outside the range every
+     * packed pixel falls in.
+     */
+    private static final long UNFILTERED = Long.MIN_VALUE;
 
     /** Buffer width in pixels. */
     private final int width;
@@ -398,7 +407,7 @@ public class PixelBuffer {
                 float srcY = ((y + 0.5f) * this.height) / h - 0.5f;
                 for (int x = 0; x < w; x++) {
                     float srcX = ((x + 0.5f) * this.width) / w - 0.5f;
-                    this.sampleBilinear(this.data, srcX, srcY, false, sample, 0);
+                    sampleBilinear(this.data, this.width, this.height, false, srcX, srcY, false, sample, 0);
                     result[outRow + x] = ColorMath.pack(
                         channel(sample[0], 255), channel(sample[1], 255), channel(sample[2], 255), channel(sample[3], 255)
                     );
@@ -694,13 +703,110 @@ public class PixelBuffer {
 
         if (x0 >= x1 || y0 >= y1) return;
 
+        int[] columns = sourceColumns(x0, x1, source.width, dw);
+
+        if (source.width >= dw) {
+            forEachRow(y0, y1, y -> {
+                int dstRow = (dy + y) * this.width;
+                int sy = (y * source.height) / dh;
+
+                for (int x = x0; x < x1; x++) {
+                    int sx = columns[x - x0];
+                    int src = source.data[sy * source.width + sx];
+                    if (ColorMath.alpha(src) == 0) continue;
+                    int dstIdx = dstRow + dx + x;
+                    this.data[dstIdx] = ColorMath.blend(src, this.data[dstIdx], mode);
+                }
+            });
+            return;
+        }
+
+        // Magnifying, each run of columns reading one texel is decided once from that texel's own
+        // alpha: skipped at 0, filled where the blend answers the texel whatever lies beneath it, and
+        // otherwise blended pixel by pixel, each pixel reading the texel afresh because a source may
+        // hold this buffer's pixel array.
         forEachRow(y0, y1, y -> {
             int dstRow = (dy + y) * this.width;
             int sy = (y * source.height) / dh;
 
+            for (int x = x0, end; x < x1; x = end) {
+                int sx = columns[x - x0];
+                end = x + 1;
+                while (end < x1 && columns[end - x0] == sx) end++;
+
+                int srcIdx = sy * source.width + sx;
+                int src = source.data[srcIdx];
+                int sa = ColorMath.alpha(src);
+                if (sa == 0) continue;
+
+                if (mode == BlendMode.REPLACE || sa == 0xFF && (mode == BlendMode.NORMAL || mode == BlendMode.PREMULTIPLIED)) {
+                    Arrays.fill(this.data, dstRow + dx + x, dstRow + dx + end, src);
+                    continue;
+                }
+
+                for (int i = x; i < end; i++) {
+                    int texel = source.data[srcIdx];
+                    if (ColorMath.alpha(texel) == 0) continue;
+                    int dstIdx = dstRow + dx + i;
+                    this.data[dstIdx] = ColorMath.blend(texel, this.data[dstIdx], mode);
+                }
+            }
+        });
+    }
+
+    /**
+     * Composites the source buffer, smoothed by FXAA, onto this buffer at the given origin, rescaling
+     * to the specified width and height using nearest-neighbor sampling and the specified blend mode.
+     * Out-of-bounds pixels are silently clipped and the source is left unmodified.
+     * <p>
+     * Lays down exactly what {@link #applyFxaa(AlphaMode)} on the source followed by
+     * {@link #blitScaled(PixelBuffer, int, int, int, int, BlendMode)} lays down, filtering only the
+     * source pixels the rescale reads: each one is the pixel FXAA writes there, read from the
+     * unfiltered source, so a downscale filters a fraction of the source and never copies it.
+     * <p>
+     * A composite of many rows splits them across a fork-join pool - the calling worker's own when it
+     * is called on one - so a single composite handed to a pool still spreads its filtering over the
+     * pool's workers.
+     *
+     * @param source the source buffer, holding a pixel array other than this buffer's
+     * @param dx the destination x origin
+     * @param dy the destination y origin
+     * @param dw the destination width
+     * @param dh the destination height
+     * @param mode the blend mode to use for compositing
+     * @param alphaMode the convention the source's pixels are held in
+     * @throws IllegalArgumentException if {@code source} holds this buffer's pixel array
+     */
+    public void blitScaledFxaa(@NotNull PixelBuffer source, int dx, int dy, int dw, int dh, @NotNull BlendMode mode, @NotNull AlphaMode alphaMode) {
+        if (source.data == this.data)
+            throw new IllegalArgumentException("Source must hold a pixel array other than the target's");
+
+        int x0 = Math.max(0, -dx);
+        int y0 = Math.max(0, -dy);
+        int x1 = Math.min(dw, this.width - dx);
+        int y1 = Math.min(dh, this.height - dy);
+
+        if (x0 >= x1 || y0 >= y1) return;
+
+        int[] pixels = source.data;
+        int srcW = source.width;
+        int srcH = source.height;
+        boolean forceAlpha = !source.hasAlpha;
+        int[] columns = sourceColumns(x0, x1, srcW, dw);
+
+        forEachRowAcrossPool(y0, y1, y -> {
+            float[] samples = new float[8];
+            int dstRow = (dy + y) * this.width;
+            int sy = (y * srcH) / dh;
+            boolean interiorRow = sy >= 1 && sy <= srcH - 2;
+
             for (int x = x0; x < x1; x++) {
-                int sx = (x * source.width) / dw;
-                int src = source.data[sy * source.width + sx];
+                int sx = columns[x - x0];
+                int src = pixels[sy * srcW + sx];
+                if (interiorRow && sx >= 1 && sx <= srcW - 2) {
+                    long filtered = fxaaPixel(pixels, srcW, srcH, forceAlpha, sx, sy, alphaMode, samples);
+                    if (filtered != UNFILTERED) src = (int) filtered;
+                }
                 if (ColorMath.alpha(src) == 0) continue;
                 int dstIdx = dstRow + dx + x;
                 this.data[dstIdx] = ColorMath.blend(src, this.data[dstIdx], mode);
@@ -803,74 +909,106 @@ public class PixelBuffer {
      * @param alphaMode the convention this buffer's pixels are held in
      */
     public void applyFxaa(@NotNull AlphaMode alphaMode) {
-        boolean straight = switch (alphaMode) {
-            case STRAIGHT -> true;
-            case PREMULTIPLIED -> false;
-        };
-        int[] temp = this.data.clone();
-        if (!this.hasAlpha)
-            Arrays.setAll(temp, i -> temp[i] | 0xFF000000);
-
-        final float fxaaReduceMin = 1.0f / 128.0f;
-        final float fxaaReduceMul = 1.0f / 4.0f;
-        final float fxaaSpanMax = 8.0f;
+        int[] source = this.data.clone();
+        boolean forceAlpha = !this.hasAlpha;
 
         IntStream.range(1, this.height - 1).parallel().forEach(y -> {
             float[] samples = new float[8];
 
             for (int x = 1; x < this.width - 1; x++) {
-                int rgbNw = temp[(y - 1) * this.width + (x - 1)];
-                int rgbNe = temp[(y - 1) * this.width + (x + 1)];
-                int rgbSw = temp[(y + 1) * this.width + (x - 1)];
-                int rgbSe = temp[(y + 1) * this.width + (x + 1)];
-                int rgbM = temp[y * this.width + x];
-
-                float lumaNw = edgeLuma(rgbNw, alphaMode);
-                float lumaNe = edgeLuma(rgbNe, alphaMode);
-                float lumaSw = edgeLuma(rgbSw, alphaMode);
-                float lumaSe = edgeLuma(rgbSe, alphaMode);
-                float lumaM = edgeLuma(rgbM, alphaMode);
-
-                float lumaMin = Math.min(lumaM, Math.min(Math.min(lumaNw, lumaNe), Math.min(lumaSw, lumaSe)));
-                float lumaMax = Math.max(lumaM, Math.max(Math.max(lumaNw, lumaNe), Math.max(lumaSw, lumaSe)));
-
-                float contrast = lumaMax - lumaMin;
-
-                if (contrast < Math.max(0.0156f, lumaMax * 0.0312f))
-                    continue;
-
-                float dirX = -((lumaNw + lumaNe) - (lumaSw + lumaSe));
-                float dirY = (lumaNw + lumaSw) - (lumaNe + lumaSe);
-
-                float dirReduce = Math.max(
-                    (lumaNw + lumaNe + lumaSw + lumaSe) * (0.25f * fxaaReduceMul),
-                    fxaaReduceMin
-                );
-                float rcpDirMin = 1.0f / (Math.min(Math.abs(dirX), Math.abs(dirY)) + dirReduce);
-
-                dirX = Math.clamp(dirX * rcpDirMin, -fxaaSpanMax, fxaaSpanMax);
-                dirY = Math.clamp(dirY * rcpDirMin, -fxaaSpanMax, fxaaSpanMax);
-
-                this.sampleBilinear(temp,
-                    x + dirX * (1.0f / 3.0f - 0.5f),
-                    y + dirY * (1.0f / 3.0f - 0.5f),
-                    straight, samples, 0);
-                this.sampleBilinear(temp,
-                    x + dirX * (2.0f / 3.0f - 0.5f),
-                    y + dirY * (2.0f / 3.0f - 0.5f),
-                    straight, samples, 4);
-
-                // Each sample holds a coverage and the colour that coverage carries, so their mean is
-                // the pixel's coverage and its colour as it is carried - the premultiplied value.
-                this.data[y * this.width + x] = packSample(
-                    (samples[0] + samples[4]) * 0.5f,
-                    (samples[1] + samples[5]) * 0.5f,
-                    (samples[2] + samples[6]) * 0.5f,
-                    (samples[3] + samples[7]) * 0.5f,
-                    alphaMode
-                );
+                long filtered = fxaaPixel(source, this.width, this.height, forceAlpha, x, y, alphaMode, samples);
+                if (filtered != UNFILTERED) this.data[y * this.width + x] = (int) filtered;
             }
         });
+    }
+
+    /**
+     * Computes the pixel FXAA writes at one interior position of {@code source}, reading only
+     * {@code source}, or answers {@link #UNFILTERED} when the neighbourhood falls under the contrast
+     * threshold and the pixel stays as it is.
+     * <p>
+     * A neighbourhood whose five edge-test reads hold one value answers {@link #UNFILTERED} before any
+     * luma is computed: its contrast is zero, under a threshold that never drops below its positive
+     * floor, so the edge test would leave it unfiltered too.
+     * <p>
+     * Every read strides and clamps by the {@code width} and {@code height} passed in, the source's
+     * own. When {@code forceAlpha} is set each of the thirteen reads - the five the edge test takes
+     * and the eight bilinear taps - is read as opaque, for a source whose alpha carries no data.
+     *
+     * @param source the pixels to filter
+     * @param width the source width
+     * @param height the source height
+     * @param forceAlpha whether every pixel is read as opaque
+     * @param x the pixel's column, in {@code [1, width - 2]}
+     * @param y the pixel's row, in {@code [1, height - 2]}
+     * @param alphaMode the convention the source's pixels are held in
+     * @param samples the scratch the two bilinear samples are written into, eight long
+     * @return the filtered pixel, or {@link #UNFILTERED}
+     */
+    private static long fxaaPixel(int @NotNull [] source, int width, int height, boolean forceAlpha, int x, int y,
+                                  @NotNull AlphaMode alphaMode, float @NotNull [] samples) {
+        final float fxaaReduceMin = 1.0f / 128.0f;
+        final float fxaaReduceMul = 1.0f / 4.0f;
+        final float fxaaSpanMax = 8.0f;
+        int fill = forceAlpha ? 0xFF000000 : 0;
+
+        int rgbNw = source[(y - 1) * width + (x - 1)] | fill;
+        int rgbNe = source[(y - 1) * width + (x + 1)] | fill;
+        int rgbSw = source[(y + 1) * width + (x - 1)] | fill;
+        int rgbSe = source[(y + 1) * width + (x + 1)] | fill;
+        int rgbM = source[y * width + x] | fill;
+
+        if (rgbNw == rgbM && rgbNe == rgbM && rgbSw == rgbM && rgbSe == rgbM)
+            return UNFILTERED;
+
+        float lumaNw = edgeLuma(rgbNw, alphaMode);
+        float lumaNe = edgeLuma(rgbNe, alphaMode);
+        float lumaSw = edgeLuma(rgbSw, alphaMode);
+        float lumaSe = edgeLuma(rgbSe, alphaMode);
+        float lumaM = edgeLuma(rgbM, alphaMode);
+
+        float lumaMin = Math.min(lumaM, Math.min(Math.min(lumaNw, lumaNe), Math.min(lumaSw, lumaSe)));
+        float lumaMax = Math.max(lumaM, Math.max(Math.max(lumaNw, lumaNe), Math.max(lumaSw, lumaSe)));
+
+        float contrast = lumaMax - lumaMin;
+
+        if (contrast < Math.max(0.0156f, lumaMax * 0.0312f))
+            return UNFILTERED;
+
+        float dirX = -((lumaNw + lumaNe) - (lumaSw + lumaSe));
+        float dirY = (lumaNw + lumaSw) - (lumaNe + lumaSe);
+
+        float dirReduce = Math.max(
+            (lumaNw + lumaNe + lumaSw + lumaSe) * (0.25f * fxaaReduceMul),
+            fxaaReduceMin
+        );
+        float rcpDirMin = 1.0f / (Math.min(Math.abs(dirX), Math.abs(dirY)) + dirReduce);
+
+        dirX = Math.clamp(dirX * rcpDirMin, -fxaaSpanMax, fxaaSpanMax);
+        dirY = Math.clamp(dirY * rcpDirMin, -fxaaSpanMax, fxaaSpanMax);
+
+        boolean straight = switch (alphaMode) {
+            case STRAIGHT -> true;
+            case PREMULTIPLIED -> false;
+        };
+        sampleBilinear(source, width, height, forceAlpha,
+            x + dirX * (1.0f / 3.0f - 0.5f),
+            y + dirY * (1.0f / 3.0f - 0.5f),
+            straight, samples, 0);
+        sampleBilinear(source, width, height, forceAlpha,
+            x + dirX * (2.0f / 3.0f - 0.5f),
+            y + dirY * (2.0f / 3.0f - 0.5f),
+            straight, samples, 4);
+
+        // Each sample holds a coverage and the colour that coverage carries, so their mean is the
+        // pixel's coverage and its colour as it is carried - the premultiplied value.
+        return packSample(
+            (samples[0] + samples[4]) * 0.5f,
+            (samples[1] + samples[5]) * 0.5f,
+            (samples[2] + samples[6]) * 0.5f,
+            (samples[3] + samples[7]) * 0.5f,
+            alphaMode
+        );
     }
 
     /**
@@ -996,13 +1134,52 @@ public class PixelBuffer {
 
     /**
      * Iterates rows in {@code [start, end)}, dispatching to the common fork-join pool when the range
-     * covers at least {@link #MIN_PARALLEL_ROWS} rows and running sequentially otherwise.
+     * covers at least {@link #MIN_PARALLEL_ROWS} rows and the calling thread is not a fork-join
+     * worker, and otherwise running every row on the calling thread in ascending order. A call on
+     * any fork-join worker, of any pool, runs its rows itself, whether it is its pool's only task or
+     * one of many, so a single operation handed to a pool runs its rows on one thread. A row loop
+     * whose rows repay a fork there runs through {@link #forEachRowAcrossPool} instead.
+     * <p>
+     * Each body reads and writes only the target pixels its own index owns, and otherwise reads only
+     * a source no body writes, so the bodies commute and either schedule writes the same bytes. A
+     * composite whose source holds the target's own pixel array breaks that: {@code blit(this, ...)},
+     * or a {@link PixelGraphics} drawing the target's own {@link #toBufferedImage()}, whose array
+     * {@link #wrap(BufferedImage)} shares rather than copies, reads pixels other rows write, and
+     * writes bytes that depend on the order its rows run in under either schedule.
      *
      * @param start the first row index, inclusive
      * @param end the last row index, exclusive
      * @param body the per-row action
      */
     static void forEachRow(int start, int end, @NotNull IntConsumer body) {
+        int count = end - start;
+
+        if (count >= MIN_PARALLEL_ROWS && !ForkJoinTask.inForkJoinPool()) {
+            IntStream.range(start, end)
+                .parallel()
+                .forEach(body);
+        } else {
+            for (int y = start; y < end; y++)
+                body.accept(y);
+        }
+    }
+
+    /**
+     * Iterates rows in {@code [start, end)}, splitting them across a fork-join pool when the range
+     * covers at least {@link #MIN_PARALLEL_ROWS} rows - the calling worker's own pool when it is
+     * called on one, the common pool otherwise - and otherwise running every row on the calling
+     * thread in ascending order.
+     * <p>
+     * A row loop whose rows each carry work enough to repay a fork wherever it is called runs through
+     * this rather than {@link #forEachRow}, so a single call on a pool worker spreads its rows over
+     * the pool's workers. Each body is held to the footprint {@link #forEachRow} states, and any
+     * scratch a body writes is its own, allocated per row.
+     *
+     * @param start the first row index, inclusive
+     * @param end the last row index, exclusive
+     * @param body the per-row action
+     */
+    static void forEachRowAcrossPool(int start, int end, @NotNull IntConsumer body) {
         int count = end - start;
 
         if (count >= MIN_PARALLEL_ROWS) {
@@ -1016,6 +1193,28 @@ public class PixelBuffer {
     }
 
     /**
+     * Computes the source column a nearest-neighbour rescale to {@code dw} columns reads at each
+     * destination column in {@code [x0, x1)}, as {@code (x * sourceWidth) / dw} in int arithmetic,
+     * wrapping where the product overflows.
+     * <p>
+     * The table is built once per composite and only read by its row tasks.
+     *
+     * @param x0 the first destination column, inclusive
+     * @param x1 the last destination column, exclusive
+     * @param sourceWidth the source width
+     * @param dw the destination width, positive
+     * @return the source column of each destination column {@code x}, at index {@code x - x0}
+     */
+    private static int @NotNull [] sourceColumns(int x0, int x1, int sourceWidth, int dw) {
+        int[] columns = new int[x1 - x0];
+
+        for (int x = x0; x < x1; x++)
+            columns[x - x0] = (x * sourceWidth) / dw;
+
+        return columns;
+    }
+
+    /**
      * Samples {@code source} bilinearly at a point, writing alpha and the three colour channels -
      * each in {@code [0, 255]} and unrounded - into {@code out} from {@code offset}, in that order.
      * <p>
@@ -1025,29 +1224,34 @@ public class PixelBuffer {
      * straight colour needs for a transparent tap to add no colour, and the colour written is the
      * colour the coverage carries; otherwise every channel mixes as it is held.
      *
-     * @param source the pixels to sample, laid out as this buffer's
+     * @param source the pixels to sample, in rows of {@code width}
+     * @param width the width of {@code source}, which every tap strides and clamps by
+     * @param height the height of {@code source}, which every tap clamps by
+     * @param forceAlpha whether each tap is read as opaque
      * @param x the horizontal sample position, in pixels
      * @param y the vertical sample position, in pixels
      * @param weightByAlpha whether each tap's colour is scaled by its alpha before the mix
      * @param out the array receiving alpha, red, green and blue
      * @param offset the index in {@code out} the four channels start at
      */
-    private void sampleBilinear(int @NotNull [] source, float x, float y, boolean weightByAlpha, float @NotNull [] out, int offset) {
+    private static void sampleBilinear(int @NotNull [] source, int width, int height, boolean forceAlpha, float x, float y,
+                                       boolean weightByAlpha, float @NotNull [] out, int offset) {
+        int fill = forceAlpha ? 0xFF000000 : 0;
         int floorX = (int) Math.floor(x);
         int floorY = (int) Math.floor(y);
         float fx = x - floorX;
         float fy = y - floorY;
 
-        int x0 = Math.clamp(floorX, 0, this.width - 1);
-        int x1 = Math.clamp(floorX + 1, 0, this.width - 1);
-        int row0 = Math.clamp(floorY, 0, this.height - 1) * this.width;
-        int row1 = Math.clamp(floorY + 1, 0, this.height - 1) * this.width;
+        int x0 = Math.clamp(floorX, 0, width - 1);
+        int x1 = Math.clamp(floorX + 1, 0, width - 1);
+        int row0 = Math.clamp(floorY, 0, height - 1) * width;
+        int row1 = Math.clamp(floorY + 1, 0, height - 1) * width;
 
         Arrays.fill(out, offset, offset + 4, 0f);
-        accumulateTap(source[row0 + x0], (1 - fx) * (1 - fy), weightByAlpha, out, offset);
-        accumulateTap(source[row0 + x1], fx * (1 - fy), weightByAlpha, out, offset);
-        accumulateTap(source[row1 + x0], (1 - fx) * fy, weightByAlpha, out, offset);
-        accumulateTap(source[row1 + x1], fx * fy, weightByAlpha, out, offset);
+        accumulateTap(source[row0 + x0] | fill, (1 - fx) * (1 - fy), weightByAlpha, out, offset);
+        accumulateTap(source[row0 + x1] | fill, fx * (1 - fy), weightByAlpha, out, offset);
+        accumulateTap(source[row1 + x0] | fill, (1 - fx) * fy, weightByAlpha, out, offset);
+        accumulateTap(source[row1 + x1] | fill, fx * fy, weightByAlpha, out, offset);
     }
 
     /**
