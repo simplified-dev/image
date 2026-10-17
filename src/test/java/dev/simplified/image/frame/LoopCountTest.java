@@ -8,7 +8,6 @@ import java.util.OptionalInt;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.instanceOf;
-import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.sameInstance;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
@@ -44,13 +43,14 @@ class LoopCountTest {
     }
 
     @Test
-    @DisplayName("a Custom count a preset names repeats as the preset does without equalling it")
-    void customAtAPresetsCount() {
-        LoopCount.Custom none = new LoopCount.Custom(0);
+    @DisplayName("a Custom refuses a count a preset names, so every count has one spelling")
+    void customRefusesAPresetsCount() {
+        IllegalArgumentException none = assertThrows(IllegalArgumentException.class, () -> new LoopCount.Custom(0));
+        IllegalArgumentException once = assertThrows(IllegalArgumentException.class, () -> new LoopCount.Custom(1));
 
-        assertThat(none.repeats(), equalTo(LoopCount.Preset.NONE.repeats()));
-        assertThat(none.plays(), equalTo(LoopCount.Preset.NONE.plays()));
-        assertThat(none, not(equalTo(LoopCount.Preset.NONE)));
+        assertThat(none.getMessage(), equalTo("Repeat count '0' is a preset's; use LoopCount.of"));
+        assertThat(once.getMessage(), equalTo("Repeat count '1' is a preset's; use LoopCount.of"));
+        assertThat(new LoopCount.Custom(2).repeats(), equalTo(OptionalInt.of(2)));
     }
 
     @Test

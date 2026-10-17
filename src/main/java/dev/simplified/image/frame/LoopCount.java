@@ -22,8 +22,9 @@ import java.util.OptionalInt;
  * <ul>
  * <li><b>{@link Preset}</b> - the three counts a caller names most: never repeat, repeat once and
  * repeat forever. Callers normally reference these directly (e.g. {@code LoopCount.Preset.INFINITE}).</li>
- * <li><b>{@link Custom}</b> - a record for any other finite count. Construct via {@link #of(int)}, or
- * the {@link #builder() builder} to state the count as plays instead.</li>
+ * <li><b>{@link Custom}</b> - a record for any other finite count, refusing one a preset names, so
+ * every count has one spelling and two loop counts that repeat alike are equal. Construct via
+ * {@link #of(int)}, or the {@link #builder() builder} to state the count as plays instead.</li>
  * </ul>
  * Each container declares a loop count in its own unit and its codec converts: a GIF's NETSCAPE2.0
  * application extension counts repeats, {@code 0} repeating forever, and a GIF without one plays
@@ -108,26 +109,29 @@ public sealed interface LoopCount {
     }
 
     /**
-     * A finite loop count of the caller's choosing.
+     * A finite loop count no preset names.
      * <p>
-     * A count a preset names may be held here too, and then repeats as the preset does without
-     * equalling it; {@link LoopCount#of(int)} and the {@link Builder} answer the preset for such a
-     * count.
+     * A count a preset names is refused, so every count has one spelling and two loop counts that
+     * repeat alike are equal; {@link LoopCount#of(int)} and the {@link Builder} answer the preset
+     * for such a count.
      *
      * @param repeatCount the number of times the animation repeats after its first play, from
-     *     {@code 0} to one below {@link Integer#MAX_VALUE}, so that its plays fit an {@code int}
+     *     {@code 2} to one below {@link Integer#MAX_VALUE}, so that its plays fit an {@code int}
      */
     record Custom(int repeatCount) implements LoopCount {
 
         /**
-         * Refuses a repeat count outside the range its plays fit in.
+         * Refuses a repeat count outside the range its plays fit in, or one a preset names.
          *
-         * @throws IllegalArgumentException when {@code repeatCount} is negative or
-         *     {@link Integer#MAX_VALUE}
+         * @throws IllegalArgumentException when {@code repeatCount} is negative,
+         *     {@link Integer#MAX_VALUE}, or the {@code 0} or {@code 1} a preset names
          */
         public Custom {
             if (repeatCount < 0 || repeatCount == Integer.MAX_VALUE)
                 throw new IllegalArgumentException(String.format("Repeat count '%s' is outside [0, %s]", repeatCount, Integer.MAX_VALUE - 1));
+
+            if (Preset.findByRepeats(OptionalInt.of(repeatCount)).isPresent())
+                throw new IllegalArgumentException(String.format("Repeat count '%s' is a preset's; use LoopCount.of", repeatCount));
         }
 
         /** {@inheritDoc} */

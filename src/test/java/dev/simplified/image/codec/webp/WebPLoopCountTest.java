@@ -43,7 +43,6 @@ class WebPLoopCountTest {
     @DisplayName("each count is written as its plays, and an endless one as 0")
     void playsAreWritten() {
         assertThat(animLoopCount(write(animation(LoopCount.Preset.NONE), null)), equalTo(1));
-        assertThat(animLoopCount(write(animation(new LoopCount.Custom(0)), null)), equalTo(1));
         assertThat(animLoopCount(write(animation(LoopCount.Preset.ONCE), null)), equalTo(2));
         assertThat(animLoopCount(write(animation(LoopCount.of(4)), null)), equalTo(5));
         assertThat(animLoopCount(write(animation(LoopCount.of(65534)), null)), equalTo(65535));

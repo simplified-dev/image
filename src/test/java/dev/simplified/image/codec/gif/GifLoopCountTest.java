@@ -50,7 +50,6 @@ class GifLoopCountTest {
     @DisplayName("a count that never repeats is written as no NETSCAPE2.0 extension")
     void neverRepeatingWritesNoExtension() {
         assertThat(GifBlocks.netscapeLoopCounts(write(animation(LoopCount.Preset.NONE), null)), is(empty()));
-        assertThat(GifBlocks.netscapeLoopCounts(write(animation(new LoopCount.Custom(0)), null)), is(empty()));
     }
 
     @Test
