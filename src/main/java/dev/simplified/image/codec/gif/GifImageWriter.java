@@ -10,7 +10,6 @@ import dev.simplified.image.data.AnimatedImageData;
 import dev.simplified.image.data.FrameBlend;
 import dev.simplified.image.data.FrameDisposal;
 import dev.simplified.image.data.ImageFrame;
-import dev.simplified.image.option.DelayFidelity;
 import dev.simplified.image.option.GifWriteOptions;
 import dev.simplified.image.option.ImageWriteOptions;
 import dev.simplified.image.pixel.AlphaMode;
@@ -66,7 +65,7 @@ public class GifImageWriter implements ImageWriter {
         int transparentColorIndex = 0;
         int backgroundRgb = 0x000000;
         int alphaThreshold = 128;
-        DelayFidelity delayFidelity = DelayFidelity.PLAYABLE;
+        GifWriteOptions.DelayFidelity delayFidelity = GifWriteOptions.DelayFidelity.PLAYABLE;
 
         if (options instanceof GifWriteOptions gifOptions) {
             loopCount = gifOptions.loopCount();
@@ -529,7 +528,7 @@ public class GifImageWriter implements ImageWriter {
      */
     private static int @NotNull [] quantizeDelays(
         @NotNull ConcurrentList<ImageFrame> frames,
-        @NotNull DelayFidelity fidelity
+        @NotNull GifWriteOptions.DelayFidelity fidelity
     ) {
         int[] delaysCs = new int[frames.size()];
         long elapsedMs = 0L;
