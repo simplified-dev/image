@@ -53,16 +53,8 @@ Defects present in the current tree and not yet fixed, most severe first. Each e
 ## The WebP writer's partial-frame path drops an OVER frame's blend
 When `usePartialFrames` holds - every lossless write, and every lossy write without P-frames - `WebPImageWriter` writes each ANMF chunk as do-not-dispose and do-not-blend over the region that changed. A frame tagged `FrameBlend.OVER` that is transparent where it relies on the frame beneath is therefore written as an overwrite. Measured on an animation whose frame 1 is `OVER`: written as lossless WebP (the default) the relying pixel reads `00000000`, where GIF shows `ffff0000` and lossy WebP with P-frames shows `ffff0005`. A decoded GIF, whose frames read as `OVER`, reaches it when re-encoded as lossless WebP; nothing in the workspace does that today. HIGH once a caller converts GIFs to WebP.
 
-- Affected: `src/main/java/dev/simplified/image/codec/webp/WebPImageWriter.java:166` (`usePartialFrames`), `:283-284`
+- Affected: `src/main/java/dev/simplified/image/codec/webp/WebPImageWriter.java:165` (`usePartialFrames`), `:282-283`
 - Severity: **MEDIUM**
-- Type: **BUG**
-- Status: **OPEN**
-
-## WebP write options cannot force infinite looping over a finite count
-`WebPImageWriter` reads a loop count in `WebPWriteOptions` that repeats forever as no count at all, and falls back to the image's own loop count. `withLoopCount(LoopCount.Preset.INFINITE)` is therefore ignored whenever the `AnimatedImageData` carries a finite count.
-
-- Affected: `src/main/java/dev/simplified/image/codec/webp/WebPImageWriter.java:77-78`
-- Severity: **LOW**
 - Type: **BUG**
 - Status: **OPEN**
 

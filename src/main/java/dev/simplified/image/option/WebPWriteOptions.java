@@ -19,7 +19,7 @@ public class WebPWriteOptions implements ImageWriteOptions {
     private final float quality;
     /**
      * the repeats after the first play to declare in place of the image's own, empty to declare the
-     * image's; one that repeats forever is read as empty
+     * image's
      */
     private final @NotNull Optional<LoopCount> loopCount;
     private final boolean multithreaded;

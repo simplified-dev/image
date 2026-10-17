@@ -74,8 +74,7 @@ public class WebPImageWriter implements ImageWriter {
         // animated image, so converting first would send an animated ImageData implemented elsewhere
         // down the animated path. An AnimatedImageData converts to an AnimatedImageData, so the cast holds.
         if (data instanceof AnimatedImageData animated) {
-            // A count in the options that repeats forever is read as no count at all.
-            LoopCount declared = loopCount.filter(count -> count.repeats().isPresent()).orElse(animated.getLoopCount());
+            LoopCount declared = loopCount.orElse(animated.getLoopCount());
             AnimatedImageData straight = (AnimatedImageData) animated.toAlphaMode(AlphaMode.STRAIGHT);
             return writeAnimated(straight, lossless, quality, declared, multithreaded, usePFrames, forceKeyframeEvery, motionSearchThreads, autoSegment, nearLossless);
         }

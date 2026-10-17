@@ -74,6 +74,15 @@ class WebPLoopCountTest {
         assertThat(animLoopCount(write(animation(LoopCount.of(4)), options)), equalTo(2));
     }
 
+    @Test
+    @DisplayName("an endless count in the options is declared over the image's finite one")
+    void endlessOptionsCountWins() {
+        WebPWriteOptions options = WebPWriteOptions.builder().withLoopCount(LoopCount.Preset.INFINITE).build();
+
+        assertThat(animLoopCount(write(animation(LoopCount.Preset.NONE), options)), equalTo(0));
+        assertThat(animLoopCount(write(animation(LoopCount.of(4)), options)), equalTo(0));
+    }
+
     // ──── what the reader reads ────
 
     @Test
