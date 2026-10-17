@@ -145,3 +145,43 @@ The source/destination-rectangle form and the `AffineTransform` form write every
 - Severity: **LOW**
 - Type: **BUG**
 - Status: **OPEN**
+
+## `Quantizer`, `RateDistortion` and `Macroblock.toARGB` are dead code
+Nothing constructs `Quantizer` or `RateDistortion` except each other, and nothing calls `Macroblock.toARGB`. `RateDistortion`'s class javadoc still calls it the encoder's mode-decision engine, which it is not: the encoder scores modes itself.
+
+- Affected: `src/main/java/dev/simplified/image/codec/webp/vp8/Quantizer.java:11`, `src/main/java/dev/simplified/image/codec/webp/vp8/RateDistortion.java:12`, `src/main/java/dev/simplified/image/codec/webp/vp8/Macroblock.java:95` (`toARGB`)
+- Severity: **LOW**
+- Type: **GAP**
+- Status: **OPEN**
+
+## `VP8Encoder` holds libwebp lambdas no scorer reads
+`State.lambdaI16`, `lambdaMode` and `tlambda`, and their per-segment arrays `segLambdaI16`, `segLambdaMode` and `segTlambda`, are assigned and never read. Their comments say so. Deleting them, or wiring them into the scorer as libwebp does, would end the dead state.
+
+- Affected: `src/main/java/dev/simplified/image/codec/webp/vp8/VP8Encoder.java:184-207` (`State`), `:235-237`, `:470`
+- Severity: **LOW**
+- Type: **GAP**
+- Status: **OPEN**
+
+## `VP8Tables.MV_UPDATE_PROBA` cites a libwebp source that likely does not hold it
+Its javadoc says it matches libwebp's `kMVUpdateProba` in `src/dec/tree_dec.c`. libwebp decodes keyframes only, so the table more likely comes from libvpx (unverified). NOTICE therefore does not credit libwebp with motion-vector tables.
+
+- Affected: `src/main/java/dev/simplified/image/codec/webp/vp8/VP8Tables.java:658` (`MV_UPDATE_PROBA`)
+- Severity: **LOW**
+- Type: **GAP**
+- Status: **OPEN**
+
+## The project's own copyright holder is named nowhere
+`LICENSE.md` is the bare Apache-2.0 text with no copyright line, so `NOTICE` opens with the project name and licence only.
+
+- Affected: `LICENSE.md`, `NOTICE:1-2`
+- Severity: **LOW**
+- Type: **GAP**
+- Status: **OPEN**
+
+## Comments cite plan tasks and phases, or describe the codec against a past or future one
+Test comments and display names cite plan numbers instead of saying what they pin: `WebPRoundTripTest` cites Task 13, and `VP8CodecTest` cites Task 11's phases, pre-Task-16, Task 14, Phase 0 and Phase 2c. In the vp8 sources, comments speak of a "future R-D-integrated SPLITMV", "future non-zero SPLITMV emit paths" and "a future encoder tier flag", and `VP8Decoder` compares single-segment streams with "the pre-segment behaviour". Each should state what the code or test does now.
+
+- Affected: `src/test/java/dev/simplified/image/codec/webp/WebPRoundTripTest.java:503`, `:920`, `:922`, `src/test/java/dev/simplified/image/codec/webp/vp8/VP8CodecTest.java:403`, `:1246`, `:1307`, `:1366`, `:1579`, `:1815`, `:1891`, `:2022`, `:2337`, `src/main/java/dev/simplified/image/codec/webp/vp8/VP8Encoder.java:2322`, `:2366`, `:2424`, `src/main/java/dev/simplified/image/codec/webp/vp8/VP8Decoder.java:553`
+- Severity: **LOW**
+- Type: **GAP**
+- Status: **OPEN**
