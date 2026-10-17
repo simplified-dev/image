@@ -398,6 +398,59 @@ class PixelBufferTest {
     }
 
     @Test
+    @DisplayName("resize AREA averages every source pixel a destination pixel covers")
+    void resizeAreaAveragesTheFootprint() {
+        PixelBuffer quad = PixelBuffer.of(new int[]{ 0xFFFF0000, 0xFF00FF00, 0xFF0000FF, 0xFFFFFFFF }, 2, 2, false);
+        assertThat(quad.resize(1, 1, Resample.AREA).getPixel(0, 0), equalTo(0xFF808080));
+
+        PixelBuffer lone = PixelBuffer.create(2, 2);
+        lone.setPixel(0, 0, 0xFFFF0000);
+        assertThat(lone.resize(1, 1, Resample.AREA, AlphaMode.STRAIGHT).getPixel(0, 0), equalTo(0x40FF0000));
+        assertThat(lone.resize(1, 1, Resample.AREA, AlphaMode.PREMULTIPLIED).getPixel(0, 0), equalTo(0x40400000));
+    }
+
+    @Test
+    @DisplayName("resize AREA weights a pixel a destination pixel only partly covers by the share it covers")
+    void resizeAreaWeightsPartialCoverage() {
+        PixelBuffer row = PixelBuffer.of(new int[]{ 0xFF000000, 0xFF780000, 0xFFF00000 }, 3, 1, false);
+        PixelBuffer shrunk = row.resize(2, 1, Resample.AREA);
+
+        assertThat(ColorMath.red(shrunk.getPixel(0, 0)), equalTo(40));
+        assertThat(ColorMath.red(shrunk.getPixel(1, 0)), equalTo(200));
+    }
+
+    @Test
+    @DisplayName("resize AREA reads a growing axis as NEAREST does")
+    void resizeAreaMagnifiesAsNearest() {
+        PixelBuffer source = gradient(5, 3);
+        assertArrayEquals(source.resize(12, 7, Resample.NEAREST).data(), source.resize(12, 7, Resample.AREA).data());
+    }
+
+    @Test
+    @DisplayName("blitScaled with a filter lays down what resizing with it and then blitting lays down")
+    void blitScaledWithAFilter() {
+        PixelBuffer hiRes = PixelBuffer.create(16, 16);
+        for (int i = 0; i < 256; i++)
+            hiRes.data()[i] = ((i * 37) & 0xFF) << 24 | (i * 0x010203 & 0xFFFFFF);
+        hiRes.premultiplyAlpha();
+
+        PixelBuffer viaBlit = PixelBuffer.create(6, 6);
+        viaBlit.fill(0x80204060);
+        viaBlit.blitScaled(hiRes, 1, 1, 4, 4, BlendMode.PREMULTIPLIED, Resample.AREA, AlphaMode.PREMULTIPLIED);
+
+        PixelBuffer viaResize = PixelBuffer.create(6, 6);
+        viaResize.fill(0x80204060);
+        viaResize.blit(hiRes.resize(4, 4, Resample.AREA, AlphaMode.PREMULTIPLIED), 1, 1, BlendMode.PREMULTIPLIED);
+        assertArrayEquals(viaResize.data(), viaBlit.data());
+
+        PixelBuffer nearest = PixelBuffer.create(6, 6);
+        nearest.blitScaled(hiRes, 1, 1, 4, 4, BlendMode.PREMULTIPLIED, Resample.NEAREST, AlphaMode.PREMULTIPLIED);
+        PixelBuffer unfiltered = PixelBuffer.create(6, 6);
+        unfiltered.blitScaled(hiRes, 1, 1, 4, 4, BlendMode.PREMULTIPLIED);
+        assertArrayEquals(unfiltered.data(), nearest.data());
+    }
+
+    @Test
     @DisplayName("resize BILINEAR reads past an edge as the edge pixel")
     void resizeBilinearClampsToTheEdgePixel() {
         // A ramp over four columns, doubled: the outermost outputs sit a quarter pixel past the first

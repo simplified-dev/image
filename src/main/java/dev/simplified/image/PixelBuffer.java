@@ -406,6 +406,8 @@ public class PixelBuffer {
 
         if (filter == Resample.BICUBIC)
             return resizeBicubic(w, h, alphaMode);
+        if (filter == Resample.AREA)
+            return resizeArea(w, h, alphaMode);
 
         int[] result = new int[w * h];
         boolean nearest = filter == Resample.NEAREST;
@@ -432,6 +434,92 @@ public class PixelBuffer {
         });
 
         return new PixelBuffer(result, w, h, this.hasAlpha);
+    }
+
+    /**
+     * Resamples this buffer by area averaging. Each output pixel sums the source pixels its footprint
+     * covers, each weighted by the share of it covered along each axis - the footprint narrowed to the
+     * one pixel {@link Resample#NEAREST} reads along an axis that does not shrink. Straight colour is
+     * weighted by its alpha and divided back after; premultiplied colour, and every channel of a buffer
+     * whose alpha carries no data, sums as it is held.
+     *
+     * @param w the target width
+     * @param h the target height
+     * @param alphaMode the convention this buffer's pixels are held in
+     * @return a new pixel buffer of size {@code w x h}, carrying alpha only when this buffer does
+     */
+    private @NotNull PixelBuffer resizeArea(int w, int h, @NotNull AlphaMode alphaMode) {
+        AreaAxis columns = AreaAxis.of(this.width, w);
+        AreaAxis rows = AreaAxis.of(this.height, h);
+        boolean weighByAlpha = this.hasAlpha && alphaMode == AlphaMode.STRAIGHT;
+        int[] result = new int[w * h];
+
+        forEachRow(0, h, y -> {
+            float[] sum = new float[4];
+            for (int x = 0; x < w; x++) {
+                Arrays.fill(sum, 0f);
+                for (int j = 0; j < rows.count[y]; j++) {
+                    int sourceRow = (rows.first[y] + j) * this.width;
+                    float rowWeight = rows.weights[y][j];
+                    for (int i = 0; i < columns.count[x]; i++)
+                        accumulateTap(this.data[sourceRow + columns.first[x] + i], rowWeight * columns.weights[x][i], weighByAlpha, sum, 0);
+                }
+                result[y * w + x] = this.hasAlpha
+                    ? packSample(sum[0], sum[1], sum[2], sum[3], alphaMode)
+                    : ColorMath.pack(channel(sum[0], 255), channel(sum[1], 255), channel(sum[2], 255), channel(sum[3], 255));
+            }
+        });
+
+        return new PixelBuffer(result, w, h, this.hasAlpha);
+    }
+
+    /**
+     * The source pixels each output pixel of one axis averages, and the weight of each, summing to one.
+     *
+     * @param first each output pixel's first source pixel
+     * @param count how many source pixels each output pixel averages
+     * @param weights each output pixel's weights, one per source pixel it averages
+     */
+    private record AreaAxis(int @NotNull [] first, int @NotNull [] count, float @NotNull [] @NotNull [] weights) {
+
+        /**
+         * Maps an axis of {@code source} pixels onto {@code target} output pixels. A shrinking axis gives
+         * each output pixel the source span {@code [x * source / target, (x + 1) * source / target)},
+         * every pixel in it weighted by the share of it inside; an axis that does not shrink gives each
+         * the one pixel {@code x * source / target}, rounded down.
+         *
+         * @param source the source length
+         * @param target the output length
+         * @return the mapping
+         */
+        static @NotNull AreaAxis of(int source, int target) {
+            int[] first = new int[target];
+            int[] count = new int[target];
+            float[][] weights = new float[target][];
+
+            for (int x = 0; x < target; x++) {
+                if (source <= target) {
+                    first[x] = (int) ((long) x * source / target);
+                    count[x] = 1;
+                    weights[x] = new float[]{ 1f };
+                    continue;
+                }
+
+                double start = (double) x * source / target;
+                double end = (double) (x + 1) * source / target;
+                int from = (int) Math.floor(start);
+                int to = Math.min(source, (int) Math.ceil(end));
+                first[x] = from;
+                count[x] = to - from;
+                weights[x] = new float[to - from];
+                double span = end - start;
+                for (int i = from; i < to; i++)
+                    weights[x][i - from] = (float) ((Math.min(end, i + 1) - Math.max(start, i)) / span);
+            }
+
+            return new AreaAxis(first, count, weights);
+        }
+
     }
 
     /**
@@ -760,6 +848,10 @@ public class PixelBuffer {
      * Composites the source buffer onto this buffer at the given origin, rescaling to the specified
      * width and height using nearest-neighbor sampling and the specified blend mode. Out-of-bounds
      * pixels are silently clipped.
+     * <p>
+     * A downscale keeps one source pixel per output pixel and skips the rest. To average them instead,
+     * as scaling a supersampled render down needs, pass {@link Resample#AREA} to
+     * {@link #blitScaled(PixelBuffer, int, int, int, int, BlendMode, Resample, AlphaMode)}.
      *
      * @param source the source buffer
      * @param dx the destination x origin
@@ -825,6 +917,37 @@ public class PixelBuffer {
                 }
             }
         });
+    }
+
+    /**
+     * Composites the source buffer onto this buffer at the given origin, rescaling it to the specified
+     * width and height with the given filter and the specified blend mode. Out-of-bounds pixels are
+     * silently clipped.
+     * <p>
+     * {@link Resample#NEAREST} lays down what
+     * {@link #blitScaled(PixelBuffer, int, int, int, int, BlendMode)} lays down; any other filter
+     * resamples the source with {@link #resize(int, int, Resample, AlphaMode)} and lays the result down
+     * with {@link #blit(PixelBuffer, int, int, BlendMode)}. {@link Resample#AREA} is the filter for
+     * scaling a supersampled render down: every source pixel counts toward the output.
+     *
+     * @param source the source buffer
+     * @param dx the destination x origin
+     * @param dy the destination y origin
+     * @param dw the destination width
+     * @param dh the destination height
+     * @param mode the blend mode to use for compositing
+     * @param filter the resampling filter
+     * @param alphaMode the convention the source's pixels are held in
+     */
+    public void blitScaled(@NotNull PixelBuffer source, int dx, int dy, int dw, int dh, @NotNull BlendMode mode,
+                           @NotNull Resample filter, @NotNull AlphaMode alphaMode) {
+        if (filter == Resample.NEAREST) {
+            blitScaled(source, dx, dy, dw, dh, mode);
+            return;
+        }
+
+        if (dw <= 0 || dh <= 0) return;
+        blit(source.resize(dw, dh, filter, alphaMode), dx, dy, mode);
     }
 
     /**

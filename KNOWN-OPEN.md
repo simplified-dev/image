@@ -26,14 +26,6 @@ Defects present in the current tree and not yet fixed, most severe first. Each e
 - Type: **GAP**
 - Status: **OPEN**
 
-## No downscale averages: `blitScaled` decimates
-`blitScaled` and `blitScaledFxaa` map each destination pixel to one source pixel (`x * sw / dw`, read from the column table `sourceColumns` builds) and offer no other filter, and `resize` offers `NEAREST`, a 2x2 `BILINEAR` with no prefilter, and AWT `BICUBIC`. The library's one box filter, `PixelMask.downsample`, is boolean. A supersampled render scaled down through either composite keeps one sample of each block and discards the rest, so the supersampling averages nothing, and a `BILINEAR` downscale beyond 2x aliases the same way. asset-renderer's `RasterPass` scales down through `blitScaledFxaa` when it anti-aliases and through `blitScaled` when it does not: FXAA smooths the hi-res pixels the scale-down samples, and the scale-down still keeps one sample per block - a decimation of a filtered source. What such a caller needs is an area-averaging downsample of premultiplied colour.
-
-- Affected: `src/main/java/dev/simplified/image/PixelBuffer.java:755-828` (`blitScaled`), `src/main/java/dev/simplified/image/PixelBuffer.java:853-888` (`blitScaledFxaa`), `src/main/java/dev/simplified/image/PixelBuffer.java:1281-1288` (`sourceColumns`), `src/main/java/dev/simplified/image/PixelBuffer.java:379-468` (`resize`, `resizeBicubic`), `src/main/java/dev/simplified/image/pixel/PixelMask.java:90` (`downsample`)
-- Severity: **MEDIUM**
-- Type: **GAP**
-- Status: **OPEN**
-
 ## The WebP writer's partial-frame path drops an OVER frame's blend
 When `usePartialFrames` holds - every lossless write, and every lossy write without P-frames - `WebPImageWriter` writes each ANMF chunk as do-not-dispose and do-not-blend over the region that changed. A frame tagged `FrameBlend.OVER` that is transparent where it relies on the frame beneath is therefore written as an overwrite. Measured on an animation whose frame 1 is `OVER`: written as lossless WebP (the default) the relying pixel reads `00000000`, where GIF shows `ffff0000` and lossy WebP with P-frames shows `ffff0005`. A decoded GIF, whose frames read as `OVER`, reaches it when re-encoded as lossless WebP; nothing in the workspace does that today. HIGH once a caller converts GIFs to WebP.
 
@@ -77,7 +69,7 @@ The ICO arm of `ImageFormat.matches` accepts `00 00 01 00`, which is also the bi
 ## FXAA's absolute thresholds are 0-to-1 luma constants read against a 0-to-255 luma
 `fxaaPixel`, the per-pixel body `applyFxaa` and `blitScaledFxaa` share, skips a neighbourhood whose contrast is under `max(0.0156, lumaMax * 0.0312)` and floors its direction reduction at `1/128`. Those are FXAA's values for luma in `[0, 1]`, but the luma here is in `[0, 255]`, so both floors are effectively inert: the relative threshold decides every case above near-black, and the direction floor never binds there. Not checked against a reference shader; changing either moves every FXAA output.
 
-- Affected: `src/main/java/dev/simplified/image/PixelBuffer.java:1023-1024`, `src/main/java/dev/simplified/image/PixelBuffer.java:1048`, `src/main/java/dev/simplified/image/PixelBuffer.java:1054-1057` (`fxaaPixel`)
+- Affected: `src/main/java/dev/simplified/image/PixelBuffer.java:1146-1147`, `src/main/java/dev/simplified/image/PixelBuffer.java:1171`, `src/main/java/dev/simplified/image/PixelBuffer.java:1177-1180` (`fxaaPixel`)
 - Severity: **LOW**
 - Type: **RISK**
 - Status: **OPEN**
