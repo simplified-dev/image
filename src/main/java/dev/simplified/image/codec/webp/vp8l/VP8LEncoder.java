@@ -1026,7 +1026,7 @@ public final class VP8LEncoder {
                 // Advance the hash chain + color cache over every position in the
                 // match. The decoder inserts each copied pixel into the cache as it
                 // materialises, so the encoder's cache state must track the same
-                // sequence of inserts to keep future cache-hit checks in sync.
+                // sequence of inserts to keep later cache-hit checks in sync.
                 for (int k = 0; k < matchLen; k++) {
                     LZ77.updateHash(pixelData, pos + k, hashHead, hashPrev);
                     if (cacheSize > 0) cache.insert(pixelData[pos + k]);

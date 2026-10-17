@@ -232,7 +232,7 @@ public class GifImageWriter implements ImageWriter {
      * are too many unique colors a frequency-weighted median-cut quantizer picks 256 image
      * -adaptive colors; this produces far better results than the default Java GIF writer's
      * hardcoded web-safe cube, which snaps every non-web-safe pixel to one of 216 coarse
-     * colors and destroys smooth gradients (the old "lost border gradient" bug).
+     * colors and destroys smooth gradients.
      */
     @NotNull
     private static IndexColorModel buildSharedPalette(

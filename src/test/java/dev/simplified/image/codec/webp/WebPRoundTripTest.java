@@ -291,15 +291,12 @@ class WebPRoundTripTest {
         ImageFactory.toFile(anim, ImageFormat.WEBP, keyOnlyOut,
             WebPWriteOptions.builder().isLossless(false).withQuality(1.0f).build());
 
-        // Both outputs must be small on stationary content. Prior to
-        // partial-frame ANMF (the 7684318 / FrameDiffUtil commit) the
-        // keyframe-only path emitted a full VP8 keyframe per ANMF and was
-        // much larger than the P-frame path; with partial frames, unchanged
-        // frames collapse to 1x1 placeholder ANMFs on BOTH paths (except
-        // the P-frame path still re-emits full inter-prediction VP8 per
-        // frame, so it's now slightly larger than keyframe-only on
-        // fully-stationary content). The size-ordering between the two
-        // options is content-dependent and no longer gates correctness.
+        // Both outputs must be small on stationary content. The keyframe-only
+        // path writes partial frames, so each unchanged frame collapses to a
+        // 1x1 placeholder ANMF; the P-frame path writes a full-canvas inter
+        // frame every time, so on fully stationary content it is slightly the
+        // larger. Which of the two is smaller depends on the content, so the
+        // test bounds each rather than ordering them.
         long maxExpected = 10_000;
         if (pFrameOut.length() > maxExpected || keyOnlyOut.length() > maxExpected)
             throw new AssertionError(String.format(
@@ -496,11 +493,12 @@ class WebPRoundTripTest {
     @Test
     @DisplayName("diagnostic: decode testLore P-frame output via our own reader + dump PNGs for visual check")
     void diagnosticDecodeTestLorePFrameOutput() throws Exception {
-        // Self-skip when testLore cache file not present. Produces
-        // W:/tmp/pframe_decoded_fN.png for each selected frame + PSNR vs lossless
-        // reference. Determines whether the user's "corrupt" report means
-        // "visually wrong pixels" (real bug) vs "libwebp rejects the container"
-        // (known Task 13 limitation - our own reader decodes P-frames fine).
+        // Aborts when the testLore cache files are absent. Decodes the P-frame
+        // file through this library's reader and writes W:/tmp/pframe_decoded_fN.png
+        // for each selected frame with its PSNR against the lossless reference, so
+        // a file that will not open elsewhere can be told apart from one that
+        // decodes to wrong pixels: libwebp rejects every P-frame, which this
+        // reader decodes.
         java.nio.file.Path pframeIn = java.nio.file.Path.of(
             "W:/Workspace/Java/SkyBlock-Simplified/asset-renderer/cache/test-lore/weapon_ss4_lossy.webp");
         java.nio.file.Path losslessIn = java.nio.file.Path.of(
@@ -917,13 +915,12 @@ class WebPRoundTripTest {
     }
 
     @Test
-    @DisplayName("default animated-lossy output is libwebp-decodable (Task 13 regression gate)")
+    @DisplayName("default animated-lossy output is libwebp-decodable")
     void defaultAnimatedLossyIsLibwebpDecodable() throws Exception {
-        // Regression gate tied to the Task 13 closure: libwebp's VP8GetHeaders
-        // unconditionally rejects non-keyframe VP8 bitstreams, so anything wrapped
-        // in ANMF that carries a P-frame VP8 payload will fail to decode in
-        // libwebp-based tools (Chrome, Firefox, Windows Photos, Pillow-via-libwebp,
-        // ffmpeg-built-against-libwebp).
+        // libwebp's VP8GetHeaders unconditionally rejects non-keyframe VP8
+        // bitstreams, so anything wrapped in ANMF that carries a P-frame VP8
+        // payload fails to decode in libwebp-based tools (Chrome, Firefox,
+        // Windows Photos, Pillow-via-libwebp, ffmpeg-built-against-libwebp).
         //
         // Default WebPWriteOptions (no usePFrames(true), no explicit multithreaded)
         // MUST produce a file with all-keyframe VP8 payloads so the output opens

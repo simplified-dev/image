@@ -148,7 +148,7 @@ public class WebPImageWriter implements ImageWriter {
         // on content where only a small region of the canvas changes per frame
         // (tooltip animations where the body is static, only the bottom line of
         // obfuscated text cycles), matches what libwebp's WebPAnimEncoder and
-        // GIF89a both do, and removes the "animated WebP shows as static" issue
+        // GIF89a both do, and avoids the "animated WebP shows as static" issue
         // that strict viewers (Windows Photos) exhibit on very large full-frame
         // animated WebPs. Partial frames are skipped on the P-frame path because
         // VP8 inter prediction requires the full-canvas reference - a partial
@@ -196,8 +196,8 @@ public class WebPImageWriter implements ImageWriter {
 
         // Encode all frames. Lossy animated with usePFrames enabled runs sequentially so
         // a shared VP8EncoderSession can carry reference-frame state across frames and
-        // emit P-frames for stationary macroblocks. Otherwise the existing per-frame
-        // independent path is used (optionally parallel).
+        // emit P-frames for stationary macroblocks. Otherwise each frame is encoded
+        // independently (optionally in parallel).
         ConcurrentList<byte[]> encodedPayloads;
         ConcurrentList<byte[]> alphaPayloads;
         if (!lossless && usePFrames) {

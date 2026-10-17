@@ -532,7 +532,7 @@ public final class VP8Decoder {
 
         // ── Macroblock loop ──
         // MB row y reads tokens from partition (y & (numTokenPartitions - 1)), matching the
-        // encoder's interleave. Mode bits come from the first partition (br) as before.
+        // encoder's interleave. Mode bits come from the first partition (br).
         for (int mbY = 0; mbY < s.mbRows; mbY++) {
             java.util.Arrays.fill(s.leftNz, 0);
             java.util.Arrays.fill(s.intraL, IntraPrediction.B_DC_PRED);
@@ -549,10 +549,10 @@ public final class VP8Decoder {
         // Loop filter. Normal + simple modes are both driven by the same per-MB
         // classification tables; ref_lf_delta / mode_lf_delta are applied when the
         // frame header set use_lf_delta = 1.
-        // Guard against a trivial all-segments-off configuration at call time. For
-        // single-segment streams this matches the pre-segment behaviour exactly; for
-        // multi-segment streams the LoopFilter's own early-exit handles the
-        // zero-filter-level case per segment.
+        // The pass is skipped when every segment's level is zero. A single-segment
+        // stream holds the frame's level in all four entries, so the pass runs exactly
+        // when that level is non-zero; in a multi-segment stream LoopFilter also skips
+        // each MB whose own level comes out zero.
         boolean anySegmentFilters = false;
         for (int lvl : s.segFilterLevel) if (lvl > 0) { anySegmentFilters = true; break; }
         if (anySegmentFilters) {

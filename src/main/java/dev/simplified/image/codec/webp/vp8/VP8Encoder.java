@@ -605,8 +605,8 @@ public final class VP8Encoder {
      * the session's {@code LAST} reference - bit-identical to what ZEROMV+skip would
      * produce, but routed through the RFC 6386 section 17.3 SPLITMV parse path.
      * <p>
-     * Exists to exercise the decoder's SPLITMV wire-format coverage without wiring
-     * SPLITMV into the R-D candidate set. Source pixels are not used for
+     * Exercises the decoder's SPLITMV wire format at a fixed pattern, whatever the R-D
+     * candidate search would pick for the frame. Source pixels are not used for
      * reconstruction - they only drive the quantizer / filter-level derivations in
      * {@link #writeFrameHeader}.
      *
@@ -681,15 +681,16 @@ public final class VP8Encoder {
      * content with meaningful variance spread.
      * <p>
      * When the source has too little variance spread to benefit (e.g. mostly flat
-     * tooltip content), the call falls through to a single-segment encode via
-     * {@link #encode(PixelBuffer, float)}. This keeps callers from paying the 2-4
+     * tooltip content), the call falls through to the single-segment encode
+     * {@link #encode(PixelBuffer, float)} writes. This keeps callers from paying the 2-4
      * byte per-MB segment-tree emit cost on content where segmentation cannot pay
      * off.
      * <p>
      * Gated by an internal spread threshold rather than a caller-tunable setting;
-     * see {@link #computeAutoSegmentAssignment} for the heuristic. Keyframe-only -
-     * P-frame auto-segmentation is separate work (the session-based writer path
-     * does not yet thread an auto-segment flag through).
+     * see {@link #computeAutoSegmentAssignment} for the heuristic. Keyframe-only and
+     * sessionless - a session auto-segments its keyframes through
+     * {@link #encodeKeyframeAutoSegment} and its P-frames through
+     * {@link #encodePFrameAutoSegment}.
      *
      * @param pixels source pixel buffer
      * @param quality encoding quality in {@code [0.0, 1.0]}
@@ -1340,7 +1341,7 @@ public final class VP8Encoder {
         // frame of a session, prevTokenBranches is null and we emit all zeros.
         emitTokenProbaUpdates(e, s);
 
-        // Per-MB skip-flag proba. Keyframes keep the existing use_skip_proba=0 behaviour;
+        // Per-MB skip-flag proba. Keyframes write use_skip_proba=0;
         // P-frames enable skip with a 50/50 default so the inter-skip MBs actually save
         // bits (one skip bit per MB instead of a zero Y2 + 16 zero YAC + 8 zero UV tokens).
         if (s.isKeyframe) {
@@ -1646,7 +1647,7 @@ public final class VP8Encoder {
         } else {
             h.encodeBit(145, 1);                            // 16x16 prediction
             emitYMode16x16(h, yMode16);
-            // Fill sub-block neighbour context with the analogous B_*_PRED for future MBs.
+            // Fill sub-block neighbour context with the analogous B_*_PRED for later MBs.
             int ctxMode = mb16ToSubMode(yMode16);
             java.util.Arrays.fill(s.intraT, mbX * 4, mbX * 4 + 4, ctxMode);
             java.util.Arrays.fill(s.intraL, ctxMode);
@@ -2319,8 +2320,8 @@ public final class VP8Encoder {
      * context is {@code LEFT_ABOVE_BOTH_ZERO} (ctx 4) for every slot.
      * <p>
      * The encoder's {@code bmiRow} / {@code bmiCol} / {@code mbSplitScheme} mirror
-     * is populated to match the decoder so future R-D-integrated SPLITMV emits at
-     * non-zero sub-MVs see consistent neighbour context.
+     * is filled as the decoder fills its own, so every sub-MV context a later MB
+     * reads holds what the decoder will hold.
      * <p>
      * Reconstruction is a direct {@code LAST}-reference copy, matching the decoder's
      * SPLITMV path at all-zero sub-MVs with {@code skip = 1}.
@@ -2361,9 +2362,9 @@ public final class VP8Encoder {
         s.mbIsInter[mbIdx] = true;
         s.mbMvRow[mbIdx] = 0;
         s.mbMvCol[mbIdx] = 0;
-        // bmiRow / bmiCol default to 0 from State allocation - explicit fill is a
-        // no-op for this all-zero forced pattern but documents the contract for
-        // future non-zero SPLITMV emit paths.
+        // bmiRow / bmiCol already hold 0 from State allocation; the fill writes this
+        // MB's sixteen sub-MVs explicitly, as the R-D SPLITMV candidates write their
+        // non-zero ones.
         int bmiBase = mbIdx * 16;
         for (int i = 0; i < 16; i++) {
             s.bmiRow[bmiBase + i] = 0;
@@ -2421,7 +2422,7 @@ public final class VP8Encoder {
      *   <li>1024 &lt;= gate &lt; 16384 - small additional savings (-484 to -590 bytes total)
      *       at 2-3x the wall time. Marginal byte / runtime tradeoff.</li>
      *   <li>gate &lt; 1024 - further savings (-1892 to -3278 bytes) at 5-12x runtime.
-     *       Worth opting into via a future encoder tier flag, not as the default.</li>
+     *       Not the default, and no option selects it.</li>
      *   <li>gate &gt;&gt; 16384 - savings degrade due to per-frame proba-update ripple when
      *       SPLITMV is picked sporadically on isolated very-high-SSE MBs.</li>
      * </ul>
@@ -4207,7 +4208,7 @@ public final class VP8Encoder {
             }
         }
 
-        // Update neighbour-mode context for future MBs.
+        // Update neighbour-mode context for later MBs.
         for (int bx = 0; bx < 4; bx++) s.intraT[mbX * 4 + bx] = subModes[3][bx];
         for (int by = 0; by < 4; by++) s.intraL[by] = subModes[by][3];
     }

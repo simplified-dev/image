@@ -47,7 +47,7 @@ public enum DiffType {
      * <p>
      * Compositing-over-white gives the same per-channel diff a viewer would perceive looking at
      * the two PNGs on the default white viewer background - alpha edge spill at semi-transparent
-     * pixels no longer reads as a huge raw RGB delta when both pixels are nearly transparent.
+     * pixels does not read as a huge raw RGB delta when both pixels are nearly transparent.
      * This is the perceptually-accurate metric over raw {@link #ABSOLUTE} channel deltas.
      */
     OVER_WHITE,

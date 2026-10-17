@@ -305,8 +305,8 @@ public class VP8CodecTest {
 
         @Test @DisplayName("loop filter on doesn't decrease 32x48 PSNR vs libwebp-decoded baseline")
         void loopFilterDoesNotHurtPsnr() throws Exception {
-            // The encoder always emits filter_level > 0 now; asserting a healthy PSNR at
-            // q=0.9 guarantees the filter (applied by libwebp on decode) isn't degrading
+            // The encoder emits filter_level > 0 at q=0.9; asserting a healthy PSNR there
+            // guarantees the filter (applied by libwebp on decode) isn't degrading
             // output. If LoopFilter or filter_level computation drifts, this fails.
             PixelBuffer buf = PixelBuffer.create(32, 48);
             for (int y = 0; y < 48; y++)
@@ -400,7 +400,7 @@ public class VP8CodecTest {
                     expectR, expectG, expectB, (p >> 16) & 0xFF, (p >> 8) & 0xFF, p & 0xFF, tolerance));
         }
 
-        // ──── Sub-block motion search (Task 11 phase 2) ────
+        // ──── Sub-block motion search ────
 
         @Test @DisplayName("computeBestSubBlockMv: zero-shift source recovers MV (0, 0) for 16x16 block")
         void subBlockSearchZeroShift() {
@@ -596,9 +596,9 @@ public class VP8CodecTest {
 
             PixelBuffer decoded = VP8Decoder.decode(vp8);
             double psnr = rgbPsnr(src, decoded);
-            // Normal-filter support + fancy bilinear chroma upsampling landed in commit
-            // 6449249, raising this from the old 20 dB smoke-test threshold to a real
-            // parity check. Measured ~31.8 dB locally; 28 dB leaves ~3.5 dB of margin.
+            // A parity check of the decoder's normal loop filter and fancy bilinear
+            // chroma upsampling against libwebp's output. Measured ~31.8 dB locally;
+            // 28 dB leaves ~3.5 dB of margin.
             if (psnr < 28.0)
                 throw new AssertionError(String.format(
                     "PSNR decoding libwebp q=100 gradient = %.2f dB (expected >= 28 dB)", psnr));
@@ -1243,7 +1243,7 @@ public class VP8CodecTest {
                     "SPLITMV-roundtrip-with-filter PSNR = %.2f dB (expected >= 35 dB)", psnr));
         }
 
-        @Test @DisplayName("conformance: SPLITMV R-D candidate captures non-uniform per-sub-MB motion (Task 11 phase 3)")
+        @Test @DisplayName("conformance: SPLITMV R-D candidate captures non-uniform per-sub-MB motion")
         void splitMvRdNonUniformMotion() {
             // 32x32 image (2x2 MBs). Construct a P-frame whose top half within each MB is the
             // keyframe shifted +1 luma pixel right, and whose bottom half is identical to the
@@ -1304,7 +1304,7 @@ public class VP8CodecTest {
                     psnr));
         }
 
-        @Test @DisplayName("conformance: SPLITMV-residual flavour roundtrip at reduced quality (Task 11 follow-up 1)")
+        @Test @DisplayName("conformance: SPLITMV-residual flavour roundtrip at reduced quality")
         void splitMvResidualRoundTrip() {
             // 32x32 input with non-uniform per-sub-MB motion (same shape as
             // splitMvRdNonUniformMotion) at q=0.5 so the encoder exercises both the skip
@@ -1363,13 +1363,13 @@ public class VP8CodecTest {
                     psnr));
         }
 
-        @Test @DisplayName("conformance: SPLITMV gate suppresses enumeration on smooth content (Task 11 phase 3)")
+        @Test @DisplayName("conformance: P-frame of an unchanged solid source stays within 60 bytes")
         void splitMvGateSuppressesOnSmoothContent() {
-            // Solid-colour MBs have ZeroMV-skip SSE = 0, well below SPLITMV_GATE_SSE.
-            // The encoder must skip SPLITMV enumeration entirely (and pick ZeroMv-skip
-            // / NEAREST-skip), keeping the encoded byte count tiny. A regression where
-            // the gate failed open would explode the per-frame size with unwanted
-            // SPLITMV emissions on every MB.
+            // Solid-colour MBs have ZeroMV-skip SSE = 0, well below SPLITMV_GATE_SSE,
+            // and no candidate scores below a zero-distortion skip, so every MB codes
+            // as ZeroMv-skip / NEAREST-skip whether or not the gate lets SPLITMV be
+            // enumerated. The test bounds that frame's size; it cannot tell the gate
+            // open from shut.
             int W = 32, H = 32;
             PixelBuffer keyframe = PixelBuffer.create(W, H);
             for (int y = 0; y < H; y++)
@@ -1381,9 +1381,8 @@ public class VP8CodecTest {
             byte[] pf = encSess.encode(keyframe, 0.75f, false);   // identical source
 
             // P-frame for an unchanged source should be tiny (just per-MB header bits).
-            // The forced-SPLITMV hook produced ~80-100 bytes; an inter-skip P-frame on
-            // identical source is typically ~10-30 bytes. SPLITMV per MB would push it
-            // past this threshold even at the cheapest scheme.
+            // This one codes in 45 bytes; the forced-SPLITMV hook writes the same frame
+            // in 57, so a SPLITMV on every MB passes the bound too.
             if (pf.length > 60)
                 throw new AssertionError(String.format(
                     "P-frame for unchanged source is %d bytes (expected < 60) - "
@@ -1395,7 +1394,7 @@ public class VP8CodecTest {
         void subMvRefContextClassifier() {
             // The encoder's rate-cost estimation for SPLITMV must index the same
             // SUB_MV_REF_PROB row the decoder will read. VP8Decoder.decodeSplitMv
-            // computes the context inline at lines 1051-1060; VP8Encoder.subMvRefContext
+            // computes the context inline; VP8Encoder.subMvRefContext
             // is the matching static helper. This test pins the 5 cases:
             //   ctx 0 = NORMAL                 (left != above, neither zero)
             //   ctx 1 = LEFT_ZERO              (left == 0, above != 0)
@@ -1576,13 +1575,12 @@ public class VP8CodecTest {
         @Test @DisplayName("conformance: per-segment quant delta changes encoder byte output (RFC 6386 section 10)")
         void segmentMapQuantDeltaAffectsEncoderBytes() {
             // Encoder trellises each MB at its segment's quantizer (see
-            // State.applySegment). Under the pre-Task-16 behaviour the encoder ran
-            // every MB at the frame's base quantizer and only the decoder applied
-            // the per-segment dequant delta, so byte output was identical across all
-            // quant-delta values. This test asserts that a negative delta (which
-            // lowers the segment's QI, raising quality) strictly increases byte
-            // output and a positive delta strictly decreases it, proving the
-            // encoder-side swap is actually wired.
+            // State.applySegment). An encoder that ran every MB at the frame's base
+            // quantizer, leaving the per-segment dequant delta to the decoder, would
+            // write the same bytes for every quant-delta value. This test asserts
+            // that a negative delta (which lowers the segment's QI, raising quality)
+            // strictly increases byte output and a positive delta strictly decreases
+            // it, so the encoder-side swap is wired.
             PixelBuffer src = PixelBuffer.create(32, 32);
             for (int y = 0; y < 32; y++)
                 for (int x = 0; x < 32; x++)
@@ -1812,8 +1810,7 @@ public class VP8CodecTest {
 
         @Test @DisplayName("golden-reference harness: decodeWithMetadata round-trips per-MB decisions and compares against libwebp when available")
         void goldenReferenceHarnessSmokeTest() throws Exception {
-            // Smoke test for the Task 14 / Detected 2 golden-reference scaffolding.
-            // Verifies two things:
+            // Smoke test for GoldenReferenceHelper. Verifies two things:
             //
             //  1. (Always runs) VP8Decoder.decodeWithMetadata returns a FrameMetadata
             //     whose per-MB arrays are fully populated from a decode of our own
@@ -1822,9 +1819,10 @@ public class VP8CodecTest {
             //
             //  2. (libwebp-gated) Calls GoldenReferenceHelper.compare which runs both
             //     encoders and builds a ModeDecisionDiff. Logs the diff summary to
-            //     stderr for visual inspection - no tight assertion yet because the
-            //     diff IS the data that future sessions use to tune R-D lambdas.
-            //     Aborts, after part 1 has run, when Python/webp is unavailable.
+            //     stderr for reading and checks only that its counts add up: the
+            //     agreement it measures is what tuning the R-D lambdas reads, not
+            //     a value the test holds. Aborts, after part 1 has run, when
+            //     Python/webp is unavailable.
             //
             // 64x64 synthetic source: smooth gradient with two solid-colour regions
             // that give the encoder a realistic mix of intra-DC and intra-other
@@ -1877,9 +1875,8 @@ public class VP8CodecTest {
             // Part 2: libwebp-gated comparison.
             GoldenReferenceHelper.Result result = GoldenReferenceHelper.compare(src, 75);
             System.err.println("[golden-reference smoke] " + GoldenReferenceHelper.formatDiff(result.diff()));
-            // No tight assertion on the diff - the whole point of this harness is
-            // that future sessions use the measured agreement as the tuning signal.
-            // Sanity-check that the diff is coherent (total equals per-MB sum).
+            // No assertion bounds the measured agreement, which is reported rather
+            // than held. Sanity-check that the diff is coherent (total equals per-MB sum).
             var d = result.diff();
             if (d.agreeIntra() + d.agreeInter() + d.disagreeType() != d.totalMbs())
                 throw new AssertionError("diff counts inconsistent: agreeIntra+agreeInter+disagreeType != totalMbs");
@@ -1888,15 +1885,15 @@ public class VP8CodecTest {
     }
 
     /**
-     * Golden-reference tooling scaffold for Task 14 (libwebp lambda tuning) and
-     * Detected 2 (R-D ripple accounting) - encodes a source with both our encoder
-     * and libwebp, decodes both through our decoder via {@link VP8Decoder#decodeWithMetadata},
-     * and produces a structured per-MB diff.
+     * Golden-reference comparison against libwebp - encodes a source with both our
+     * encoder and libwebp, decodes both through our decoder via
+     * {@link VP8Decoder#decodeWithMetadata}, and produces a structured per-MB diff.
      * <p>
-     * Not a correctness test - the harness is diagnostic infrastructure. Future
-     * sessions use the captured {@link ModeDecisionDiff} to tune R-D lambdas
-     * against libwebp's choices on reference content, or to profile which MBs
-     * get downstream-costly SPLITMV-residual / MBSPLIT_EIGHTS picks.
+     * Not a correctness test - the harness is diagnostic infrastructure. The captured
+     * {@link ModeDecisionDiff} measures how far our mode, motion-vector and segment
+     * choices sit from libwebp's on the same content, which is what tuning the R-D
+     * lambdas against libwebp reads, and shows which MBs take downstream-costly
+     * SPLITMV-residual / MBSPLIT_EIGHTS picks.
      */
     private static final class GoldenReferenceHelper {
 
@@ -2019,7 +2016,7 @@ public class VP8CodecTest {
         }
     }
 
-    // ──── VP8 Session (Phase 0 stateful encoder/decoder wrappers) ────
+    // ──── VP8 Session (stateful encoder/decoder wrappers) ────
 
     @Nested
     class VP8SessionTests {
@@ -2334,8 +2331,9 @@ public class VP8CodecTest {
         @Test @DisplayName("P-frame sub-pel: 1-pel shifted frame uses sub-pel chroma + integer luma")
         void pFrameSubPelTranslationRoundTrip() {
             // 1-pel luma horizontal shift produces a 0.5-pel chroma MV, exercising the 6-tap
-            // chroma sub-pel path on both encoder + decoder. Phase 2c removed the prior
-            // "throw on sub-pel" guard - this test catches regressions of that.
+            // chroma sub-pel path on both encoder + decoder. Both must predict at the
+            // fractional position rather than refuse it: one that threw on a sub-pel
+            // MV fails here.
             int w = 32, h = 32;
             PixelBuffer f0 = PixelBuffer.create(w, h);
             PixelBuffer f1 = PixelBuffer.create(w, h);

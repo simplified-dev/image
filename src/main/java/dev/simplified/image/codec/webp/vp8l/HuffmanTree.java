@@ -194,7 +194,7 @@ final class HuffmanTree {
 
     private void addLongCode(int reversed, int len, int symbol) {
         // For codes longer than TABLE_BITS, we use the table entry as a pointer
-        // to an overflow area. Simple linear search for now.
+        // to an overflow area, which readLongCode searches linearly.
         int tableIndex = reversed & (TABLE_SIZE - 1);
         int entry = table[tableIndex];
 
