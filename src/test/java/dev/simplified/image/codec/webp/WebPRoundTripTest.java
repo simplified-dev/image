@@ -719,14 +719,9 @@ class WebPRoundTripTest {
         }
 
         // Cross-decoder check: libwebp's WebPAnimDecoder must accept this
-        // partial-frame file and return all 5 frames. Self-skips when Python /
-        // webp unavailable - the round-trip above still gates correctness.
-        int[][] libwebpFrames;
-        try {
-            libwebpFrames = decodeAnimatedAlphaWithLibwebp(out, W, H, 5);
-        } catch (org.opentest4j.TestAbortedException skip) {
-            return;   // libwebp unavailable
-        }
+        // partial-frame file and return all 5 frames. Aborts when Python / webp
+        // is unavailable, after the round-trip above has run.
+        int[][] libwebpFrames = decodeAnimatedAlphaWithLibwebp(out, W, H, 5);
         if (libwebpFrames.length != 5)
             throw new AssertionError("libwebp decoded " + libwebpFrames.length
                 + " frames, expected 5 from our partial-frame animated WebP");

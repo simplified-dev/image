@@ -11,6 +11,7 @@ import java.nio.charset.StandardCharsets;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.is;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
  * Package-private tests for the VP8 (lossy) codec internals: boolean range coder,
@@ -664,7 +665,7 @@ public class VP8CodecTest {
                     src.setPixel(x, y, 0xFF000000 | ((x * 8) << 16) | ((y * 8) << 8));
 
             byte[] vp8 = encodeWithLibwebp(src, 100);
-            if (vp8 == null) return;   // Python/libwebp unavailable - skipped.
+            assumeTrue(vp8 != null, "Python webp package unavailable - libwebp cannot encode the source");
 
             PixelBuffer decoded = VP8Decoder.decode(vp8);
             double psnr = sourcePsnr(src, decoded);
@@ -829,7 +830,7 @@ public class VP8CodecTest {
             byte[] riff = wrapInRiff(vp8);
 
             int[] decoded = ConformanceHelper.decodeWithLibwebp(riff, 32, 32);
-            if (decoded == null) return;  // libwebp/Python unavailable - skipped.
+            assumeTrue(decoded != null, "Python webp package unavailable - libwebp cannot decode our stream");
 
             double psnr = ConformanceHelper.pixelPsnr(src, decoded, 32, 32);
             if (psnr < 30.0)
@@ -846,13 +847,13 @@ public class VP8CodecTest {
                     src.setPixel(x, y, 0xFF000000 | ((x * 8) << 16) | ((y * 8) << 8));
 
             byte[] vp8 = ConformanceHelper.encodeWithLibwebp(src, 60);
-            if (vp8 == null) return;
+            assumeTrue(vp8 != null, "Python webp package unavailable - libwebp cannot encode the source");
 
             PixelBuffer ours = VP8Decoder.decode(vp8);
 
             byte[] riff = wrapInRiff(vp8);
             int[] libwebp = ConformanceHelper.decodeWithLibwebp(riff, 32, 32);
-            if (libwebp == null) return;
+            assumeTrue(libwebp != null, "Python webp package unavailable - libwebp cannot decode its own stream");
 
             // libwebp uses "fancy" bilinear chroma upsampling; we use nearest. That alone
             // costs a few dB. If ref_lf_delta / mode_lf_delta parsing were broken, filter
@@ -2013,7 +2014,7 @@ public class VP8CodecTest {
             //     encoders and builds a ModeDecisionDiff. Logs the diff summary to
             //     stderr for visual inspection - no tight assertion yet because the
             //     diff IS the data that future sessions use to tune R-D lambdas.
-            //     Self-skips when Python/webp unavailable.
+            //     Aborts, after part 1 has run, when Python/webp is unavailable.
             //
             // 64x64 synthetic source: smooth gradient with two solid-colour regions
             // that give the encoder a realistic mix of intra-DC and intra-other
@@ -2065,12 +2066,8 @@ public class VP8CodecTest {
 
             // Part 2: libwebp-gated comparison.
             GoldenReferenceHelper.Result result = GoldenReferenceHelper.compare(src, 75);
-            if (result.libwebp() == null) {
-                System.err.println(
-                    "[golden-reference smoke] libwebp unavailable, comparison skipped. "
-                    + "Ours-only: " + expectedMbs + " MBs, all intra");
-                return;
-            }
+            assumeTrue(result.libwebp() != null,
+                "Python webp package unavailable - our side checked (" + expectedMbs + " MBs, all intra), libwebp's not");
             System.err.println("[golden-reference smoke] " + GoldenReferenceHelper.formatDiff(result.diff()));
             // No tight assertion on the diff - the whole point of this harness is
             // that future sessions use the measured agreement as the tuning signal.
@@ -2334,15 +2331,9 @@ public class VP8CodecTest {
                 return new Result(ours.metadata(), null, null);
             }
 
-            VP8Decoder.DecodedFrame theirs;
-            try {
-                theirs = VP8Decoder.decodeWithMetadata(theirsVp8);
-            } catch (RuntimeException e) {
-                // libwebp output our decoder couldn't parse (unlikely at keyframe
-                // level - would be a decoder bug worth investigating). Surface
-                // the ours-only view so diagnostics still produce something.
-                return new Result(ours.metadata(), null, null);
-            }
+            // A libwebp stream our decoder cannot parse is a decoder bug, so it throws
+            // rather than reading as an absent oracle.
+            VP8Decoder.DecodedFrame theirs = VP8Decoder.decodeWithMetadata(theirsVp8);
 
             return new Result(ours.metadata(), theirs.metadata(),
                 buildDiff(ours.metadata(), theirs.metadata()));

@@ -106,26 +106,10 @@ The `AnimatedImageData` it rebuilds never calls `withWidth` or `withHeight`, so 
 - Type: **BUG**
 - Status: **OPEN**
 
-## Four libwebp oracle tests pass instead of skipping when the oracle is missing
-Each ends with `if (x == null) return;` when Python or the `webp` package is unavailable, so a run without the oracle reports PASSED for checks that never ran.
-
-- Affected: `src/test/java/dev/simplified/image/codec/webp/vp8/VP8CodecTest.java:667`, `:832`, `:849`, `:855`
-- Severity: **LOW**
-- Type: **GAP**
-- Status: **OPEN**
-
-## CLAUDE.md overstates the test-abort guarantee
-Line 48 promises that the VP8 tests abort via `TestAbortedException` when Python or the package is missing; the four silent passes above contradict it.
-
-- Affected: `CLAUDE.md:48`
-- Severity: **LOW**
-- Type: **GAP**
-- Status: **OPEN**
-
 ## Python launchers fall through only on `IOException`
-Every launcher copy moves to the next interpreter candidate only when `ProcessBuilder.start()` throws, so the first candidate that launches wins even if it cannot import `webp`. The suspected trigger is a Windows Store `python3` stub; the only evidence for its behaviour is the code comment at `VP8CodecTest.java:763-772`, which says it can shadow a working install (UNVERIFIED that it launches and then fails).
+Every launcher copy moves to the next interpreter candidate only when `ProcessBuilder.start()` throws, so the first candidate that launches wins even if it cannot import `webp`. The suspected trigger is a Windows Store `python3` stub; the only evidence for its behaviour is the code comment at `VP8CodecTest.java:764-773`, which says it can shadow a working install (UNVERIFIED that it launches and then fails).
 
-- Affected: `src/test/java/dev/simplified/image/codec/webp/vp8/VP8CodecTest.java:253-264`, `:763-791`, `:2233-2261`, `src/test/java/dev/simplified/image/codec/webp/WebPRoundTripTest.java:1513-1532`
+- Affected: `src/test/java/dev/simplified/image/codec/webp/vp8/VP8CodecTest.java:254-265`, `:764-792`, `:2230-2258`, `src/test/java/dev/simplified/image/codec/webp/WebPRoundTripTest.java:1508-1527`
 - Severity: **LOW**
 - Type: **RISK**
 - Status: **OPEN**
@@ -133,7 +117,7 @@ Every launcher copy moves to the next interpreter candidate only when `ProcessBu
 ## `VP8EncoderTests.startPython` ignores the `vp8.pythonBin` override
 This launcher tries only `python3`, `python` and `py`, unlike the other copies, which honour `-Dvp8.pythonBin` first. If the first interpreter that starts cannot import `webp` and exits non-zero without printing `NO_WEBP`, the caller fails with `AssertionError("libwebp rejected ...")` instead of skipping.
 
-- Affected: `src/test/java/dev/simplified/image/codec/webp/vp8/VP8CodecTest.java:253-264`
+- Affected: `src/test/java/dev/simplified/image/codec/webp/vp8/VP8CodecTest.java:254-265`
 - Severity: **LOW**
 - Type: **RISK**
 - Status: **OPEN**
@@ -141,7 +125,7 @@ This launcher tries only `python3`, `python` and `py`, unlike the other copies, 
 ## Test file paths are spliced into Python `r'...'` literals
 The oracle scripts build `webp.load_image(r'<path>')` and `open(r'<path>')` by string concatenation, so a path containing `'` breaks the script. `Files.createTempFile` paths keep it harmless today; passing paths as argv removes it.
 
-- Affected: `src/test/java/dev/simplified/image/codec/webp/vp8/VP8CodecTest.java:225`, `:438`, `:726`, `:2144`, `:2149`, `:2180`, `src/test/java/dev/simplified/image/codec/webp/WebPRoundTripTest.java:1165`, `:1225`
+- Affected: `src/test/java/dev/simplified/image/codec/webp/vp8/VP8CodecTest.java:226`, `:439`, `:727`, `:2141`, `:2146`, `:2177`, `src/test/java/dev/simplified/image/codec/webp/WebPRoundTripTest.java:1160`, `:1220`
 - Severity: **LOW**
 - Type: **RISK**
 - Status: **OPEN**
@@ -149,7 +133,7 @@ The oracle scripts build `webp.load_image(r'<path>')` and `open(r'<path>')` by s
 ## Python launcher and PSNR helper are duplicated across test classes
 There are four copies of the interpreter launcher and three of the PSNR loop, which is how the override and fall-through behaviour above drifted apart.
 
-- Affected: `src/test/java/dev/simplified/image/codec/webp/vp8/VP8CodecTest.java:253-264`, `:763-791`, `:2233-2261`, `src/test/java/dev/simplified/image/codec/webp/WebPRoundTripTest.java:1513-1532` (launchers); `VP8CodecTest.java:387` (`computePsnr`), `:679` (`sourcePsnr`), `:2097` (`pixelPsnr`)
+- Affected: `src/test/java/dev/simplified/image/codec/webp/vp8/VP8CodecTest.java:254-265`, `:764-792`, `:2230-2258`, `src/test/java/dev/simplified/image/codec/webp/WebPRoundTripTest.java:1508-1527` (launchers); `VP8CodecTest.java:388` (`computePsnr`), `:680` (`sourcePsnr`), `:2094` (`pixelPsnr`)
 - Severity: **LOW**
 - Type: **GAP**
 - Status: **OPEN**

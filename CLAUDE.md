@@ -45,7 +45,7 @@ Write options live in `.option` and use fluent builders: `WebPWriteOptions.build
 ./gradlew test --tests dev.simplified.image.codec.webp.vp8.VP8CodecTest
 ```
 
-VP8 lossy tests shell out to Python `webp` package (libwebp bindings) for round-trip validation. Tests abort gracefully via `TestAbortedException` when Python or the package is missing, rather than failing.
+The VP8 and WebP tests check this library's output against libwebp through Python's `webp` package (libwebp bindings). A test that consults libwebp aborts with `TestAbortedException`, and so reports skipped, never passed, when no Python interpreter starts or the first one that starts cannot import `webp`. A check of this library's own output that a test makes before consulting libwebp runs before the abort, so its failure still fails. Three diagnostics in `WebPRoundTripTest` abort the same way when the local tooltip files they read are absent.
 
 ## Info
 
