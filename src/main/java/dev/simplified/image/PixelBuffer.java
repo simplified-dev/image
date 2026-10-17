@@ -643,10 +643,9 @@ public class PixelBuffer {
      * Composites the source buffer onto this buffer at the given origin using the specified blend
      * mode. Out-of-bounds pixels are silently clipped.
      * <p>
-     * Fast paths are taken when {@code mode} is one of the source-over modes {@link BlendMode#NORMAL},
-     * {@link BlendMode#PREMULTIPLIED} and {@link BlendMode#STRAIGHT}: opaque sources use a per-row
-     * {@link System#arraycopy}; alpha sources inline the fully-opaque and fully-transparent
-     * short-circuits.
+     * Fast paths are taken when {@code mode} {@linkplain BlendMode#isSourceOver() is source-over}:
+     * opaque sources use a per-row {@link System#arraycopy}; alpha sources inline the fully-opaque and
+     * fully-transparent short-circuits.
      *
      * @param source the source buffer
      * @param dx the destination x origin
@@ -661,7 +660,7 @@ public class PixelBuffer {
 
         if (srcX0 >= srcX1 || srcY0 >= srcY1) return;
 
-        boolean sourceOver = isSourceOver(mode);
+        boolean sourceOver = mode.isSourceOver();
         if (sourceOver && !source.hasAlpha) {
             int rowWidth = srcX1 - srcX0;
             forEachRow(srcY0, srcY1, y -> {
@@ -701,18 +700,6 @@ public class PixelBuffer {
                 this.data[dstIdx] = ColorMath.blend(src, this.data[dstIdx], mode);
             }
         });
-    }
-
-    /**
-     * Whether {@code mode} is a source-over mode, which answers an opaque source unchanged and leaves
-     * the destination untouched under a fully transparent one.
-     *
-     * @param mode the blend mode
-     * @return {@code true} for {@link BlendMode#NORMAL}, {@link BlendMode#PREMULTIPLIED} and
-     *     {@link BlendMode#STRAIGHT}
-     */
-    private static boolean isSourceOver(@NotNull BlendMode mode) {
-        return mode == BlendMode.NORMAL || mode == BlendMode.PREMULTIPLIED || mode == BlendMode.STRAIGHT;
     }
 
     /**
@@ -785,7 +772,7 @@ public class PixelBuffer {
                 int sa = ColorMath.alpha(src);
                 if (sa == 0) continue;
 
-                if (mode == BlendMode.REPLACE || sa == 0xFF && isSourceOver(mode)) {
+                if (mode == BlendMode.REPLACE || sa == 0xFF && mode.isSourceOver()) {
                     Arrays.fill(this.data, dstRow + dx + x, dstRow + dx + end, src);
                     continue;
                 }
