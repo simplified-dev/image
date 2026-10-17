@@ -7,7 +7,7 @@ Pure-Java codec library for ten formats: BMP, GIF, ICO, JPEG, PNG, PNM, QOI, TGA
 A caller imports from the first six packages and never from below `codec`. `ImageFactory` is the only route to a codec: a static facade over a closed set of ten built-in readers and writers, which its static initializer creates once.
 
 - `dev.simplified.image` - `ImageFactory` (`fromFile`/`toFile`/`fromByteArray`/`toByteArray` plus `*s` batch variants and `detectFormat`), `ImageFormat`, `ImageData` and its two forms `StaticImageData` and `AnimatedImageData`, and `PixelBuffer`. Package-private beside `PixelBuffer`: `PixelVector`, `VectorOps` (the one source importing `jdk.incubator.vector`), `BufferedImageUnpacker`
-- `.frame` - `ImageFrame`, `FrameBlend`, `FrameDisposal`, `FrameNormalizer`, `FitMode`
+- `.frame` - `ImageFrame`, `FrameBlend`, `FrameDisposal`, `LoopCount` (+ nested `Preset` enum, `Custom` record and `Builder`), `FrameNormalizer`, `FitMode`
 - `.pixel` - `ColorMath`, `BlendMode`, `AlphaMode`, `Background`, `PixelGraphics`, `PixelMask`, `PixelDiff`, `DiffType`, `Resample`, `PixelBufferPool`
 - `.option` - `ImageReadOptions`/`ImageWriteOptions` and every format's write options: `GifWriteOptions`, `JpegWriteOptions`, `PngWriteOptions`, `PnmWriteOptions`, `TgaWriteOptions`, `TiffWriteOptions`, `WebPWriteOptions`. An option enum nests in its type (`GifWriteOptions.DelayFidelity`, `PnmWriteOptions.Variant`)
 - `.exception` - `ImageException` hierarchy (`ImageDecodeException`, `ImageEncodeException`, `UnsupportedFormatException`)
@@ -54,4 +54,4 @@ The VP8 and WebP tests check this library's output against libwebp through Pytho
 - External deps: Log4j2, Simplified Annotations, JetBrains annotations
 - Third-party code: `NOTICE` names every class ported from libwebp, libvpx or RFC 6386 and carries their licences; the jar packs it into `META-INF`. Code or tables taken from another codec get a line there too
 - Tests: JUnit 5 + Hamcrest
-- 94 main sources plus a `package-info.java` per package; 24 test sources
+- 95 main sources plus a `package-info.java` per package; 25 test sources

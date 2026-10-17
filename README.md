@@ -247,7 +247,7 @@ src/main/java/dev/simplified/image/
 ├── StaticImageData.java        # a single image
 ├── AnimatedImageData.java      # timed frames, loop count and canvas
 ├── PixelBuffer.java            # zero-copy ARGB pixels, with package-private SIMD kernels beside it
-├── frame/                      # ImageFrame, FrameBlend, FrameDisposal, FrameNormalizer, FitMode
+├── frame/                      # ImageFrame, FrameBlend, FrameDisposal, LoopCount, FrameNormalizer, FitMode
 ├── pixel/                      # ColorMath, BlendMode, AlphaMode, Background, PixelGraphics, PixelMask, PixelDiff, DiffType, Resample, PixelBufferPool
 ├── option/                     # ImageReadOptions, ImageWriteOptions and every format's *WriteOptions
 ├── exception/                  # ImageException hierarchy
