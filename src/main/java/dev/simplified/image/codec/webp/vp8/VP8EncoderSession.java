@@ -29,7 +29,7 @@ import java.util.concurrent.ForkJoinPool;
 @ApiStatus.Internal
 public final class VP8EncoderSession {
 
-    // ── LAST reference (legacy field names) ──
+    // ── LAST reference ──
     /**
      * Last reconstructed luma plane, or {@code null} before the first encode.
      */

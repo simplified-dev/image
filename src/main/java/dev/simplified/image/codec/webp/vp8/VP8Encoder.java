@@ -182,30 +182,26 @@ public final class VP8Encoder {
         //       {@code lambdaTrellisUv} = libwebp trellis lambdas at respective
         //       quantizers.</li>
         //   <li>{@code lambdaI16} = libwebp {@code lambda_i16} ({@code 3 * q_i16^2}).
-        //       Reserved / unused in mainline libwebp (the field is populated by
-        //       {@code SetupMatrices} but never read by any scorer); carried here
-        //       for parity + future use.</li>
+        //       libwebp's {@code SetupMatrices} populates it and none of its
+        //       scorers reads it; it is held here for parity.</li>
         //   <li>{@code lambdaMode} = libwebp {@code lambda_mode}
-        //       ({@code (q_i4^2) >> 7}): used to re-score winning i16 / i4 / uv
-        //       candidates BEFORE cross-candidate comparison. 3x smaller than
-        //       {@code lambdaI4} so cross-candidate selection de-emphasises bitrate
-        //       vs distortion relative to internal per-candidate search. NOT YET
-        //       wired into this encoder's R-D enumeration - currently dead,
-        //       populated for future libwebp-parity tuning work (see plan doc
-        //       Task 14 redux).</li>
+        //       ({@code (q_i4^2) >> 7}): libwebp re-scores the winning i16 / i4 / uv
+        //       candidates with it BEFORE cross-candidate comparison, 3x smaller
+        //       than {@code lambdaI4} so cross-candidate selection de-emphasises
+        //       bitrate vs distortion relative to internal per-candidate search.
+        //       No scorer in this encoder reads it; it is held for parity.</li>
         //   <li>{@code tlambda} = libwebp {@code tlambda} gated on
         //       {@code method >= 4 && sns_strength > 0}. Our encoder has no
-        //       method / sns analog so it's always 0; field kept for parity.</li>
+        //       method / sns analog so it's always 0; held for parity.</li>
         // </ul>
         // <p>
-        // <b>Known divergence from libwebp q_i16 derivation:</b> libwebp's
+        // <b>Divergence from libwebp's q_i16 derivation:</b> libwebp's
         // {@code q_i16 = ExpandMatrix(y2Mtx, mode=1)} returns {@code y2Mtx.q[0]}
-        // which equals {@code y2Dc} in our derivation. Our existing
-        // {@code lambdaTrellisI16} formula uses {@code y2Ac} as {@code q_i16}
-        // (pre-existing divergence calibrated into current PSNR test thresholds).
-        // The new {@code lambdaI16} / {@code lambdaMode} fields use the correct
-        // libwebp {@code q_i16 = y2Dc} for parity - future tuning work decides
-        // whether to realign {@code lambdaTrellisI16} to match.
+        // which equals {@code y2Dc} in our derivation. This encoder's
+        // {@code lambdaTrellisI16} formula uses {@code y2Ac} as {@code q_i16},
+        // the value the PSNR test thresholds are calibrated against, while
+        // {@code lambdaI16} and {@code lambdaMode} use libwebp's
+        // {@code q_i16 = y2Dc}.
         int lambdaI4, lambdaUv;
         int lambdaTrellisI4, lambdaTrellisI16, lambdaTrellisUv;
         int lambdaI16, lambdaMode, tlambda;
@@ -233,10 +229,9 @@ public final class VP8Encoder {
         final int[] segLambdaTrellisI4 = new int[4];
         final int[] segLambdaTrellisI16 = new int[4];
         final int[] segLambdaTrellisUv = new int[4];
-        // libwebp-parity scaffolding - see field-declaration block javadoc above.
-        // Populated by {@link #rebuildSegmentMatrices} but not yet used by any
-        // R-D scorer. Future Task 14 work uses these to de-couple per-candidate
-        // vs cross-candidate lambda contexts.
+        // Per-segment copies of lambdaI16, lambdaMode and tlambda (see the field
+        // block above), populated by {@link #rebuildSegmentMatrices}; no R-D
+        // scorer reads them.
         final int[] segLambdaI16 = new int[4];
         final int[] segLambdaMode = new int[4];
         final int[] segTlambda = new int[4];
@@ -458,20 +453,19 @@ public final class VP8Encoder {
                 // libwebp-style quantizer-driven lambdas, per-segment. libwebp's
                 // q_i4 / q_uv are the AC-mean over q[1..15] of the respective
                 // matrix - flat AC lane in VP8 so this is simply the AC step
-                // value. Existing (pre-Task-14) formulas use q_i16 = y2Ac which
-                // diverges from libwebp's q_i16 = y2Mtx.q[0] = y2Dc; kept for
-                // backward-compat of the calibrated PSNR test thresholds.
+                // value. These formulas take q_i16 = y2Ac, which diverges from
+                // libwebp's q_i16 = y2Mtx.q[0] = y2Dc; the calibrated PSNR test
+                // thresholds rest on it.
                 int qI4 = y1Ac;
                 int qUv = uvAc;
-                int qI16 = y2Ac;                // pre-existing; used by segLambdaTrellisI16
+                int qI16 = y2Ac;                // this encoder's q_i16; used by segLambdaTrellisI16
                 segLambdaI4[seg] = Math.max(1, (3 * qI4 * qI4) >> 7);
                 segLambdaUv[seg] = Math.max(1, (3 * qUv * qUv) >> 6);
                 segLambdaTrellisI4[seg] = Math.max(1, (7 * qI4 * qI4) >> 3);
                 segLambdaTrellisI16[seg] = Math.max(1, (qI16 * qI16) >> 2);
                 segLambdaTrellisUv[seg] = Math.max(1, (qUv * qUv) << 1);
-                // libwebp-parity scaffolding. Uses libwebp's actual q_i16 = y2Dc
-                // for the new lambdaI16 / lambdaMode so future tuning has the
-                // correct base to compare against. Not yet read by any scorer.
+                // The libwebp-parity lambdas take libwebp's own q_i16 = y2Dc. No
+                // scorer reads them.
                 int qI16Libwebp = y2Dc;
                 segLambdaI16[seg] = Math.max(1, 3 * qI16Libwebp * qI16Libwebp);
                 segLambdaMode[seg] = Math.max(1, (qI4 * qI4) >> 7);
@@ -492,8 +486,7 @@ public final class VP8Encoder {
          * <p>
          * When segmentation is off every segment slot carries identical base-qi
          * values, so calls are effectively no-ops; single-segment encode paths can
-         * call this unconditionally without diverging from the pre-segmentation
-         * baseline.
+         * call this unconditionally and encode as they would without the call.
          *
          * @param segId segment ID in {@code [0, 3]}
          */
@@ -512,10 +505,8 @@ public final class VP8Encoder {
             this.lambdaTrellisI4 = segLambdaTrellisI4[segId];
             this.lambdaTrellisI16 = segLambdaTrellisI16[segId];
             this.lambdaTrellisUv = segLambdaTrellisUv[segId];
-            // libwebp-parity scaffolding swap - currently dead (no R-D site
-            // reads these), threaded through applySegment so that the moment a
-            // future tuning commit wires lambdaMode into cross-candidate R-D,
-            // per-segment values are already in place.
+            // The libwebp-parity lambdas, swapped with the rest so each holds the
+            // segment's value; no R-D site reads them.
             this.lambdaI16 = segLambdaI16[segId];
             this.lambdaMode = segLambdaMode[segId];
             this.tlambda = segTlambda[segId];
@@ -3875,9 +3866,9 @@ public final class VP8Encoder {
     }
 
     /**
-     * Convenience combination of {@link #trellisChroma} and {@link #emitChromaTokensFromTrellis}
-     * that preserves the pre-Phase-2e call shape used by the keyframe path and the winning
-     * inter / intra candidates. The returned {@link ChromaTrellisResult#dequant} feeds
+     * Trellis-quantizes one chroma plane and emits its tokens in one call, {@link #trellisChroma}
+     * then {@link #emitChromaTokensFromTrellis}, for the keyframe path and the winning inter /
+     * intra candidates. The returned {@link ChromaTrellisResult#dequant} feeds
      * {@link #commitChromaFromDequant}.
      *
      * @param isU {@code true} for U (context slots 4..5), {@code false} for V (slots 6..7)

@@ -26,7 +26,7 @@ import org.jetbrains.annotations.NotNull;
 @ApiStatus.Internal
 public final class VP8DecoderSession {
 
-    // ── LAST reference (legacy field names, retained for call-site stability) ──
+    // ── LAST reference ──
     /**
      * Last reconstructed luma plane, or {@code null} before the first decode.
      */
