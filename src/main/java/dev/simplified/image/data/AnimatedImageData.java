@@ -7,6 +7,7 @@ import dev.simplified.annotations.RequiredArgsConstructor;
 import dev.simplified.collection.Concurrent;
 import dev.simplified.collection.ConcurrentList;
 import dev.simplified.image.ImageData;
+import dev.simplified.image.pixel.AlphaMode;
 import dev.simplified.image.pixel.PixelBuffer;
 import org.jetbrains.annotations.NotNull;
 
@@ -29,6 +30,8 @@ public class AnimatedImageData implements ImageData {
      * estimate of what any particular player would show
      */
     private final int totalDurationMs;
+    /** the convention every frame's pixels are held in */
+    private final @NotNull AlphaMode alphaMode;
 
     @Override
     public boolean isAnimated() {
@@ -120,6 +123,7 @@ public class AnimatedImageData implements ImageData {
         private int height = -1;
         private int loopCount = 0;
         private int backgroundColor = 0;
+        private @NotNull AlphaMode alphaMode = AlphaMode.STRAIGHT;
 
         /**
          * Appends a frame to the animation sequence.
@@ -191,6 +195,19 @@ public class AnimatedImageData implements ImageData {
             return this;
         }
 
+        /**
+         * Sets the convention every frame's pixels are held in.
+         * <p>
+         * When not set, the frames hold straight colour.
+         *
+         * @param alphaMode the convention the frames' pixels are held in
+         * @return this builder for chaining
+         */
+        public @NotNull Builder withAlphaMode(@NotNull AlphaMode alphaMode) {
+            this.alphaMode = alphaMode;
+            return this;
+        }
+
         public @NotNull AnimatedImageData build() {
             ImageFrame first = this.frames.getFirst();
             int w = this.width > 0 ? this.width : first.pixels().width();
@@ -200,7 +217,7 @@ public class AnimatedImageData implements ImageData {
                 .mapToInt(ImageFrame::delayMs)
                 .sum();
 
-            return new AnimatedImageData(w, h, alpha, this.frames, this.loopCount, this.backgroundColor, totalDuration);
+            return new AnimatedImageData(w, h, alpha, this.frames, this.loopCount, this.backgroundColor, totalDuration, this.alphaMode);
         }
 
     }

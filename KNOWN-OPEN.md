@@ -5,7 +5,7 @@ Defects present in the current tree and not yet fixed, most severe first. Each e
 ## GIF without a NETSCAPE block reads as "loop forever"
 `GifImageReader.parseLoopCount` returns 0 when the file carries no NETSCAPE2.0 application extension, and `AnimatedImageData` defines a loop count of 0 as infinite. A GIF that plays once therefore decodes to an `AnimatedImageData` that claims infinite looping, and any re-encode carries that forward. HIGH once a caller depends on play-once fidelity.
 
-- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:99-104`, `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:130-145` (`parseLoopCount`), `src/main/java/dev/simplified/image/data/AnimatedImageData.java:175-180` (`Builder.withLoopCount`)
+- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:99-104`, `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:130-145` (`parseLoopCount`), `src/main/java/dev/simplified/image/data/AnimatedImageData.java:179-184` (`Builder.withLoopCount`)
 - Severity: **MEDIUM**
 - Type: **BUG**
 - Status: **OPEN**
@@ -149,7 +149,7 @@ The ICO arm of `ImageFormat.matches` accepts `00 00 01 00`, which is also the bi
 ## Loop-count unit differs per container but is stored raw
 The GIF NETSCAPE loop count and the WebP `ANIM` loop count pass unchanged into `AnimatedImageData.loopCount`, although players are widely reported to read the two in different units (repetitions after the first play versus total plays; UNVERIFIED against browser source). `AnimatedImageData` documents no unit beyond "0 for infinite".
 
-- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:103`, `src/main/java/dev/simplified/image/codec/webp/WebPImageReader.java:99-104`, `src/main/java/dev/simplified/image/data/AnimatedImageData.java:25`
+- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:103`, `src/main/java/dev/simplified/image/codec/webp/WebPImageReader.java:99-104`, `src/main/java/dev/simplified/image/data/AnimatedImageData.java:26`
 - Severity: **LOW**
 - Type: **RISK**
 - Status: **OPEN**
