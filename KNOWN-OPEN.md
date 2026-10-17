@@ -101,7 +101,7 @@ When `GifWriteOptions` are supplied, `GifImageWriter` takes the loop count only 
 ## `Background.composite` lays every image down as premultiplied colour, whatever it holds
 `composite` blits each frame onto the fill with `BlendMode.PREMULTIPLIED`, on the assumption that a finished render's colours already carry their alpha, and premultiplies the fill only under an image declared `PREMULTIPLIED`. A straight image - anything decoded - is therefore laid down with its colour unscaled and comes out too bright wherever it is partly transparent. `getAlphaMode` would let it blend a straight image with `NORMAL`, but every caller in the workspace passes asset-renderer renders, which hold premultiplied colour under the default `STRAIGHT` until that consumer declares them, so honouring the label now would move their bytes. MEDIUM once a caller composites a decoded image.
 
-- Affected: `src/main/java/dev/simplified/image/Background.java:87-102` (`composite`), `src/main/java/dev/simplified/image/Background.java:113-122` (`over`)
+- Affected: `src/main/java/dev/simplified/image/pixel/Background.java:89-104` (`composite`), `src/main/java/dev/simplified/image/pixel/Background.java:115-124` (`over`)
 - Severity: **LOW**
 - Type: **RISK**
 - Status: **OPEN**
@@ -109,7 +109,7 @@ When `GifWriteOptions` are supplied, `GifImageWriter` takes the loop count only 
 ## `Background.composite` drops an animation's canvas size
 The `AnimatedImageData` it rebuilds never calls `withWidth` or `withHeight`, so its canvas becomes the first frame's size and an animation whose canvas is larger than its first frame loses the rest. Nothing in the workspace builds such an animation and composites it: the GIF reader and `FrameNormalizer` set no canvas size, and the WebP reader sets one but composes every frame to the whole canvas, so its first frame is canvas-sized. MEDIUM once a caller composites an animation whose first frame is smaller than its canvas.
 
-- Affected: `src/main/java/dev/simplified/image/Background.java:95-101` (`composite`), `src/main/java/dev/simplified/image/AnimatedImageData.java:212-213` (`Builder.build`)
+- Affected: `src/main/java/dev/simplified/image/pixel/Background.java:97-103` (`composite`), `src/main/java/dev/simplified/image/AnimatedImageData.java:212-213` (`Builder.build`)
 - Severity: **LOW**
 - Type: **BUG**
 - Status: **OPEN**

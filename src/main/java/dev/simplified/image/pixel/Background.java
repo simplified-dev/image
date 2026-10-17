@@ -1,8 +1,10 @@
-package dev.simplified.image;
+package dev.simplified.image.pixel;
 
+import dev.simplified.image.AnimatedImageData;
+import dev.simplified.image.ImageData;
+import dev.simplified.image.PixelBuffer;
+import dev.simplified.image.StaticImageData;
 import dev.simplified.image.frame.ImageFrame;
-import dev.simplified.image.pixel.AlphaMode;
-import dev.simplified.image.pixel.BlendMode;
 import org.jetbrains.annotations.NotNull;
 
 /**

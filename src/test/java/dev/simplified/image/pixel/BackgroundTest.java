@@ -1,11 +1,12 @@
-package dev.simplified.image;
+package dev.simplified.image.pixel;
 
+import dev.simplified.image.AnimatedImageData;
+import dev.simplified.image.ImageData;
+import dev.simplified.image.PixelBuffer;
+import dev.simplified.image.StaticImageData;
 import dev.simplified.image.codec.png.PngImageReader;
 import dev.simplified.image.codec.png.PngImageWriter;
 import dev.simplified.image.frame.ImageFrame;
-import dev.simplified.image.pixel.AlphaMode;
-import dev.simplified.image.pixel.BlendMode;
-import dev.simplified.image.pixel.ColorMath;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
