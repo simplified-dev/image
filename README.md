@@ -1,6 +1,6 @@
 # Image
 
-Pure-Java multi-format image codec library with full VP8/VP8L WebP encoding and decoding, animated image support, and parallel processing. Reads and writes BMP, GIF, JPEG, PNG, and WebP with per-frame timing, loop control, disposal and blend modes, frame normalization, and frame interpolation - no native dependencies or JNI bindings required.
+Pure-Java multi-format image codec library with full VP8/VP8L WebP encoding and decoding, animated image support, and parallel processing. Reads and writes BMP, GIF, ICO, JPEG, PNG, PNM, QOI, TGA, TIFF and WebP through one static facade, with per-frame timing, loop control, disposal and blend modes, frame normalization, and frame interpolation - no native dependencies or JNI bindings required.
 
 ## Table of Contents
 
@@ -25,7 +25,7 @@ Pure-Java multi-format image codec library with full VP8/VP8L WebP encoding and 
 ## Features
 
 - **Pure-Java VP8 and VP8L** - Lossy (VP8) and lossless (VP8L) WebP encoding and decoding with no native libraries, including the VP8 boolean range coder, VP8L Huffman + LZ77 compression with ColorCache, DCT/WHT transforms, trellis quantization, near-lossless preprocessing, and SSE-based 16x16 intra-prediction mode selection (DC/V/H/TM). The VP8 encoder emits keyframes libwebp accepts; the VP8 decoder supports the full intra-4x4 B_PRED sub-mode tree
-- **Five image formats** - Read and write BMP, GIF, JPEG, PNG, and WebP with format-specific options for quality, compression level, and lossless/lossy mode
+- **Ten image formats** - Read and write BMP, GIF, ICO, JPEG, PNG, PNM, QOI, TGA, TIFF and WebP with format-specific options for quality, compression, and lossless/lossy mode
 - **Animated image support** - Multi-frame GIF and WebP with per-frame timing, loop count, background color, disposal methods (none, do not dispose, restore to background, restore to previous), blend modes (source replace, alpha-over), and partial-frame ANMF encoding that diffs consecutive frames to emit minimal sub-rectangles
 - **Parallel frame encoding** - Animated WebP encodes frames concurrently using virtual threads for significantly faster output
 - **Batch processing** - `ImageFactory` bulk operations (`fromFiles`, `toFiles`, `fromByteArrays`, `toByteArrays`) process multiple images in parallel with virtual threads
@@ -104,47 +104,52 @@ dependencies {
 
 ### Auto-Detection
 
-`ImageFactory` is a small instance-based facade that detects the format from magic
-bytes and routes to the correct codec:
+`ImageFactory` is the one route to a codec: a static facade over the ten built-in
+readers and writers. It detects the format from magic bytes and routes to the right
+codec, so there is no factory to construct and no codec class to name:
 
 ```java
 import dev.simplified.image.ImageData;
 import dev.simplified.image.ImageFactory;
 import dev.simplified.image.ImageFormat;
 
-ImageFactory factory = new ImageFactory();
-ImageData image = factory.fromFile(inputFile);
-factory.toFile(image, ImageFormat.WEBP, outputFile);
+ImageData image = ImageFactory.fromFile(inputFile);
+ImageFactory.toFile(image, ImageFormat.WEBP, outputFile);
 ```
+
+The codec set is closed: each format has exactly one reader and one writer, created
+once when `ImageFactory` initialises and shared by every call and thread.
 
 ### Reading an Image
 
+Every read goes through `ImageFactory` - from a byte array, file, stream, URL, Base64
+string, classpath resource or `BufferedImage`. Name the format to skip detection:
+
 ```java
 import dev.simplified.image.ImageData;
-import dev.simplified.image.codec.png.PngImageReader;
+import dev.simplified.image.ImageFactory;
+import dev.simplified.image.ImageFormat;
 
-PngImageReader reader = new PngImageReader();
-ImageData image = reader.read(Files.readAllBytes(path), null);
+ImageData detected = ImageFactory.fromByteArray(Files.readAllBytes(path));
+ImageData png = ImageFactory.fromByteArray(Files.readAllBytes(path), ImageFormat.PNG);
 ```
 
 ### Writing an Image
 
-All codec write options use a fluent builder. Construct the options, hand them to
-`ImageFactory` or the codec-specific writer:
+Every write option type lives in `dev.simplified.image.option` and uses a fluent
+builder. Hand the options to `ImageFactory` beside the format they configure:
 
 ```java
 import dev.simplified.image.ImageFactory;
 import dev.simplified.image.ImageFormat;
-import dev.simplified.image.codec.webp.WebPWriteOptions;
-
-ImageFactory factory = new ImageFactory();
+import dev.simplified.image.option.WebPWriteOptions;
 
 // Lossless (default)
-factory.toFile(image, ImageFormat.WEBP, outputFile,
+ImageFactory.toFile(image, ImageFormat.WEBP, outputFile,
     WebPWriteOptions.builder().isLossless().build());
 
 // Lossy with quality control
-factory.toFile(image, ImageFormat.WEBP, outputFile,
+ImageFactory.toFile(image, ImageFormat.WEBP, outputFile,
     WebPWriteOptions.builder()
         .isLossless(false)
         .withQuality(0.80f)
@@ -154,24 +159,26 @@ factory.toFile(image, ImageFormat.WEBP, outputFile,
 
 ### Animated Images
 
+The two forms of an image, `StaticImageData` and `AnimatedImageData`, sit beside
+`ImageData` in the root package; one frame and its disposal and blend come from
+`dev.simplified.image.frame`.
+
 ```java
+import dev.simplified.image.AnimatedImageData;
 import dev.simplified.image.ImageFactory;
 import dev.simplified.image.ImageFormat;
-import dev.simplified.image.data.AnimatedImageData;
-import dev.simplified.image.data.ImageFrame;
-import dev.simplified.image.codec.webp.WebPWriteOptions;
-
-ImageFactory factory = new ImageFactory();
+import dev.simplified.image.frame.ImageFrame;
+import dev.simplified.image.option.WebPWriteOptions;
 
 // Read any animated format (GIF, WebP) - auto-detected.
-AnimatedImageData animated = (AnimatedImageData) factory.fromFile(inputFile);
+AnimatedImageData animated = (AnimatedImageData) ImageFactory.fromFile(inputFile);
 
 for (ImageFrame frame : animated.getFrames()) {
     // Access per-frame timing, position, disposal, blend mode, and pixel data.
 }
 
 // Re-encode as animated WebP; frames encoded in parallel by default.
-factory.toFile(animated, ImageFormat.WEBP, outputFile,
+ImageFactory.toFile(animated, ImageFormat.WEBP, outputFile,
     WebPWriteOptions.builder().isLossless(false).withQuality(0.9f).build());
 ```
 
@@ -180,17 +187,20 @@ factory.toFile(animated, ImageFormat.WEBP, outputFile,
 ```java
 // Decode multiple files in parallel using virtual threads.
 ConcurrentList<File> files = Concurrent.newList(...);
-ConcurrentList<ImageData> images = factory.fromFiles(files);
+ConcurrentList<ImageData> images = ImageFactory.fromFiles(files);
 
 // Encode multiple images in parallel.
-factory.toFiles(images, ImageFormat.PNG, outputFiles);
+ImageFactory.toFiles(images, ImageFormat.PNG, outputFiles);
 ```
 
 ### Pixel Manipulation
 
+`PixelBuffer` is a whole image as pixels, so it sits in the root package; colour,
+compositing and drawing work on it comes from `dev.simplified.image.pixel`.
+
 ```java
+import dev.simplified.image.PixelBuffer;
 import dev.simplified.image.pixel.AlphaMode;
-import dev.simplified.image.pixel.PixelBuffer;
 
 PixelBuffer buffer = image.toPixelBuffer();
 
@@ -209,13 +219,21 @@ render.applyFxaa(AlphaMode.PREMULTIPLIED);
 
 ## Supported Formats
 
-| Format | Read | Write | Animated | Options |
-|---|---|---|---|---|
-| BMP | `BmpImageReader` | `BmpImageWriter` | No | None (lossless) |
-| GIF | `GifImageReader` | `GifImageWriter` | Yes | Loop count, transparency, disposal |
-| JPEG | `JpegImageReader` | `JpegImageWriter` | No | Quality (0.0-1.0, default 0.75) |
-| PNG | `PngImageReader` | `PngImageWriter` | No | Compression level (0-9, default 6) |
-| WebP | `WebPImageReader` | `WebPImageWriter` | Yes | Lossy/lossless, quality (0.0-1.0), multithreaded, alpha compression |
+Every format reads and writes through `ImageFactory`, named by its `ImageFormat`
+constant. The write options are in `dev.simplified.image.option`.
+
+| Format | `ImageFormat` | Animated | Write options |
+|---|---|---|---|
+| BMP | `BMP` | No | None (lossless) |
+| GIF | `GIF` | Yes | `GifWriteOptions` - loop count, transparency, the background and alpha threshold partial alpha is flattened by, delay fidelity |
+| ICO | `ICO` | No | None - reads the largest image, writes one image as an embedded PNG |
+| JPEG | `JPEG` | No | `JpegWriteOptions` - quality (0.0-1.0, default 0.75) |
+| PNG | `PNG` | No | `PngWriteOptions` - compression level (0-9, default 6) |
+| PNM | `PNM` | No | `PnmWriteOptions` - PBM, PGM or PPM (default PPM), ASCII or binary (default binary) |
+| QOI | `QOI` | No | None (lossless) |
+| TGA | `TGA` | No | `TgaWriteOptions` - run-length encoding (default on) |
+| TIFF | `TIFF` | Multi-page | `TiffWriteOptions` - compression: none, LZW, Deflate (default) or PackBits |
+| WebP | `WEBP` | Yes | `WebPWriteOptions` - lossless (default) or lossy, quality (0.0-1.0), loop count, multithreaded, alpha compression, P-frames, near-lossless |
 
 ## Architecture
 
@@ -223,46 +241,55 @@ render.applyFxaa(AlphaMode.PREMULTIPLIED);
 
 ```
 src/main/java/dev/simplified/image/
-├── ImageData.java              # sealed base type
-├── ImageFactory.java           # auto-detect facade
-├── ImageFormat.java
-├── data/                       # StaticImageData, AnimatedImageData, ImageFrame, FrameBlend, FrameDisposal
-├── pixel/                      # PixelBuffer, PixelGraphics, ColorMath, BlendMode, Resample
-├── transform/                  # FrameNormalizer, FitMode
+├── ImageFactory.java           # static facade - the one route to a codec
+├── ImageFormat.java            # the ten formats and their magic bytes
+├── ImageData.java              # what every read returns
+├── StaticImageData.java        # a single image
+├── AnimatedImageData.java      # timed frames, loop count and canvas
+├── PixelBuffer.java            # zero-copy ARGB pixels, with package-private SIMD kernels beside it
+├── frame/                      # ImageFrame, FrameBlend, FrameDisposal, FrameNormalizer, FitMode
+├── pixel/                      # ColorMath, BlendMode, AlphaMode, Background, PixelGraphics, PixelMask, PixelDiff, DiffType, Resample, PixelBufferPool
+├── option/                     # ImageReadOptions, ImageWriteOptions and every format's *WriteOptions
 ├── exception/                  # ImageException hierarchy
 └── codec/
-    ├── ImageReader.java        # reader SPI + ImageReadOptions
-    ├── ImageWriter.java        # writer SPI + ImageWriteOptions
+    ├── ImageReader.java        # reader SPI
+    ├── ImageWriter.java        # writer SPI
+    ├── common/                 # LittleEndian, ImageIOBridge - helpers two or more formats share
     ├── bmp/                    # BmpImageReader, BmpImageWriter
-    ├── gif/                    # GifImageReader, GifImageWriter, GifWriteOptions
-    ├── jpeg/                   # JpegImageReader, JpegImageWriter, JpegWriteOptions
-    ├── png/                    # PngImageReader, PngImageWriter, PngWriteOptions
+    ├── gif/                    # GifImageReader, GifImageWriter
+    ├── ico/                    # IcoImageReader, IcoImageWriter
+    ├── jpeg/                   # JpegImageReader, JpegImageWriter
+    ├── png/                    # PngImageReader, PngImageWriter
+    ├── pnm/                    # PnmImageReader, PnmImageWriter
+    ├── qoi/                    # QoiImageReader, QoiImageWriter
+    ├── tga/                    # TgaImageReader, TgaImageWriter
+    ├── tiff/                   # TiffImageReader, TiffImageWriter
     └── webp/
         ├── WebPImageReader.java
         ├── WebPImageWriter.java
-        ├── WebPWriteOptions.java
         ├── RiffContainer.java  # RIFF parse/write
         ├── WebPChunk.java      # chunk model + Type enum for FourCC
         ├── FrameDiffUtil.java  # partial-frame ANMF bounding-box diffing
-        ├── lossless/           # VP8LEncoder, VP8LDecoder + BitReader/Writer, HuffmanTree, ColorCache, LZ77, VP8LTransform, NearLosslessPreprocess
-        └── lossy/              # VP8Encoder, VP8Decoder + BooleanEncoder/Decoder, DCT, IntraPrediction, Quantizer, TrellisQuantizer, Macroblock, VP8Tables, VP8TokenEncoder/Decoder, LoopFilter, RateDistortion, VP8Costs, ChromaUpsampler
+        ├── vp8/                # VP8Encoder, VP8Decoder, VP8EncoderSession, VP8DecoderSession + BooleanEncoder/Decoder, DCT, IntraPrediction, SubpelPrediction, Quantizer, QuantMatrix, TrellisQuantizer, Macroblock, NearMvs, VP8Tables, VP8Costs, VP8TokenEncoder/Decoder, LoopFilter, RateDistortion, ChromaUpsampler
+        └── vp8l/               # VP8LEncoder, VP8LDecoder, NearLosslessPreprocess + BitReader/Writer, HuffmanTree, ColorCache, LZ77, VP8LTransform
 ```
 
 | Package | Description |
 |---|---|
-| `dev.simplified.image` | Core data container (`ImageData`), auto-detect facade (`ImageFactory`), and format enum |
-| `dev.simplified.image.data` | Frame-level types: `StaticImageData`, `AnimatedImageData`, `ImageFrame`, and disposal/blend enums |
-| `dev.simplified.image.pixel` | Zero-copy `PixelBuffer`, `PixelGraphics`, color math, blend modes, and resampling |
-| `dev.simplified.image.transform` | `FrameNormalizer` and animation fit modes |
+| `dev.simplified.image` | The static facade `ImageFactory`, the `ImageFormat` enum, `ImageData` and its two forms, and `PixelBuffer` |
+| `dev.simplified.image.frame` | One frame of an image - `ImageFrame` and its disposal and blend enums - and `FrameNormalizer`, which fits a frame sequence to one canvas |
+| `dev.simplified.image.pixel` | Colour math, blend and alpha modes, background fills, `PixelGraphics` drawing, masks, diffs, resampling and the buffer pool |
+| `dev.simplified.image.option` | Every read and write options type, with its builder and nested enums |
 | `dev.simplified.image.exception` | `ImageException` hierarchy for decode/encode/unsupported-format errors |
-| `dev.simplified.image.codec.*` | Format-specific readers/writers plus their write-options builders |
-| `dev.simplified.image.codec.webp.lossless` | VP8L codec internals (public entry: `VP8LEncoder` / `VP8LDecoder`) |
-| `dev.simplified.image.codec.webp.lossy` | VP8 codec internals (public entry: `VP8Encoder` / `VP8Decoder`) |
+| `dev.simplified.image.codec` | The `ImageReader` / `ImageWriter` SPI every built-in codec implements |
+| `dev.simplified.image.codec.*` | Internal - each format's reader and writer, the helpers they share in `codec.common`, and the WebP bitstreams in `codec.webp.vp8` (lossy) and `codec.webp.vp8l` (lossless, and a lossy image's alpha plane) |
 
 > [!TIP]
-> Each codec package follows the same pattern: a `*ImageReader` for decoding
-> and a `*ImageWriter` for encoding. All readers and writers operate on the
-> shared `ImageData` / `AnimatedImageData` types.
+> A caller imports from the six packages above and never from below `codec`.
+> The readers and writers stay public only because `ImageFactory` constructs them
+> from the root package; each carries `@ApiStatus.Internal`, so IntelliJ flags a
+> use outside the library, and the library's own `CallerSurfaceTest` fails if a
+> caller type starts importing one or naming one in a signature.
 
 ## Dependencies
 

@@ -43,9 +43,9 @@ Defects present in the current tree and not yet fixed, most severe first. Each e
 - Status: **OPEN**
 
 ## CLAUDE.md "VP8 encoder state" describes an outdated codec
-Line 20 says the encoder is keyframe-only 16x16 intra with no B_PRED and no inter frames, but it ships B_PRED, P-frames with golden/altref references, SPLITMV, R-D mode selection, trellis quantization and segmentation. It also cites libwebp `src/enc/tree_enc.c` for tables that `VP8Tables` takes from `src/dec/tree_dec.c`. Line 22 says the decoder still carries fixed-width 11-bit coefficient shortcuts pending a spec-compliant rewrite; that rewrite has landed. Anyone planning or sizing work against this paragraph undercounts the VP8 codec.
+Line 28 says the encoder is keyframe-only 16x16 intra with no B_PRED and no inter frames, but it ships B_PRED, P-frames with golden/altref references, SPLITMV, R-D mode selection, trellis quantization and segmentation. It also cites libwebp `src/enc/tree_enc.c` for tables that `VP8Tables` takes from `src/dec/tree_dec.c`. Line 30 says the decoder still carries fixed-width 11-bit coefficient shortcuts pending a spec-compliant rewrite; that rewrite has landed. Anyone planning or sizing work against this paragraph undercounts the VP8 codec.
 
-- Affected: `CLAUDE.md:20`, `CLAUDE.md:22`
+- Affected: `CLAUDE.md:28`, `CLAUDE.md:30`
 - Severity: **MEDIUM**
 - Type: **GAP**
 - Status: **OPEN**
@@ -123,9 +123,9 @@ Each ends with `if (x == null) return;` when Python or the `webp` package is una
 - Status: **OPEN**
 
 ## CLAUDE.md overstates the test-abort guarantee
-Line 36 promises that the VP8 tests abort via `TestAbortedException` when Python or the package is missing; the four silent passes above contradict it.
+Line 44 promises that the VP8 tests abort via `TestAbortedException` when Python or the package is missing; the four silent passes above contradict it.
 
-- Affected: `CLAUDE.md:36`
+- Affected: `CLAUDE.md:44`
 - Severity: **LOW**
 - Type: **GAP**
 - Status: **OPEN**
@@ -200,30 +200,6 @@ The GIF NETSCAPE loop count and the WebP `ANIM` loop count pass unchanged into `
 - Affected: repository root, `src/main/java/dev/simplified/image/codec/webp/vp8/VP8Tables.java`, `src/main/java/dev/simplified/image/codec/webp/vp8/VP8Costs.java`
 - Severity: **LOW**
 - Type: **RISK**
-- Status: **OPEN**
-
-## CLAUDE.md package inventory, format list, dependencies and class counts drifted
-Line 3 lists 5 formats where 10 exist (TIFF, ICO, TGA, QOI and PNM are missing), and line 44 says 60 source and 8 test classes where there are 93 and 21. Line 41 names a `reflection` dependency that `build.gradle.kts` does not declare. The package lists omit 15+ classes, including the public `NearLosslessPreprocess`, `VP8EncoderSession` and `VP8DecoderSession`.
-
-- Affected: `CLAUDE.md:3`, `:7`, `:9`, `:13-16`, `:41`, `:44`
-- Severity: **LOW**
-- Type: **GAP**
-- Status: **OPEN**
-
-## README lists 5 formats and 5 codec packages where 10 ship
-Lines 3 and 28 say the library reads and writes BMP, GIF, JPEG, PNG and WebP, the Supported Formats table lists only those five, and the project tree shows only their five codec packages. TIFF, ICO, TGA, QOI and PNM ship as well: `ImageFormat` holds 10 formats and `ImageFactory` holds a built-in reader and writer for each.
-
-- Affected: `README.md:3`, `:28`, `:212-218`, `:233-248`
-- Severity: **LOW**
-- Type: **GAP**
-- Status: **OPEN**
-
-## README calls ImageData a sealed type; it is not
-The project tree labels `ImageData.java` the "sealed base type", but `ImageData` is a plain `public interface` with no `sealed` modifier or `permits` clause, so any class may implement it.
-
-- Affected: `README.md:226`, `src/main/java/dev/simplified/image/ImageData.java:16`
-- Severity: **LOW**
-- Type: **GAP**
 - Status: **OPEN**
 
 ## Stale class javadocs on VP8/VP8L codec classes
