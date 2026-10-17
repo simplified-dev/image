@@ -103,6 +103,60 @@ class PixelGraphicsTest {
     }
 
     @Test
+    @DisplayName("filled and cleared rectangles draw only inside the clip, read under the current translation")
+    void rectanglesHonourTheClip() {
+        PixelBuffer target = PixelBuffer.create(6, 1);
+        PixelGraphics graphics = new PixelGraphics(target);
+        graphics.translate(1, 0);
+        graphics.setClip(1, 0, 2, 1);
+        graphics.setColor(new java.awt.Color(RED, true));
+        graphics.fillRect(-1, 0, 6, 1);
+
+        assertThat(target.getPixel(1, 0), is(0));
+        assertThat(target.getPixel(2, 0), is(RED));
+        assertThat(target.getPixel(3, 0), is(RED));
+        assertThat(target.getPixel(4, 0), is(0));
+
+        graphics.setBackground(new java.awt.Color(BLUE, true));
+        graphics.clearRect(-1, 0, 6, 1);
+        assertThat(target.getPixel(2, 0), is(BLUE));
+        assertThat(target.getPixel(4, 0), is(0));
+    }
+
+    @Test
+    @DisplayName("lines, ovals and polygons draw only inside the clip")
+    void shapesHonourTheClip() {
+        PixelBuffer target = PixelBuffer.create(8, 8);
+        PixelGraphics graphics = new PixelGraphics(target);
+        graphics.setClip(0, 0, 4, 4);
+        graphics.setColor(new java.awt.Color(RED, true));
+        graphics.drawLine(0, 0, 7, 7);
+        graphics.drawLine(0, 6, 7, 6);
+        graphics.fillOval(0, 0, 7, 7);
+        graphics.fillPolygon(new int[]{ 0, 7, 7 }, new int[]{ 0, 0, 7 }, 3);
+
+        for (int y = 0; y < 8; y++)
+            for (int x = 0; x < 8; x++)
+                if (x >= 4 || y >= 4)
+                    assertThat("(" + x + ", " + y + ")", target.getPixel(x, y), is(0));
+        assertThat(target.getPixel(0, 0), is(RED));
+    }
+
+    @Test
+    @DisplayName("copyArea writes only inside the clip")
+    void copyAreaHonoursTheClip() {
+        PixelBuffer target = PixelBuffer.create(4, 1);
+        target.setPixel(0, 0, RED);
+        target.setPixel(1, 0, RED);
+        PixelGraphics graphics = new PixelGraphics(target);
+        graphics.setClip(2, 0, 1, 1);
+        graphics.copyArea(0, 0, 2, 1, 2, 0);
+
+        assertThat(target.getPixel(2, 0), is(RED));
+        assertThat(target.getPixel(3, 0), is(0));
+    }
+
+    @Test
     @DisplayName("a clipped scaled draw samples the source as the unclipped one does")
     void clippedScaledDrawSamplesAsUnclipped() {
         BufferedImage source = image(RED, GREEN, BLUE);

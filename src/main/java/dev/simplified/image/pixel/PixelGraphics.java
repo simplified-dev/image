@@ -122,8 +122,43 @@ public class PixelGraphics extends Graphics2D {
     // --- pixel helper ---
 
     private void setPixelSafe(int x, int y, int argb) {
-        if (x >= 0 && x < this.target.width() && y >= 0 && y < this.target.height())
+        if (x >= 0 && x < this.target.width() && y >= 0 && y < this.target.height() && inClip(x, y))
             this.target.setPixel(x, y, argb);
+    }
+
+    /**
+     * Whether a device pixel lies inside the clip, which is read in user space under the current
+     * translation. Every pixel is inside when no clip is set.
+     *
+     * @param x the device x coordinate
+     * @param y the device y coordinate
+     * @return {@code true} when the pixel may be drawn
+     */
+    private boolean inClip(int x, int y) {
+        return this.clip == null || this.clip.contains(x - this.translateX, y - this.translateY);
+    }
+
+    /**
+     * Fills a device-space rectangle on the target with one colour, cut to the clip first.
+     *
+     * @param x the device x coordinate of the left edge
+     * @param y the device y coordinate of the top edge
+     * @param width the rectangle width
+     * @param height the rectangle height
+     * @param argb the fill colour
+     */
+    private void fillDeviceRect(int x, int y, int width, int height, int argb) {
+        if (this.clip == null) {
+            this.target.fillRect(x, y, width, height, argb);
+            return;
+        }
+
+        int x0 = Math.max(x, this.clip.x + this.translateX);
+        int y0 = Math.max(y, this.clip.y + this.translateY);
+        int x1 = Math.min(x + width, this.clip.x + this.translateX + this.clip.width);
+        int y1 = Math.min(y + height, this.clip.y + this.translateY + this.clip.height);
+        if (x0 < x1 && y0 < y1)
+            this.target.fillRect(x0, y0, x1 - x0, y1 - y0, argb);
     }
 
     /**
@@ -138,8 +173,7 @@ public class PixelGraphics extends Graphics2D {
      */
     private void drawImagePixel(int x, int y, int argb) {
         if (ColorMath.alpha(argb) == 0) return;
-        if (x < 0 || x >= this.target.width() || y < 0 || y >= this.target.height()) return;
-        if (this.clip != null && !this.clip.contains(x - this.translateX, y - this.translateY)) return;
+        if (x < 0 || x >= this.target.width() || y < 0 || y >= this.target.height() || !inClip(x, y)) return;
         this.target.setPixel(x, y, ColorMath.blend(argb, this.target.getPixel(x, y), BlendMode.NORMAL));
     }
 
@@ -255,22 +289,22 @@ public class PixelGraphics extends Graphics2D {
 
     @Override
     public void fillRect(int x, int y, int width, int height) {
-        this.target.fillRect(this.translateX + x, this.translateY + y, width, height, this.colorArgb);
+        fillDeviceRect(this.translateX + x, this.translateY + y, width, height, this.colorArgb);
     }
 
     @Override
     public void clearRect(int x, int y, int width, int height) {
-        this.target.fillRect(this.translateX + x, this.translateY + y, width, height, this.backgroundArgb);
+        fillDeviceRect(this.translateX + x, this.translateY + y, width, height, this.backgroundArgb);
     }
 
     @Override
     public void drawRect(int x, int y, int width, int height) {
         int tx = this.translateX + x;
         int ty = this.translateY + y;
-        this.target.fillRect(tx, ty, width + 1, 1, this.colorArgb);
-        this.target.fillRect(tx, ty + height, width + 1, 1, this.colorArgb);
-        this.target.fillRect(tx, ty, 1, height + 1, this.colorArgb);
-        this.target.fillRect(tx + width, ty, 1, height + 1, this.colorArgb);
+        fillDeviceRect(tx, ty, width + 1, 1, this.colorArgb);
+        fillDeviceRect(tx, ty + height, width + 1, 1, this.colorArgb);
+        fillDeviceRect(tx, ty, 1, height + 1, this.colorArgb);
+        fillDeviceRect(tx + width, ty, 1, height + 1, this.colorArgb);
     }
 
     @Override
@@ -281,10 +315,10 @@ public class PixelGraphics extends Graphics2D {
         int ty = this.translateY + y;
 
         // Straight edges
-        this.target.fillRect(tx + rx, ty, width - 2 * rx + 1, 1, this.colorArgb);
-        this.target.fillRect(tx + rx, ty + height, width - 2 * rx + 1, 1, this.colorArgb);
-        this.target.fillRect(tx, ty + ry, 1, height - 2 * ry + 1, this.colorArgb);
-        this.target.fillRect(tx + width, ty + ry, 1, height - 2 * ry + 1, this.colorArgb);
+        fillDeviceRect(tx + rx, ty, width - 2 * rx + 1, 1, this.colorArgb);
+        fillDeviceRect(tx + rx, ty + height, width - 2 * rx + 1, 1, this.colorArgb);
+        fillDeviceRect(tx, ty + ry, 1, height - 2 * ry + 1, this.colorArgb);
+        fillDeviceRect(tx + width, ty + ry, 1, height - 2 * ry + 1, this.colorArgb);
 
         // Corner arcs via midpoint ellipse
         drawCornerArcs(tx + rx, ty + ry, tx + width - rx, ty + height - ry, rx, ry);
@@ -298,7 +332,7 @@ public class PixelGraphics extends Graphics2D {
         int ty = this.translateY + y;
 
         // Central body
-        this.target.fillRect(tx, ty + ry, width + 1, height - 2 * ry + 1, this.colorArgb);
+        fillDeviceRect(tx, ty + ry, width + 1, height - 2 * ry + 1, this.colorArgb);
 
         // Top and bottom bands with rounded corners via scanline
         fillCornerArcs(tx + rx, ty + ry, tx + width - rx, ty + height - ry, rx, ry);
@@ -349,8 +383,8 @@ public class PixelGraphics extends Graphics2D {
         int lastPy = -1;
         while (ry2 * px <= rx2 * py) {
             if (py != lastPy) {
-                this.target.fillRect(cx1 - px, cy1 - py, cx2 - cx1 + 2 * px + 1, 1, this.colorArgb);
-                this.target.fillRect(cx1 - px, cy2 + py, cx2 - cx1 + 2 * px + 1, 1, this.colorArgb);
+                fillDeviceRect(cx1 - px, cy1 - py, cx2 - cx1 + 2 * px + 1, 1, this.colorArgb);
+                fillDeviceRect(cx1 - px, cy2 + py, cx2 - cx1 + 2 * px + 1, 1, this.colorArgb);
                 lastPy = py;
             }
             px++;
@@ -365,8 +399,8 @@ public class PixelGraphics extends Graphics2D {
         err = ry2 * (2L * px + 1) * (2L * px + 1) / 4 + rx2 * ((long)(py - 1) * (py - 1) - ry2);
         while (py >= 0) {
             if (py != lastPy) {
-                this.target.fillRect(cx1 - px, cy1 - py, cx2 - cx1 + 2 * px + 1, 1, this.colorArgb);
-                this.target.fillRect(cx1 - px, cy2 + py, cx2 - cx1 + 2 * px + 1, 1, this.colorArgb);
+                fillDeviceRect(cx1 - px, cy1 - py, cx2 - cx1 + 2 * px + 1, 1, this.colorArgb);
+                fillDeviceRect(cx1 - px, cy2 + py, cx2 - cx1 + 2 * px + 1, 1, this.colorArgb);
                 lastPy = py;
             }
             py--;
@@ -390,12 +424,12 @@ public class PixelGraphics extends Graphics2D {
 
         if (ty1 == ty2) {
             int minX = Math.min(tx1, tx2);
-            this.target.fillRect(minX, ty1, Math.abs(tx2 - tx1) + 1, 1, this.colorArgb);
+            fillDeviceRect(minX, ty1, Math.abs(tx2 - tx1) + 1, 1, this.colorArgb);
             return;
         }
         if (tx1 == tx2) {
             int minY = Math.min(ty1, ty2);
-            this.target.fillRect(tx1, minY, 1, Math.abs(ty2 - ty1) + 1, this.colorArgb);
+            fillDeviceRect(tx1, minY, 1, Math.abs(ty2 - ty1) + 1, this.colorArgb);
             return;
         }
 
@@ -467,7 +501,7 @@ public class PixelGraphics extends Graphics2D {
 
         for (int y = -ry; y <= ry; y++) {
             int halfWidth = (int) Math.round(rx * Math.sqrt(1.0 - (double) y * y / ((double) ry * ry)));
-            this.target.fillRect(cx - halfWidth, cy + y, 2 * halfWidth + 1, 1, this.colorArgb);
+            fillDeviceRect(cx - halfWidth, cy + y, 2 * halfWidth + 1, 1, this.colorArgb);
         }
     }
 
@@ -573,7 +607,7 @@ public class PixelGraphics extends Graphics2D {
 
             Arrays.sort(nodeX, 0, nodes);
             for (int i = 0; i < nodes - 1; i += 2)
-                this.target.fillRect(nodeX[i], y, nodeX[i + 1] - nodeX[i] + 1, 1, this.colorArgb);
+                fillDeviceRect(nodeX[i], y, nodeX[i + 1] - nodeX[i] + 1, 1, this.colorArgb);
         }
     }
 
@@ -986,7 +1020,7 @@ public class PixelGraphics extends Graphics2D {
             if (dy2 < 0 || dy2 >= th) continue;
             for (int col = 0; col < width; col++) {
                 int dx2 = srcX + dx + col;
-                if (dx2 >= 0 && dx2 < tw)
+                if (dx2 >= 0 && dx2 < tw && inClip(dx2, dy2))
                     this.target.setPixel(dx2, dy2, temp[row * width + col]);
             }
         }

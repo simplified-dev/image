@@ -90,14 +90,6 @@ The ICO arm of `ImageFormat.matches` accepts `00 00 01 00`, which is also the bi
 - Type: **RISK**
 - Status: **OPEN**
 
-## `PixelGraphics` shape drawing ignores the clip
-`setClip`, `clipRect` and `clip` record a rectangle that only the `drawImage` forms read. `fillRect`, `drawRect`, the round-rect, oval, arc, line and polygon methods write through `setPixelSafe`, which bounds a pixel to the target and not to the clip, so a shape drawn after a clip is set lands outside it. No workspace consumer sets a clip on a `PixelGraphics` today.
-
-- Affected: `src/main/java/dev/simplified/image/pixel/PixelGraphics.java:124-127` (`setPixelSafe`), `:257-305`, `:385-578`
-- Severity: **LOW**
-- Type: **GAP**
-- Status: **OPEN**
-
 ## `VP8Encoder` holds libwebp lambdas no scorer reads
 `State.lambdaI16`, `lambdaMode` and `tlambda`, and their per-segment arrays `segLambdaI16`, `segLambdaMode` and `segTlambda`, are assigned and never read. Their comments say so. Deleting them, or wiring them into the scorer as libwebp does, would end the dead state.
 
