@@ -6,6 +6,7 @@ import dev.simplified.image.ImageData;
 import dev.simplified.image.ImageFormat;
 import dev.simplified.image.codec.ImageWriteOptions;
 import dev.simplified.image.codec.ImageWriter;
+import dev.simplified.image.pixel.AlphaMode;
 import dev.simplified.image.pixel.PixelBuffer;
 import dev.simplified.util.io.ByteArrayDataOutput;
 import org.jetbrains.annotations.NotNull;
@@ -41,7 +42,7 @@ public class PnmImageWriter implements ImageWriter {
             ascii = pnm.ascii();
         }
 
-        PixelBuffer buffer = data.getFrames().getFirst().pixels();
+        PixelBuffer buffer = data.toPixelBuffer(AlphaMode.STRAIGHT);
         int width = buffer.width();
         int height = buffer.height();
         int magic = magicFor(variant, ascii);

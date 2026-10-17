@@ -28,6 +28,10 @@ import java.io.ByteArrayInputStream;
 /**
  * Reads GIF images (static and animated) via {@link ImageIO}, extracting per-frame
  * metadata for disposal, delay, and canvas offset.
+ * <p>
+ * GIF has no blend flag: every frame is laid over what the previous frame's disposal left, a pixel
+ * at the transparent index showing what lies beneath, so every frame is read
+ * {@link FrameBlend#OVER}.
  */
 public class GifImageReader implements ImageReader {
 
@@ -104,7 +108,7 @@ public class GifImageReader implements ImageReader {
                 }
             }
 
-            frames.add(ImageFrame.of(PixelBuffer.wrap(image), delayMs, offsetX, offsetY, disposal, FrameBlend.SOURCE));
+            frames.add(ImageFrame.of(PixelBuffer.wrap(image), delayMs, offsetX, offsetY, disposal, FrameBlend.OVER));
         }
 
         reader.dispose();

@@ -10,6 +10,7 @@ import dev.simplified.image.data.AnimatedImageData;
 import dev.simplified.image.data.ImageFrame;
 import dev.simplified.image.data.StaticImageData;
 import dev.simplified.image.exception.ImageEncodeException;
+import dev.simplified.image.pixel.AlphaMode;
 import dev.simplified.util.io.ByteArrayDataOutput;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -59,14 +60,14 @@ public class TiffImageWriter implements ImageWriter {
         if (data.isAnimated()) {
             iioWriter.prepareWriteSequence(null);
 
-            for (ImageFrame frame : data.getFrames()) {
+            for (ImageFrame frame : data.toAlphaMode(AlphaMode.STRAIGHT).getFrames()) {
                 BufferedImage image = frame.pixels().toBufferedImage();
                 iioWriter.writeToSequence(new IIOImage(image, null, null), param);
             }
 
             iioWriter.endWriteSequence();
         } else {
-            BufferedImage image = data.toBufferedImage();
+            BufferedImage image = data.toPixelBuffer(AlphaMode.STRAIGHT).toBufferedImage();
             iioWriter.write(null, new IIOImage(image, null, null), param);
         }
 

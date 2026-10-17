@@ -6,6 +6,7 @@ import dev.simplified.image.ImageData;
 import dev.simplified.image.ImageFormat;
 import dev.simplified.image.codec.ImageWriteOptions;
 import dev.simplified.image.codec.ImageWriter;
+import dev.simplified.image.pixel.AlphaMode;
 import dev.simplified.util.io.ByteArrayDataOutput;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -29,7 +30,7 @@ public class PngImageWriter implements ImageWriter {
     @Override
     @SilentThrows
     public byte @NotNull [] write(@NotNull ImageData data, @Nullable ImageWriteOptions options) {
-        BufferedImage image = data.toBufferedImage();
+        BufferedImage image = data.toPixelBuffer(AlphaMode.STRAIGHT).toBufferedImage();
 
         javax.imageio.ImageWriter writer = ImageIO.getImageWritersByFormatName("png").next();
         @Cleanup ByteArrayDataOutput dataOutput = new ByteArrayDataOutput();

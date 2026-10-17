@@ -247,63 +247,16 @@ class GifDelayTest {
     }
 
     /**
-     * Walks the GIF block structure and returns the byte offset of every graphic-control
-     * extension's little-endian delay field. Scanning for the extension's byte signature instead
-     * would risk matching those same bytes inside compressed image data.
+     * Returns the byte offset of every graphic-control extension's little-endian delay field, four
+     * bytes past the extension's introducer.
      */
     private static @NotNull List<Integer> delayOffsets(byte @NotNull [] gif) {
         List<Integer> offsets = new ArrayList<>();
-        int position = 6; // header: "GIF89a"
 
-        int screenPacked = gif[position + 4] & 0xFF;
-        position += 7; // logical screen descriptor
-        if ((screenPacked & 0x80) != 0)
-            position += colorTableBytes(screenPacked);
-
-        while (position < gif.length) {
-            int block = gif[position++] & 0xFF;
-
-            if (block == 0x3B) // trailer
-                break;
-
-            if (block == 0x21) { // extension
-                int label = gif[position++] & 0xFF;
-
-                // Graphic control: [size=4][packed][delay lo][delay hi][transparent index]
-                if (label == 0xF9)
-                    offsets.add(position + 2);
-
-                position = skipSubBlocks(gif, position);
-                continue;
-            }
-
-            if (block == 0x2C) { // image descriptor
-                position += 8; // left, top, width, height
-                int imagePacked = gif[position++] & 0xFF;
-                if ((imagePacked & 0x80) != 0)
-                    position += colorTableBytes(imagePacked);
-
-                position++; // LZW minimum code size
-                position = skipSubBlocks(gif, position);
-                continue;
-            }
-
-            throw new IllegalStateException("Unexpected GIF block 0x%02X at %d".formatted(block, position - 1));
-        }
+        for (int introducer : GifBlocks.graphicControlOffsets(gif))
+            offsets.add(introducer + 4);
 
         return offsets;
-    }
-
-    private static int colorTableBytes(int packed) {
-        return 3 * (1 << ((packed & 0x07) + 1));
-    }
-
-    private static int skipSubBlocks(byte @NotNull [] gif, int position) {
-        while (true) {
-            int length = gif[position++] & 0xFF;
-            if (length == 0) return position;
-            position += length;
-        }
     }
 
     private static @NotNull List<Integer> boxed(int @NotNull [] values) {

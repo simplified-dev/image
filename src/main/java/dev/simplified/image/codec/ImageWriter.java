@@ -29,6 +29,9 @@ public interface ImageWriter {
 
     /**
      * Encodes image data to a byte array with the given options.
+     * <p>
+     * Pixels held premultiplied, as {@link ImageData#getAlphaMode()} reports, are written as the
+     * straight colour they stand for.
      *
      * @param data the image data to encode
      * @param options format-specific write options, or null for defaults

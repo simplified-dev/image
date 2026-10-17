@@ -15,6 +15,7 @@ import dev.simplified.image.data.AnimatedImageData;
 import dev.simplified.image.data.FrameBlend;
 import dev.simplified.image.data.FrameDisposal;
 import dev.simplified.image.data.ImageFrame;
+import dev.simplified.image.pixel.AlphaMode;
 import dev.simplified.image.pixel.PixelBuffer;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -58,11 +59,15 @@ public class WebPImageWriter implements ImageWriter {
             nearLossless = webpOptions.getNearLossless();
         }
 
+        // Converted after the dispatch, not before: toAlphaMode answers an AnimatedImageData for any
+        // animated image, so converting first would send an animated ImageData implemented elsewhere
+        // down the animated path. An AnimatedImageData converts to an AnimatedImageData, so the cast holds.
         if (data instanceof AnimatedImageData animated) {
             if (loopCount == 0 && animated.getLoopCount() != 0)
                 loopCount = animated.getLoopCount();
 
-            return writeAnimated(animated, lossless, quality, loopCount, multithreaded, usePFrames, forceKeyframeEvery, motionSearchThreads, autoSegment, nearLossless);
+            AnimatedImageData straight = (AnimatedImageData) animated.toAlphaMode(AlphaMode.STRAIGHT);
+            return writeAnimated(straight, lossless, quality, loopCount, multithreaded, usePFrames, forceKeyframeEvery, motionSearchThreads, autoSegment, nearLossless);
         }
 
         return writeStatic(data, lossless, quality, alphaCompression, autoSegment, nearLossless);
@@ -81,7 +86,7 @@ public class WebPImageWriter implements ImageWriter {
     }
 
     private byte @NotNull [] writeStatic(@NotNull ImageData data, boolean lossless, float quality, boolean alphaCompression, boolean autoSegment, int nearLossless) {
-        PixelBuffer pixels = data.toPixelBuffer();
+        PixelBuffer pixels = data.toPixelBuffer(AlphaMode.STRAIGHT);
         byte[] payload;
 
         if (lossless) {

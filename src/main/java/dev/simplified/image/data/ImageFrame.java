@@ -36,23 +36,33 @@ public record ImageFrame(
 
     /**
      * Creates a static (zero-delay) frame at the canvas origin.
+     * <p>
+     * The frame is disposed with {@link FrameDisposal#RESTORE_TO_BACKGROUND} and blended with
+     * {@link FrameBlend#SOURCE}: it replaces what lies beneath it and the canvas is cleared once it
+     * has shown, so whole-canvas frames replace each other and no pixel of one shows through where
+     * the next is transparent.
      *
      * @param pixels the frame pixel data
      * @return a new image frame
      */
     public static @NotNull ImageFrame of(@NotNull PixelBuffer pixels) {
-        return new ImageFrame(pixels, 0, 0, 0, FrameDisposal.NONE, FrameBlend.SOURCE);
+        return of(pixels, 0);
     }
 
     /**
-     * Creates a frame with the given pixels and delay, using default offset and disposal.
+     * Creates a frame with the given pixels and delay at the canvas origin.
+     * <p>
+     * The frame is disposed with {@link FrameDisposal#RESTORE_TO_BACKGROUND} and blended with
+     * {@link FrameBlend#SOURCE}: it replaces what lies beneath it and the canvas is cleared once it
+     * has shown, so whole-canvas frames replace each other and no pixel of one shows through where
+     * the next is transparent.
      *
      * @param pixels the frame pixel data
      * @param delayMs the display duration in milliseconds
      * @return a new image frame
      */
     public static @NotNull ImageFrame of(@NotNull PixelBuffer pixels, int delayMs) {
-        return new ImageFrame(pixels, delayMs, 0, 0, FrameDisposal.NONE, FrameBlend.SOURCE);
+        return new ImageFrame(pixels, delayMs, 0, 0, FrameDisposal.RESTORE_TO_BACKGROUND, FrameBlend.SOURCE);
     }
 
     /**

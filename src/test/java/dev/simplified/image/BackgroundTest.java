@@ -1,8 +1,11 @@
 package dev.simplified.image;
 
+import dev.simplified.image.codec.png.PngImageReader;
+import dev.simplified.image.codec.png.PngImageWriter;
 import dev.simplified.image.data.AnimatedImageData;
 import dev.simplified.image.data.ImageFrame;
 import dev.simplified.image.data.StaticImageData;
+import dev.simplified.image.pixel.AlphaMode;
 import dev.simplified.image.pixel.BlendMode;
 import dev.simplified.image.pixel.ColorMath;
 import dev.simplified.image.pixel.PixelBuffer;
@@ -87,6 +90,78 @@ class BackgroundTest {
         assertThat(out.getFrames().getFirst().delayMs(), is(40));
         assertThat(out.getFrames().getLast().delayMs(), is(60));
         assertThat(out.getFrames().getFirst().pixels().getPixel(0, 0), is(0xFF222222));
+    }
+
+    @Test
+    @DisplayName("composite keeps the convention the image is held in")
+    void compositeKeepsTheConvention() {
+        for (AlphaMode mode : AlphaMode.values()) {
+            ImageData still = StaticImageData.of(PixelBuffer.create(2, 2), mode);
+            ImageData animated = AnimatedImageData.builder()
+                .withFrame(ImageFrame.of(PixelBuffer.create(2, 2), 40))
+                .withFrame(ImageFrame.of(PixelBuffer.create(2, 2), 60))
+                .withAlphaMode(mode)
+                .build();
+
+            assertThat(Background.solid(0xFF000000).composite(still).getAlphaMode(), is(mode));
+            assertThat(Background.solid(0xFF000000).composite(animated).getAlphaMode(), is(mode));
+            assertThat(Background.checkerboard().composite(still).getAlphaMode(), is(mode));
+            assertThat(Background.checkerboard().composite(animated).getAlphaMode(), is(mode));
+        }
+    }
+
+    @Test
+    @DisplayName("a translucent fill under a premultiplied image is premultiplied, so it encodes as the colour given")
+    void translucentFillUnderPremultipliedImage() {
+        int fill = 0x80336699;
+        int premultipliedFill = 0x801A334D;
+        int render = 0x80400000;
+        PixelBuffer rendered = PixelBuffer.create(2, 1);
+        rendered.setPixel(1, 0, render);
+
+        ImageData out = Background.solid(fill).composite(StaticImageData.of(rendered, AlphaMode.PREMULTIPLIED));
+        PixelBuffer result = out.toPixelBuffer();
+        assertThat(result.getPixel(0, 0), is(premultipliedFill));
+        assertThat(result.getPixel(1, 0), is(ColorMath.blend(render, premultipliedFill, BlendMode.PREMULTIPLIED)));
+
+        // Laid down unpremultiplied, the fill would encode as 0x8066CBFF. Premultiplied, it encodes as
+        // the colour given to the level a premultiplied pixel at alpha 128 holds: the red of 0x33
+        // premultiplies to 0x1A, which divides back to 0x34.
+        int decoded = new PngImageReader().read(new PngImageWriter().write(out)).toPixelBuffer().getPixel(0, 0);
+        assertThat(Integer.toHexString(decoded), is(Integer.toHexString(0x80346699)));
+        for (int shift = 0; shift <= 24; shift += 8)
+            assertThat(Math.abs(((decoded >>> shift) & 0xFF) - ((fill >>> shift) & 0xFF)) <= 1, is(true));
+    }
+
+    @Test
+    @DisplayName("every translucent cell of a checkerboard under a premultiplied image is premultiplied")
+    void translucentCheckerboardUnderPremultipliedImage() {
+        ImageData image = StaticImageData.of(PixelBuffer.create(2, 1), AlphaMode.PREMULTIPLIED);
+        PixelBuffer result = Background.checkerboard(0x80336699, 0x40FFFFFF, 1).composite(image).toPixelBuffer();
+
+        assertThat(result.getPixel(0, 0), is(0x801A334D));
+        assertThat(result.getPixel(1, 0), is(0x40404040));
+    }
+
+    @Test
+    @DisplayName("a translucent fill under a straight image is laid down as given")
+    void translucentFillUnderStraightImage() {
+        PixelBuffer result = Background.solid(0x80336699).composite(StaticImageData.of(PixelBuffer.create(1, 1))).toPixelBuffer();
+        assertThat(result.getPixel(0, 0), is(0x80336699));
+    }
+
+    @Test
+    @DisplayName("an opaque fill composites the same pixels whichever convention the image is held in")
+    void opaqueFillIgnoresTheConvention() {
+        PixelBuffer rendered = PixelBuffer.create(4, 4);
+        for (int i = 0; i < 16; i++)
+            rendered.data()[i] = ((i * 17) << 24) | ((i * 7) << 16) | ((i * 3) << 8) | i;
+
+        for (Background background : new Background[] { Background.solid(0xFF204060), Background.checkerboard() }) {
+            PixelBuffer straight = background.composite(StaticImageData.of(rendered)).toPixelBuffer();
+            PixelBuffer premultiplied = background.composite(StaticImageData.of(rendered, AlphaMode.PREMULTIPLIED)).toPixelBuffer();
+            assertThat(premultiplied.data(), is(straight.data()));
+        }
     }
 
 }

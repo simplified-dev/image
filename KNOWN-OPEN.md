@@ -5,7 +5,7 @@ Defects present in the current tree and not yet fixed, most severe first. Each e
 ## GIF without a NETSCAPE block reads as "loop forever"
 `GifImageReader.parseLoopCount` returns 0 when the file carries no NETSCAPE2.0 application extension, and `AnimatedImageData` defines a loop count of 0 as infinite. A GIF that plays once therefore decodes to an `AnimatedImageData` that claims infinite looping, and any re-encode carries that forward. HIGH once a caller depends on play-once fidelity.
 
-- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:99-104`, `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:130-145` (`parseLoopCount`), `src/main/java/dev/simplified/image/data/AnimatedImageData.java:175-180` (`Builder.withLoopCount`)
+- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:103-108`, `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:134-149` (`parseLoopCount`), `src/main/java/dev/simplified/image/data/AnimatedImageData.java:179-184` (`Builder.withLoopCount`)
 - Severity: **MEDIUM**
 - Type: **BUG**
 - Status: **OPEN**
@@ -21,15 +21,15 @@ Defects present in the current tree and not yet fixed, most severe first. Each e
 ## GIF writer misreads frames of different sizes and drops frame offsets
 `flattenAllFrames` packs every frame's pixels back to back, but the write loop reads frame i at `i * frameStride`, where `frameStride` is the largest frame's area, so an animation whose frames differ in size is written from the wrong slices and the last one overruns the array: frames of 4x4, 2x2 and 2x2 throw `ArrayIndexOutOfBoundsException: Index 32 out of bounds for length 24`. `configureFrameMetadata` writes only the GraphicControlExtension and never the ImageDescriptor's `imageLeftPosition` / `imageTopPosition`, so every frame is written at the origin. A GIF this library decodes - partial frames at offsets - therefore cannot be re-encoded: it throws, or, where its partial frames happen to share one size, it is written with every frame moved to the top-left corner. HIGH once a caller re-encodes decoded GIFs.
 
-- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:96-119` (`write`, the `frameStride` read), `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:144` (`flattenAllFrames`), `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:521-539` (`configureFrameMetadata`)
+- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:106-129` (`write`, the `frameStride` read), `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:165` (`flattenAllFrames`), `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:572-590` (`configureFrameMetadata`)
 - Severity: **MEDIUM**
 - Type: **BUG**
 - Status: **OPEN**
 
-## GIF reader marks every frame SOURCE and sizes the canvas from the first frame
-`GifImageReader` builds every frame with `FrameBlend.SOURCE`, but a GIF frame's transparent index means "leave the pixel beneath", which is `OVER`, so a consumer that composites by the blend flag punches a hole wherever a later frame is transparent. It also never reads the logical screen descriptor and builds the `AnimatedImageData` with no width or height, so the canvas takes the first frame's size, and a GIF whose first frame does not span its screen loses whatever later frames draw outside that rectangle. A consumer compositing the timeline has to ignore the flag to draw a decoded GIF correctly. HIGH once a consumer composites decoded GIFs by the flags.
+## GIF reader sizes the canvas from the first frame
+`GifImageReader` never reads the logical screen descriptor and builds the `AnimatedImageData` with no width or height, so the canvas takes the first frame's size, and a GIF whose first frame does not span its screen loses whatever later frames draw outside that rectangle. HIGH once a consumer draws a decoded GIF's frames onto its canvas.
 
-- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:107`, `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:115-118`
+- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:119-122`
 - Severity: **MEDIUM**
 - Type: **BUG**
 - Status: **OPEN**
@@ -50,10 +50,34 @@ Line 20 says the encoder is keyframe-only 16x16 intra with no B_PRED and no inte
 - Type: **GAP**
 - Status: **OPEN**
 
+## No downscale averages: `blitScaled` decimates
+`blitScaled` and `blitScaledFxaa` map each destination pixel to one source pixel (`x * sw / dw`, read from the column table `sourceColumns` builds) and offer no other filter, and `resize` offers `NEAREST`, a 2x2 `BILINEAR` with no prefilter, and AWT `BICUBIC`. The library's one box filter, `PixelMask.downsample`, is boolean. A supersampled render scaled down through either composite keeps one sample of each block and discards the rest, so the supersampling averages nothing, and a `BILINEAR` downscale beyond 2x aliases the same way. asset-renderer's `RasterPass` scales down through `blitScaledFxaa` when it anti-aliases and through `blitScaled` when it does not: FXAA smooths the hi-res pixels the scale-down samples, and the scale-down still keeps one sample per block - a decimation of a filtered source. What such a caller needs is an area-averaging downsample of premultiplied colour.
+
+- Affected: `src/main/java/dev/simplified/image/pixel/PixelBuffer.java:685-758` (`blitScaled`), `src/main/java/dev/simplified/image/pixel/PixelBuffer.java:783-818` (`blitScaledFxaa`), `src/main/java/dev/simplified/image/pixel/PixelBuffer.java:1211-1218` (`sourceColumns`), `src/main/java/dev/simplified/image/pixel/PixelBuffer.java:375-419` (`resize`), `src/main/java/dev/simplified/image/pixel/PixelMask.java:90` (`downsample`)
+- Severity: **MEDIUM**
+- Type: **GAP**
+- Status: **OPEN**
+
+## ImageIO's GIF reader decodes interlaced frames shorter than 8 rows wrongly
+`GifImageWriter` writes every frame interlaced, because it takes ImageIO's default image metadata, whose `interlaceFlag` is TRUE. The JDK GIF reader that `GifImageReader` decodes through reads such a frame wrongly when it is shorter than 8 rows. Measured on still GIFs of alternating red and blue rows: a 2x2 frame decodes 2 pixels wrong, 3x3 6, 4x2 4 and 4x4 8; 8x8 and 16x16 decode exactly. A hand LZW decode and Pillow read the same files correctly, so the files are sound, and a short GIF this library writes does not round-trip through its own reader. Writing non-interlaced avoids it and moves every GIF's bytes. HIGH once a caller round-trips frames under 8 rows.
+
+- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:115`, `:134` (`getDefaultImageMetadata`), `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:64` (`reader.read`)
+- Severity: **MEDIUM**
+- Type: **BUG**
+- Status: **OPEN**
+
+## The WebP writer's partial-frame path drops an OVER frame's blend
+When `usePartialFrames` holds - every lossless write, and every lossy write without P-frames - `WebPImageWriter` writes each ANMF chunk as do-not-dispose and do-not-blend over the region that changed. A frame tagged `FrameBlend.OVER` that is transparent where it relies on the frame beneath is therefore written as an overwrite. Measured on an animation whose frame 1 is `OVER`: written as lossless WebP (the default) the relying pixel reads `00000000`, where GIF shows `ffff0000` and lossy WebP with P-frames shows `ffff0005`. A decoded GIF, whose frames read as `OVER`, reaches it when re-encoded as lossless WebP; nothing in the workspace does that today. HIGH once a caller converts GIFs to WebP.
+
+- Affected: `src/main/java/dev/simplified/image/codec/webp/WebPImageWriter.java:155` (`usePartialFrames`), `:272-273`
+- Severity: **MEDIUM**
+- Type: **BUG**
+- Status: **OPEN**
+
 ## WebP write options cannot force infinite looping over a finite count
 `WebPImageWriter` reads a loop count of 0 in `WebPWriteOptions` as "unset" and falls back to the image's own loop count. `withLoopCount(0)`, which means infinite, is therefore ignored whenever the `AnimatedImageData` carries a finite count.
 
-- Affected: `src/main/java/dev/simplified/image/codec/webp/WebPImageWriter.java:61-63`
+- Affected: `src/main/java/dev/simplified/image/codec/webp/WebPImageWriter.java:65-67`
 - Severity: **LOW**
 - Type: **BUG**
 - Status: **OPEN**
@@ -61,7 +85,31 @@ Line 20 says the encoder is keyframe-only 16x16 intra with no B_PRED and no inte
 ## GIF writer ignores the image's loop count whenever options are passed
 When `GifWriteOptions` are supplied, `GifImageWriter` takes the loop count only from the options, whose default of 0 means infinite. A finite-loop GIF re-encoded with options, for example to set transparency, loops forever. The WebP writer applies the opposite precedence.
 
-- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:59-68`
+- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:69-78`
+- Severity: **LOW**
+- Type: **BUG**
+- Status: **OPEN**
+
+## GIF writer floors the flatten of a straight image
+`flattenAllFrames` lays a partly transparent straight pixel over the background as `(c * a + bg * (255 - a)) / 255`, an integer division, so every such pixel lands up to a level low: at worst 0.996 of a level from the exact composite over 455,168 cases (backgrounds 0, 1, 16, 127, 128, 198 and 255, every partial alpha, every straight level), where the premultiplied flatten beside it, rounded once, lands within 0.498. A straight image and its premultiplied twin therefore flatten up to a level apart. Rounding it moves the bytes of every GIF written from a straight image with partial alpha. MEDIUM once a caller holds GIF output to an exact composite.
+
+- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:201-203` (`flattenAllFrames`)
+- Severity: **LOW**
+- Type: **BUG**
+- Status: **OPEN**
+
+## `Background.composite` lays every image down as premultiplied colour, whatever it holds
+`composite` blits each frame onto the fill with `BlendMode.PREMULTIPLIED`, on the assumption that a finished render's colours already carry their alpha, and premultiplies the fill only under an image declared `PREMULTIPLIED`. A straight image - anything decoded - is therefore laid down with its colour unscaled and comes out too bright wherever it is partly transparent. `getAlphaMode` would let it blend a straight image with `NORMAL`, but every caller in the workspace passes asset-renderer renders, which hold premultiplied colour under the default `STRAIGHT` until that consumer declares them, so honouring the label now would move their bytes. MEDIUM once a caller composites a decoded image.
+
+- Affected: `src/main/java/dev/simplified/image/Background.java:90-105` (`composite`), `src/main/java/dev/simplified/image/Background.java:116-125` (`over`)
+- Severity: **LOW**
+- Type: **RISK**
+- Status: **OPEN**
+
+## `Background.composite` drops an animation's canvas size
+The `AnimatedImageData` it rebuilds never calls `withWidth` or `withHeight`, so its canvas becomes the first frame's size and an animation whose canvas is larger than its first frame loses the rest. Nothing in the workspace builds such an animation and composites it: the GIF reader and `FrameNormalizer` set no canvas size, and the WebP reader sets one but composes every frame to the whole canvas, so its first frame is canvas-sized. MEDIUM once a caller composites an animation whose first frame is smaller than its canvas.
+
+- Affected: `src/main/java/dev/simplified/image/Background.java:98-104` (`composite`), `src/main/java/dev/simplified/image/data/AnimatedImageData.java:213-214` (`Builder.build`)
 - Severity: **LOW**
 - Type: **BUG**
 - Status: **OPEN**
@@ -133,7 +181,7 @@ The ICO arm of `ImageFormat.matches` accepts `00 00 01 00`, which is also the bi
 ## Loop-count unit differs per container but is stored raw
 The GIF NETSCAPE loop count and the WebP `ANIM` loop count pass unchanged into `AnimatedImageData.loopCount`, although players are widely reported to read the two in different units (repetitions after the first play versus total plays; UNVERIFIED against browser source). `AnimatedImageData` documents no unit beyond "0 for infinite".
 
-- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:103`, `src/main/java/dev/simplified/image/codec/webp/WebPImageReader.java:99-104`, `src/main/java/dev/simplified/image/data/AnimatedImageData.java:25`
+- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:107`, `src/main/java/dev/simplified/image/codec/webp/WebPImageReader.java:99-104`, `src/main/java/dev/simplified/image/data/AnimatedImageData.java:26`
 - Severity: **LOW**
 - Type: **RISK**
 - Status: **OPEN**
@@ -155,9 +203,25 @@ The GIF NETSCAPE loop count and the WebP `ANIM` loop count pass unchanged into `
 - Status: **OPEN**
 
 ## CLAUDE.md package inventory, format list, dependencies and class counts drifted
-Line 3 lists 5 formats where 10 exist (TIFF, ICO, TGA, QOI and PNM are missing), and line 44 says 60 source and 8 test classes where there are 92 and 13. Line 41 names a `reflection` dependency that `build.gradle.kts` does not declare. The package lists omit 15+ classes, including the public `NearLosslessPreprocess`, `VP8EncoderSession` and `VP8DecoderSession`.
+Line 3 lists 5 formats where 10 exist (TIFF, ICO, TGA, QOI and PNM are missing), and line 44 says 60 source and 8 test classes where there are 93 and 21. Line 41 names a `reflection` dependency that `build.gradle.kts` does not declare. The package lists omit 15+ classes, including the public `NearLosslessPreprocess`, `VP8EncoderSession` and `VP8DecoderSession`.
 
 - Affected: `CLAUDE.md:3`, `:7`, `:9`, `:13-16`, `:41`, `:44`
+- Severity: **LOW**
+- Type: **GAP**
+- Status: **OPEN**
+
+## README lists 5 formats and 5 codec packages where 10 ship
+Lines 3 and 28 say the library reads and writes BMP, GIF, JPEG, PNG and WebP, the Supported Formats table lists only those five, and the project tree shows only their five codec packages. TIFF, ICO, TGA, QOI and PNM ship as well: `ImageFormat` holds 10 formats and `ImageFactory` registers a reader and a writer for each.
+
+- Affected: `README.md:3`, `:28`, `:212-218`, `:233-248`
+- Severity: **LOW**
+- Type: **GAP**
+- Status: **OPEN**
+
+## README calls ImageData a sealed type; it is not
+The project tree labels `ImageData.java` the "sealed base type", but `ImageData` is a plain `public interface` with no `sealed` modifier or `permits` clause, so any class may implement it.
+
+- Affected: `README.md:226`, `src/main/java/dev/simplified/image/ImageData.java:19`
 - Severity: **LOW**
 - Type: **GAP**
 - Status: **OPEN**
@@ -176,4 +240,44 @@ Four class headers describe shipped features as absent or future work: `VP8Encod
 - Affected: `src/main/java/dev/simplified/image/codec/webp/lossy/VP8Encoder.java:10-13`, `src/main/java/dev/simplified/image/codec/webp/lossy/VP8Decoder.java:19-21`, `src/main/java/dev/simplified/image/codec/webp/lossless/VP8LEncoder.java:22-24`, `src/main/java/dev/simplified/image/codec/webp/lossy/VP8TokenDecoder.java:9-11`
 - Severity: **LOW**
 - Type: **GAP**
+- Status: **OPEN**
+
+## `resize` takes no alpha convention, and its two smoothing filters assume opposite ones
+`BILINEAR` mixes every channel as it is held, which is correct for premultiplied colour and darkens a straight pixel beside a transparent one toward the transparent pixel's colour. `BICUBIC` draws through AWT with the raster declared straight, which is correct for straight colour and weights a premultiplied buffer by alpha twice. A caller cannot say which it holds, and switching filter switches the convention assumed. Nothing in the workspace resizes with either today. `resize(w, h, Resample, AlphaMode)` would route the bilinear sampler's alpha weighting and declare the AWT raster premultiplied where asked. `FrameNormalizer` scales frames through the same AWT bicubic from a straight-declared image, so it weights a premultiplied animation's colour by alpha twice, and fills its letterbox with a straight `Color`; it carries the animation's convention onto its output without honouring it. Nothing in the workspace normalizes premultiplied frames.
+
+- Affected: `src/main/java/dev/simplified/image/pixel/PixelBuffer.java:375-419` (`resize`), `src/main/java/dev/simplified/image/transform/FrameNormalizer.java:87-138` (`normalize`)
+- Severity: **LOW**
+- Type: **GAP**
+- Status: **OPEN**
+
+## FXAA's absolute thresholds are 0-to-1 luma constants read against a 0-to-255 luma
+`fxaaPixel`, the per-pixel body `applyFxaa` and `blitScaledFxaa` share, skips a neighbourhood whose contrast is under `max(0.0156, lumaMax * 0.0312)` and floors its direction reduction at `1/128`. Those are FXAA's values for luma in `[0, 1]`, but the luma here is in `[0, 255]`, so both floors are effectively inert: the relative threshold decides every case above near-black, and the direction floor never binds there. Not checked against a reference shader; changing either moves every FXAA output.
+
+- Affected: `src/main/java/dev/simplified/image/pixel/PixelBuffer.java:953-954`, `src/main/java/dev/simplified/image/pixel/PixelBuffer.java:978`, `src/main/java/dev/simplified/image/pixel/PixelBuffer.java:984-987` (`fxaaPixel`)
+- Severity: **LOW**
+- Type: **RISK**
+- Status: **OPEN**
+
+## `Resample.NEAREST` promises the centre-closest pixel; `resize` takes the top-left one
+The javadoc says nearest picks the source pixel whose centre is closest to the sampled location, but `resize` maps `sx = x * W / w`, the top-left of each footprint, as `blitScaled` does: for a 3x downscale, output 1 reads source 3 where the centre-closest is 4.
+
+- Affected: `src/main/java/dev/simplified/image/pixel/Resample.java:25-30`, `src/main/java/dev/simplified/image/pixel/PixelBuffer.java:400`, `:402` (`resize`)
+- Severity: **LOW**
+- Type: **GAP**
+- Status: **OPEN**
+
+## `resize(BICUBIC)` always reports `hasAlpha = true`
+`NEAREST` and `BILINEAR` keep the source's `hasAlpha`; `BICUBIC` wraps a `TYPE_INT_ARGB` image, so an opaque buffer comes back flagged as carrying alpha and loses `blit`'s opaque fast path.
+
+- Affected: `src/main/java/dev/simplified/image/pixel/PixelBuffer.java:381`, `:392` (`resize`)
+- Severity: **LOW**
+- Type: **BUG**
+- Status: **OPEN**
+
+## `PixelGraphics.drawImage`'s rectangle and transform forms overwrite instead of compositing
+The source/destination-rectangle form and the `AffineTransform` form write every pixel with alpha above zero through `setPixelSafe`: a partly transparent pixel replaces the destination instead of blending over it, a flipped rectangle loses its flip to the min corners, and the clip is ignored. The `(img, x, y)` and `(img, x, y, w, h)` forms blend with `BlendMode.NORMAL`. No workspace consumer calls the two forms today.
+
+- Affected: `src/main/java/dev/simplified/image/pixel/PixelGraphics.java:694-718`, `src/main/java/dev/simplified/image/pixel/PixelGraphics.java:726-752`
+- Severity: **LOW**
+- Type: **BUG**
 - Status: **OPEN**

@@ -420,15 +420,80 @@ class PixelBufferTest {
     }
 
     @Test
-    @DisplayName("premultiply then unpremultiply roundtrips within tolerance")
+    @DisplayName("premultiply then unpremultiply takes a half-alpha grey back exactly")
     void premultiplyRoundtrip() {
         PixelBuffer a = PixelBuffer.create(1, 1);
         a.setPixel(0, 0, 0x80808080);
         a.premultiplyAlpha();
+        assertThat(a.getPixel(0, 0), equalTo(0x80404040));
         a.unpremultiplyAlpha();
-        int p = a.getPixel(0, 0);
-        assertThat(ColorMath.alpha(p), equalTo(128));
-        assertThat(Math.abs(ColorMath.red(p) - 128), org.hamcrest.Matchers.lessThanOrEqualTo(2));
+        assertThat(a.getPixel(0, 0), equalTo(0x80808080));
+    }
+
+    @Test
+    @DisplayName("unpremultiply then premultiply returns every valid premultiplied pixel exactly")
+    void unpremultiplyInvertsPremultiply() {
+        // Row y holds alpha y + 1 and column x a channel of x % (alpha + 1), so every row walks each
+        // channel value its alpha allows - every valid premultiplied pixel, 32,639 of them - with green
+        // running down as red runs up and blue at half of red.
+        int width = 255;
+        int height = 254;
+        int[] fixture = new int[width * height];
+
+        for (int y = 0; y < height; y++) {
+            int alpha = y + 1;
+            for (int x = 0; x < width; x++) {
+                int channel = x % (alpha + 1);
+                fixture[y * width + x] = ColorMath.pack(alpha, channel, alpha - channel, channel >> 1);
+            }
+        }
+
+        PixelBuffer buffer = PixelBuffer.of(fixture.clone(), width, height);
+        buffer.unpremultiplyAlpha();
+        buffer.premultiplyAlpha();
+        assertArrayEquals(fixture, buffer.data());
+    }
+
+    @Test
+    @DisplayName("premultiply then unpremultiply lands within half a premultiplied step, rounded to nearest, of every straight pixel")
+    void premultiplyRoundtripBound() {
+        for (int alpha = 1; alpha < 255; alpha++) {
+            int[] fixture = new int[256];
+            for (int straight = 0; straight < 256; straight++)
+                fixture[straight] = ColorMath.pack(alpha, straight, straight, 255 - straight);
+
+            PixelBuffer buffer = PixelBuffer.of(fixture.clone(), 256, 1);
+            buffer.premultiplyAlpha();
+            buffer.unpremultiplyAlpha();
+
+            // Premultiplying keeps alpha + 1 of the 256 straight levels, so a level comes back to the
+            // nearest one kept: within half a step rounded to nearest, (255 + alpha) / (2 * alpha), which
+            // is 1 from alpha 86 up. A division that floors lands one level further at 57 alphas.
+            int bound = (255 + alpha) / (2 * alpha);
+            for (int straight = 0; straight < 256; straight++) {
+                int pixel = buffer.data()[straight];
+                String label = "alpha %d, straight %d".formatted(alpha, straight);
+                assertThat(label, ColorMath.alpha(pixel), equalTo(alpha));
+                assertThat(label, Math.abs(ColorMath.red(pixel) - straight), lessThanOrEqualTo(bound));
+                assertThat(label, Math.abs(ColorMath.blue(pixel) - (255 - straight)), lessThanOrEqualTo(bound));
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("unpremultiply rounds each channel to nearest and leaves alpha 0 and 255 as they are")
+    void unpremultiplyGoldens() {
+        int[] fixture = { 0x00000000, 0x00123456, 0xFF123456, 0x01010101, 0x02010000, 0xFE7F3F00, 0x80404040, 0x80FF0000 };
+        PixelBuffer buffer = PixelBuffer.of(fixture.clone(), fixture.length, 1);
+
+        buffer.unpremultiplyAlpha();
+
+        // 0x02010000 floors to 0x027F0000 and 0xFE7F3F00 to itself; 0x80FF0000 carries more red than
+        // alpha, which no premultiplied pixel does, and is held at 255.
+        assertArrayEquals(
+            new int[] { 0x00000000, 0x00123456, 0xFF123456, 0x01FFFFFF, 0x02800000, 0xFE803F00, 0x80808080, 0x80FF0000 },
+            buffer.data()
+        );
     }
 
     @Test

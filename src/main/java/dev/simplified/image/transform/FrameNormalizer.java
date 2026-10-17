@@ -142,6 +142,7 @@ public final class FrameNormalizer {
             .withFrames(normalized)
             .withLoopCount(data.getLoopCount())
             .withBackgroundColor(data.getBackgroundColor())
+            .withAlphaMode(data.getAlphaMode())
             .build();
     }
 

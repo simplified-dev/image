@@ -6,6 +6,7 @@ import dev.simplified.image.ImageData;
 import dev.simplified.image.ImageFormat;
 import dev.simplified.image.codec.ImageWriteOptions;
 import dev.simplified.image.codec.ImageWriter;
+import dev.simplified.image.pixel.AlphaMode;
 import dev.simplified.image.pixel.PixelBuffer;
 import dev.simplified.util.io.ByteArrayDataOutput;
 import org.jetbrains.annotations.NotNull;
@@ -37,7 +38,7 @@ public class JpegImageWriter implements ImageWriter {
             quality = jpegOptions.quality();
 
         // JPEG does not support alpha - always convert to RGB
-        PixelBuffer pixels = data.toPixelBuffer();
+        PixelBuffer pixels = data.toPixelBuffer(AlphaMode.STRAIGHT);
         BufferedImage argb = pixels.toBufferedImage();
         BufferedImage image = new BufferedImage(argb.getWidth(), argb.getHeight(), BufferedImage.TYPE_INT_RGB);
         Graphics2D g2d = image.createGraphics();
