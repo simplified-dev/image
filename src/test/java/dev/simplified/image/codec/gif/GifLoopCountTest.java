@@ -29,7 +29,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  * extension's bytes, and the one {@link GifImageReader} reads back.
  * <p>
  * The extension counts repeats after the first play, and {@code 0} repeats forever; a GIF that
- * carries none plays once.
+ * carries none plays once. An ANIMEXTS1.0 extension, which some encoders write in its place, is
+ * read the same way.
  */
 class GifLoopCountTest {
 
@@ -109,6 +110,25 @@ class GifLoopCountTest {
         byte[] gif = write(animation(LoopCount.Preset.NONE), null);
 
         assertThat(GifBlocks.netscapeLoopCounts(gif), is(empty()));
+        assertThat(read(gif).getLoopCount(), sameInstance(LoopCount.Preset.NONE));
+    }
+
+    @Test
+    @DisplayName("an ANIMEXTS1.0 extension is read as the NETSCAPE2.0 one it stands in for")
+    void animextsReadsAsNetscape() {
+        for (LoopCount count : List.of(LoopCount.Preset.ONCE, LoopCount.of(2), LoopCount.Preset.INFINITE)) {
+            byte[] gif = GifBlocks.withNetscapeRenamed(write(animation(count), null), "ANIMEXTS1.0");
+
+            assertThat(GifBlocks.netscapeLoopCounts(gif), is(empty()));
+            assertThat(read(gif).getLoopCount(), equalTo(count));
+        }
+    }
+
+    @Test
+    @DisplayName("a NETSCAPE2.0 extension whose sub-block is not the loop count declares no count")
+    void otherSubBlockDeclaresNoCount() {
+        byte[] gif = GifBlocks.withNetscapeSubBlockId(write(animation(LoopCount.of(4)), null), 2);
+
         assertThat(read(gif).getLoopCount(), sameInstance(LoopCount.Preset.NONE));
     }
 

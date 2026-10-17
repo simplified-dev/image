@@ -53,19 +53,73 @@ final class GifBlocks {
      */
     static @NotNull List<Integer> netscapeLoopCounts(byte @NotNull [] gif) {
         List<Integer> counts = new ArrayList<>();
+        for (int identifier : netscapeIdentifiers(gif)) {
+            int position = identifier + 11;
+            if ((gif[position] & 0xFF) != 3 || gif[position + 1] != 1)
+                throw new IllegalStateException("NETSCAPE2.0 extension at %d holds no loop count".formatted(identifier - 3));
+
+            counts.add((gif[position + 2] & 0xFF) | ((gif[position + 3] & 0xFF) << 8));
+        }
+        return counts;
+    }
+
+    /**
+     * Returns a copy of {@code gif} in which every NETSCAPE2.0 application extension carries another
+     * application identifier and authentication code, every other byte as it was.
+     *
+     * @param gif the encoded GIF
+     * @param identifier the eleven characters to write in place of {@code NETSCAPE2.0}
+     * @return the GIF with each NETSCAPE2.0 extension renamed
+     * @throws IllegalArgumentException if {@code identifier} is not eleven characters
+     * @throws IllegalStateException if the walk meets a block it does not know
+     */
+    static byte @NotNull [] withNetscapeRenamed(byte @NotNull [] gif, @NotNull String identifier) {
+        byte[] name = identifier.getBytes(StandardCharsets.US_ASCII);
+        if (name.length != 11)
+            throw new IllegalArgumentException("Identifier '%s' is not eleven characters".formatted(identifier));
+
+        byte[] renamed = gif.clone();
+        for (int position : netscapeIdentifiers(gif))
+            System.arraycopy(name, 0, renamed, position, name.length);
+        return renamed;
+    }
+
+    /**
+     * Returns a copy of {@code gif} in which the first sub-block of every NETSCAPE2.0 application
+     * extension carries another sub-block id, every other byte as it was.
+     * <p>
+     * Sub-block {@code 1} is the loop count; {@code 2} is the buffering sub-block, whose payload is
+     * a buffer size rather than a count.
+     *
+     * @param gif the encoded GIF
+     * @param id the sub-block id to write
+     * @return the GIF with each NETSCAPE2.0 extension's first sub-block re-labelled
+     * @throws IllegalStateException if the walk meets a block it does not know
+     */
+    static byte @NotNull [] withNetscapeSubBlockId(byte @NotNull [] gif, int id) {
+        byte[] relabelled = gif.clone();
+        for (int position : netscapeIdentifiers(gif))
+            relabelled[position + 12] = (byte) id;
+        return relabelled;
+    }
+
+    /**
+     * Returns the offset of every NETSCAPE2.0 application extension's eleven-byte identifier, in
+     * file order.
+     *
+     * @param gif the encoded GIF
+     * @return the offset of each NETSCAPE2.0 identifier
+     * @throws IllegalStateException if the walk meets a block it does not know
+     */
+    private static @NotNull List<Integer> netscapeIdentifiers(byte @NotNull [] gif) {
+        List<Integer> offsets = new ArrayList<>();
         walkExtensions(gif, (label, introducer) -> {
             int position = introducer + 2;
 
-            if (label != 0xFF || (gif[position] & 0xFF) != 11 || !NETSCAPE.equals(new String(gif, position + 1, 11, StandardCharsets.US_ASCII)))
-                return;
-
-            position += 12;
-            if ((gif[position] & 0xFF) != 3 || gif[position + 1] != 1)
-                throw new IllegalStateException("NETSCAPE2.0 extension at %d holds no loop count".formatted(introducer));
-
-            counts.add((gif[position + 2] & 0xFF) | ((gif[position + 3] & 0xFF) << 8));
+            if (label == 0xFF && (gif[position] & 0xFF) == 11 && NETSCAPE.equals(new String(gif, position + 1, 11, StandardCharsets.US_ASCII)))
+                offsets.add(position + 1);
         });
-        return counts;
+        return offsets;
     }
 
     /**
