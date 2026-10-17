@@ -588,9 +588,7 @@ class WebPRoundTripTest {
         File out = outputDir.resolve("tooltip_reencode_partial.webp").toFile();
         ImageFactory.toFile(anim, ImageFormat.WEBP, out,
             WebPWriteOptions.builder().isLossless().build());
-        System.err.println("[partial-reencode] ours animated lossless: "
-            + out.length() + " bytes (prior full-frame encode was 1,699,930 B; "
-            + "libwebp WebPAnimEncoder is 11,688 B)");
+        System.err.println("[partial-reencode] ours animated lossless: " + out.length() + " bytes");
     }
 
     @Test
@@ -1256,8 +1254,7 @@ class WebPRoundTripTest {
                 buf.setPixel(x, y, argb);
             }
         byte[] payload = VP8LEncoder.encode(buf);
-        System.err.println("[palette-diag] 454x260 tooltip-like palette VP8L: "
-            + payload.length + " bytes (pre-palette literal-path baseline was ~60 KB)");
+        System.err.println("[palette-diag] 454x260 tooltip-like palette VP8L: " + payload.length + " bytes");
         if (payload.length > 5_000)
             throw new AssertionError("tooltip-like 4-color palette-path output = "
                 + payload.length + " B, expected <= 5000 B (palette may not be firing)");

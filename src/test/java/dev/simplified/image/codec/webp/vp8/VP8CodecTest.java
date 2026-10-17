@@ -1363,31 +1363,42 @@ public class VP8CodecTest {
                     psnr));
         }
 
-        @Test @DisplayName("conformance: P-frame of an unchanged solid source stays within 60 bytes")
+        @Test @DisplayName("conformance: SPLITMV is searched only on MBs whose best whole-MB prediction misses SPLITMV_GATE_SSE")
         void splitMvGateSuppressesOnSmoothContent() {
-            // Solid-colour MBs have ZeroMV-skip SSE = 0, well below SPLITMV_GATE_SSE,
-            // and no candidate scores below a zero-distortion skip, so every MB codes
-            // as ZeroMv-skip / NEAREST-skip whether or not the gate lets SPLITMV be
-            // enumerated. The test bounds that frame's size; it cannot tell the gate
-            // open from shut.
+            // Smooth: an unchanged solid source predicts every MB with zero error, under the
+            // gate, so no MB reaches the SPLITMV search.
             int W = 32, H = 32;
-            PixelBuffer keyframe = PixelBuffer.create(W, H);
-            for (int y = 0; y < H; y++)
-                for (int x = 0; x < W; x++)
-                    keyframe.setPixel(x, y, 0xFF8080A0);   // single solid colour
+            PixelBuffer solid = PixelBuffer.create(W, H);
+            solid.fill(0xFF8080A0);
 
-            VP8EncoderSession encSess = new VP8EncoderSession();
-            byte[] kf = encSess.encode(keyframe, 0.75f, true);
-            byte[] pf = encSess.encode(keyframe, 0.75f, false);   // identical source
-
-            // P-frame for an unchanged source should be tiny (just per-MB header bits).
-            // This one codes in 45 bytes; the forced-SPLITMV hook writes the same frame
-            // in 57, so a SPLITMV on every MB passes the bound too.
+            VP8EncoderSession smooth = new VP8EncoderSession();
+            smooth.encode(solid, 0.75f, true);
+            byte[] pf = smooth.encode(solid, 0.75f, false);
+            if (smooth.splitMvSearches != 0)
+                throw new AssertionError(String.format(
+                    "SPLITMV searched on %d MBs of an unchanged solid frame - the gate let smooth MBs through",
+                    smooth.splitMvSearches));
             if (pf.length > 60)
                 throw new AssertionError(String.format(
-                    "P-frame for unchanged source is %d bytes (expected < 60) - "
-                    + "SPLITMV gate may have failed open and emitted SPLITMV on smooth MBs",
-                    pf.length));
+                    "P-frame for an unchanged solid source is %d bytes (expected <= 60)", pf.length));
+
+            // Busy: a P-frame of noise unrelated to its noise reference, coded at a coarse
+            // quantizer, leaves every candidate's reconstruction far above the gate, so the
+            // search runs. A candidate's error is measured after its residual is coded, so at
+            // a fine quantizer even noise can reconstruct under the gate.
+            java.util.Random random = new java.util.Random(7);
+            PixelBuffer first = PixelBuffer.create(W, H);
+            PixelBuffer second = PixelBuffer.create(W, H);
+            for (int i = 0; i < W * H; i++) {
+                first.data()[i] = 0xFF000000 | random.nextInt(0x1000000);
+                second.data()[i] = 0xFF000000 | random.nextInt(0x1000000);
+            }
+
+            VP8EncoderSession busy = new VP8EncoderSession();
+            busy.encode(first, 0.05f, true);
+            busy.encode(second, 0.05f, false);
+            if (busy.splitMvSearches == 0)
+                throw new AssertionError("SPLITMV searched on no MB of a noise P-frame - the gate shut on MBs no whole-MB prediction fits");
         }
 
         @Test @DisplayName("conformance: subMvRefContext mirrors decoder's 5-way classifier (RFC 6386 section 16.4)")

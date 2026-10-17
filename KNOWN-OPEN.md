@@ -5,7 +5,7 @@ Defects present in the current tree and not yet fixed, most severe first. Each e
 ## VP8 encoder point-samples 4:2:0 chroma instead of averaging
 `Macroblock.fromARGB` takes each 2x2 block's Cb/Cr from its top-left pixel rather than averaging the four pixels, so every lossy WebP encode aliases thin colour detail such as one-pixel lines and coloured text edges. The bitstream stays valid; the cost is fidelity.
 
-- Affected: `src/main/java/dev/simplified/image/codec/webp/vp8/Macroblock.java:53-58` (`fromARGB`); callers `src/main/java/dev/simplified/image/codec/webp/vp8/VP8Encoder.java:1594`, `:2208`, `:3103`
+- Affected: `src/main/java/dev/simplified/image/codec/webp/vp8/Macroblock.java:53-58` (`fromARGB`); callers `src/main/java/dev/simplified/image/codec/webp/vp8/VP8Encoder.java:1594`, `:2208`, `:3105`
 - Severity: **MEDIUM**
 - Type: **BUG**
 - Status: **OPEN**
@@ -126,22 +126,6 @@ The source/destination-rectangle form and the `AffineTransform` form write every
 `LICENSE.md` is the bare Apache-2.0 text with no copyright line, so `NOTICE` opens with the project name and licence only.
 
 - Affected: `LICENSE.md`, `NOTICE:1-2`
-- Severity: **LOW**
-- Type: **GAP**
-- Status: **OPEN**
-
-## Nothing holds `SPLITMV_GATE_SSE` to keeping SPLITMV off smooth content
-`splitMvGateSuppressesOnSmoothContent` bounds the P-frame of an unchanged solid source at 60 bytes, but on that source no candidate scores below a zero-distortion skip, so the frame codes the same with the gate shut or open: 45 bytes either way, measured with the gate forced to -1. The forced-SPLITMV hook writes the same frame in 57, inside the bound too. The test therefore pins the frame's size and not the gate, while its failure message still blames the gate. The gate moves output only on a macroblock where SPLITMV would win R-D, so a test that holds it needs content with such macroblocks under the gate's SSE, or a count of the macroblocks it lets through to enumeration.
-
-- Affected: `src/test/java/dev/simplified/image/codec/webp/vp8/VP8CodecTest.java:1366-1391` (`splitMvGateSuppressesOnSmoothContent`), `src/main/java/dev/simplified/image/codec/webp/vp8/VP8Encoder.java:2305`, `:2430` (`SPLITMV_GATE_SSE`)
-- Severity: **LOW**
-- Type: **GAP**
-- Status: **OPEN**
-
-## Two WebP diagnostics print their sizes beside figures nothing in the tree measures
-`diagnosticReencodeTooltipPartialFrames` prints its size beside a "prior full-frame encode" of 1,699,930 B, though the lossless writer always writes partial frames; `diagnosticTooltipPalettePathSize` prints beside a "pre-palette literal-path baseline" of ~60 KB. Both figures are recorded constants in the message rather than measurements the test takes, so a reader of the output compares against a number this build never produced. Output text only; no assertion reads either.
-
-- Affected: `src/test/java/dev/simplified/image/codec/webp/WebPRoundTripTest.java:592`, `:1260`
 - Severity: **LOW**
 - Type: **GAP**
 - Status: **OPEN**

@@ -133,6 +133,12 @@ public final class VP8EncoderSession {
     private boolean autoSegment = false;
 
     /**
+     * Macroblocks of the last encoded frame whose best whole-macroblock prediction missed by more than
+     * the SPLITMV gate's error, so the SPLITMV search ran on them - zero after a keyframe.
+     */
+    int splitMvSearches;
+
+    /**
      * Constructs a new {@code VP8EncoderSession} with no cached references.
      */
     public VP8EncoderSession() { }
@@ -211,6 +217,7 @@ public final class VP8EncoderSession {
      * @return encoded VP8 payload bytes
      */
     public byte @NotNull [] encode(@NotNull PixelBuffer pixels, float quality, boolean forceKeyframe) {
+        this.splitMvSearches = 0;
         boolean needsKeyframe = forceKeyframe
             || !hasReference()
             || pixels.width() != refWidth

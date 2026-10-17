@@ -2303,6 +2303,8 @@ public final class VP8Encoder {
         // doesn't fit; smooth content where ZEROMV / NEAREST / NEW already nail it
         // cannot benefit from the extra MV-tree bits.
         if (best.sse > SPLITMV_GATE_SSE) {
+            if (s.session != null)
+                s.session.splitMvSearches++;
             InterCandidate split = buildBestSplitMvCandidate(
                 s, mb, mbX, mbY, mvRefProbs, skipBit0, skipBit1, baseInterHeader, lambda
             );
