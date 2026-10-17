@@ -2,6 +2,7 @@ package dev.simplified.image.codec.webp;
 
 import dev.simplified.collection.Concurrent;
 import dev.simplified.collection.ConcurrentList;
+import dev.simplified.image.codec.common.LittleEndian;
 import dev.simplified.image.exception.ImageDecodeException;
 import dev.simplified.image.exception.ImageEncodeException;
 import org.jetbrains.annotations.NotNull;
@@ -39,7 +40,7 @@ final class RiffContainer {
         if (data[8] != 'W' || data[9] != 'E' || data[10] != 'B' || data[11] != 'P')
             throw new ImageDecodeException("Missing WEBP identifier");
 
-        int fileSize = readLE32(data, 4);
+        int fileSize = LittleEndian.readUint32(data, 4);
         int end = Math.min(fileSize + 8, data.length);
         int offset = 12; // Skip RIFF header + WEBP
 
@@ -47,7 +48,7 @@ final class RiffContainer {
 
         while (offset + 8 <= end) {
             String fourCC = new String(data, offset, 4);
-            int chunkSize = readLE32(data, offset + 4);
+            int chunkSize = LittleEndian.readUint32(data, offset + 4);
             int payloadOffset = offset + 8;
 
             if (payloadOffset + chunkSize > data.length)
@@ -119,13 +120,6 @@ final class RiffContainer {
      */
     public static @NotNull WebPChunk createChunk(@NotNull WebPChunk.Type type, byte @NotNull [] payload) {
         return new WebPChunk(type, type.getFourCC(), payload, 0, payload.length);
-    }
-
-    private static int readLE32(byte[] data, int offset) {
-        return (data[offset] & 0xFF)
-            | ((data[offset + 1] & 0xFF) << 8)
-            | ((data[offset + 2] & 0xFF) << 16)
-            | ((data[offset + 3] & 0xFF) << 24);
     }
 
     private static void writeLE32(byte[] data, int offset, int value) {

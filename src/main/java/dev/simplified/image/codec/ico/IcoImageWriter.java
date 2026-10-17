@@ -7,14 +7,13 @@ import dev.simplified.image.ImageData;
 import dev.simplified.image.ImageFormat;
 import dev.simplified.image.StaticImageData;
 import dev.simplified.image.codec.ImageWriter;
+import dev.simplified.image.codec.common.LittleEndian;
 import dev.simplified.image.codec.png.PngImageWriter;
 import dev.simplified.image.option.ImageWriteOptions;
 import dev.simplified.util.io.ByteArrayDataOutput;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
-
-import java.io.IOException;
 
 /**
  * Writes a single-image Windows ICO file with the payload encoded as an embedded PNG.
@@ -49,34 +48,22 @@ public class IcoImageWriter implements ImageWriter {
         byte[] png = new PngImageWriter().write(StaticImageData.of(frame.pixels(), data.getAlphaMode()));
 
         @Cleanup ByteArrayDataOutput out = new ByteArrayDataOutput(6 + 16 + png.length);
-        writeUint16LE(out, 0);
-        writeUint16LE(out, 1);
-        writeUint16LE(out, 1);
+        LittleEndian.writeUint16(out, 0);
+        LittleEndian.writeUint16(out, 1);
+        LittleEndian.writeUint16(out, 1);
 
         out.writeByte(width == 256 ? 0 : width);
         out.writeByte(height == 256 ? 0 : height);
         out.writeByte(0);
         out.writeByte(0);
-        writeUint16LE(out, 1);
-        writeUint16LE(out, 32);
-        writeUint32LE(out, png.length);
-        writeUint32LE(out, 6 + 16);
+        LittleEndian.writeUint16(out, 1);
+        LittleEndian.writeUint16(out, 32);
+        LittleEndian.writeUint32(out, png.length);
+        LittleEndian.writeUint32(out, 6 + 16);
 
         out.write(png);
 
         return out.toByteArray();
-    }
-
-    private static void writeUint16LE(@NotNull ByteArrayDataOutput out, int value) throws IOException {
-        out.writeByte(value & 0xFF);
-        out.writeByte((value >>> 8) & 0xFF);
-    }
-
-    private static void writeUint32LE(@NotNull ByteArrayDataOutput out, int value) throws IOException {
-        out.writeByte(value & 0xFF);
-        out.writeByte((value >>> 8) & 0xFF);
-        out.writeByte((value >>> 16) & 0xFF);
-        out.writeByte((value >>> 24) & 0xFF);
     }
 
 }

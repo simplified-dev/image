@@ -6,6 +6,7 @@ import dev.simplified.image.ImageFormat;
 import dev.simplified.image.PixelBuffer;
 import dev.simplified.image.StaticImageData;
 import dev.simplified.image.codec.ImageReader;
+import dev.simplified.image.codec.common.LittleEndian;
 import dev.simplified.image.exception.ImageDecodeException;
 import dev.simplified.image.option.ImageReadOptions;
 import org.jetbrains.annotations.ApiStatus;
@@ -50,8 +51,8 @@ public class TgaImageReader implements ImageReader {
         if (imageType != TYPE_TRUE_COLOR && imageType != TYPE_RLE_TRUE_COLOR)
             throw new ImageDecodeException("TGA image type '%d' is not supported", imageType);
 
-        int width = readUint16LE(data, 12);
-        int height = readUint16LE(data, 14);
+        int width = LittleEndian.readUint16(data, 12);
+        int height = LittleEndian.readUint16(data, 14);
         int depth = data[16] & 0xFF;
         int descriptor = data[17] & 0xFF;
 
@@ -131,10 +132,6 @@ public class TgaImageReader implements ImageReader {
         int y = linearIndex / width;
         int x = linearIndex % width;
         return (height - 1 - y) * width + x;
-    }
-
-    private static int readUint16LE(byte @NotNull [] data, int offset) {
-        return (data[offset] & 0xFF) | ((data[offset + 1] & 0xFF) << 8);
     }
 
 }
