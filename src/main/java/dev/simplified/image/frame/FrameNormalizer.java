@@ -5,11 +5,12 @@ import dev.simplified.collection.Concurrent;
 import dev.simplified.collection.ConcurrentList;
 import dev.simplified.image.AnimatedImageData;
 import dev.simplified.image.PixelBuffer;
+import dev.simplified.image.pixel.AlphaMode;
+import dev.simplified.image.pixel.Resample;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
-import java.awt.*;
-import java.awt.image.BufferedImage;
+import java.awt.Color;
 
 /**
  * Normalizes animation frames of varying dimensions to a common canvas size.
@@ -34,6 +35,10 @@ public final class FrameNormalizer {
 
     /**
      * Normalizes frames to a common canvas with configurable strategy.
+     * <p>
+     * Frames are scaled bicubically in the convention {@code data} is held in, and the background fill,
+     * given as straight colour, is premultiplied for an animation held in {@link AlphaMode#PREMULTIPLIED}.
+     * A scaled frame replaces the fill it covers, transparent pixels included.
      *
      * @param data the animated image data containing frames to normalize
      * @param targetWidth the target canvas width, or null to derive from frames
@@ -52,6 +57,7 @@ public final class FrameNormalizer {
         @NotNull Color backgroundColor
     ) {
         ConcurrentList<ImageFrame> frames = data.getFrames();
+        AlphaMode alphaMode = data.getAlphaMode();
 
         boolean needMinDimensions = (targetWidth == null || targetWidth <= 0)
             || (targetHeight == null || targetHeight <= 0);
@@ -83,66 +89,74 @@ public final class FrameNormalizer {
                 continue;
             }
 
-            BufferedImage srcImage = src.toBufferedImage();
-            BufferedImage canvas = new BufferedImage(canvasW, canvasH, BufferedImage.TYPE_INT_ARGB);
-            Graphics2D g2d = canvas.createGraphics();
-            try {
-                g2d.setComposite(AlphaComposite.Src);
-                g2d.setColor(backgroundColor);
-                g2d.fillRect(0, 0, canvasW, canvasH);
+            int dw, dh, dx, dy;
 
-                g2d.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
-                g2d.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
-                g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-
-                int dw, dh, dx, dy;
-
-                switch (fitMode) {
-                    case COVER -> {
-                        double scale = Math.max((double) canvasW / sw, (double) canvasH / sh);
-                        if (!allowUpscale) scale = Math.min(1.0, scale);
-                        dw = Math.max(1, (int) Math.round(sw * scale));
-                        dh = Math.max(1, (int) Math.round(sh * scale));
-                        dx = (canvasW - dw) / 2;
-                        dy = (canvasH - dh) / 2;
-                    }
-                    case STRETCH -> {
-                        if (allowUpscale) {
-                            dw = canvasW;
-                            dh = canvasH;
-                            dx = 0;
-                            dy = 0;
-                        } else {
-                            dw = Math.min(canvasW, sw);
-                            dh = Math.min(canvasH, sh);
-                            dx = (canvasW - dw) / 2;
-                            dy = (canvasH - dh) / 2;
-                        }
-                    }
-                    default -> { // CONTAIN
-                        double scale = Math.min((double) canvasW / sw, (double) canvasH / sh);
-                        if (!allowUpscale) scale = Math.min(1.0, scale);
-                        dw = Math.max(1, (int) Math.round(sw * scale));
-                        dh = Math.max(1, (int) Math.round(sh * scale));
+            switch (fitMode) {
+                case COVER -> {
+                    double scale = Math.max((double) canvasW / sw, (double) canvasH / sh);
+                    if (!allowUpscale) scale = Math.min(1.0, scale);
+                    dw = Math.max(1, (int) Math.round(sw * scale));
+                    dh = Math.max(1, (int) Math.round(sh * scale));
+                    dx = (canvasW - dw) / 2;
+                    dy = (canvasH - dh) / 2;
+                }
+                case STRETCH -> {
+                    if (allowUpscale) {
+                        dw = canvasW;
+                        dh = canvasH;
+                        dx = 0;
+                        dy = 0;
+                    } else {
+                        dw = Math.min(canvasW, sw);
+                        dh = Math.min(canvasH, sh);
                         dx = (canvasW - dw) / 2;
                         dy = (canvasH - dh) / 2;
                     }
                 }
-
-                g2d.drawImage(srcImage, dx, dy, dw, dh, null);
-            } finally {
-                g2d.dispose();
+                default -> { // CONTAIN
+                    double scale = Math.min((double) canvasW / sw, (double) canvasH / sh);
+                    if (!allowUpscale) scale = Math.min(1.0, scale);
+                    dw = Math.max(1, (int) Math.round(sw * scale));
+                    dh = Math.max(1, (int) Math.round(sh * scale));
+                    dx = (canvasW - dw) / 2;
+                    dy = (canvasH - dh) / 2;
+                }
             }
 
-            normalized.add(ImageFrame.of(PixelBuffer.wrap(canvas), frame.delayMs(), 0, 0, frame.disposal(), frame.blend()));
+            PixelBuffer canvas = PixelBuffer.create(canvasW, canvasH);
+            canvas.fill(backgroundColor.getRGB());
+            if (alphaMode == AlphaMode.PREMULTIPLIED)
+                canvas.premultiplyAlpha();
+
+            PixelBuffer scaled = src.resize(dw, dh, Resample.BICUBIC, alphaMode);
+            replace(canvas, scaled, dx, dy);
+            normalized.add(ImageFrame.of(canvas, frame.delayMs(), 0, 0, frame.disposal(), frame.blend()));
         }
 
         return new AnimatedImageData.Builder()
             .withFrames(normalized)
             .withLoopCount(data.getLoopCount())
             .withBackgroundColor(data.getBackgroundColor())
-            .withAlphaMode(data.getAlphaMode())
+            .withAlphaMode(alphaMode)
             .build();
+    }
+
+    /**
+     * Copies {@code source} onto {@code canvas} with its top-left corner at {@code (x, y)}, replacing
+     * the canvas pixels it covers - transparent ones included - and clipping to the canvas.
+     *
+     * @param canvas the buffer written to
+     * @param source the pixels copied
+     * @param x the canvas x coordinate of the source's left edge
+     * @param y the canvas y coordinate of the source's top edge
+     */
+    private static void replace(@NotNull PixelBuffer canvas, @NotNull PixelBuffer source, int x, int y) {
+        int x0 = Math.max(0, x);
+        int x1 = Math.min(canvas.width(), x + source.width());
+        if (x0 >= x1) return;
+
+        for (int row = Math.max(0, y); row < Math.min(canvas.height(), y + source.height()); row++)
+            System.arraycopy(source.data(), (row - y) * source.width() + (x0 - x), canvas.data(), row * canvas.width() + x0, x1 - x0);
     }
 
 }

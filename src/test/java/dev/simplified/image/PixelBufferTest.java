@@ -362,6 +362,42 @@ class PixelBufferTest {
     }
 
     @Test
+    @DisplayName("resize BILINEAR keeps a straight pixel's colour beside a transparent one, and mixes premultiplied pixels as held")
+    void resizeBilinearHonoursTheConvention() {
+        PixelBuffer pair = PixelBuffer.create(2, 1);
+        pair.setPixel(0, 0, 0xFFFF0000);
+
+        assertThat(pair.resize(1, 1, Resample.BILINEAR).getPixel(0, 0), equalTo(0x80FF0000));
+        assertThat(pair.resize(1, 1, Resample.BILINEAR, AlphaMode.STRAIGHT).getPixel(0, 0), equalTo(0x80FF0000));
+        assertThat(pair.resize(1, 1, Resample.BILINEAR, AlphaMode.PREMULTIPLIED).getPixel(0, 0), equalTo(0x80800000));
+    }
+
+    @Test
+    @DisplayName("resize BICUBIC of premultiplied pixels holds every colour at or under its alpha")
+    void resizeBicubicPremultipliedStaysPremultiplied() {
+        PixelBuffer halves = PixelBuffer.create(8, 4);
+        for (int y = 0; y < 4; y++)
+            for (int x = 0; x < 4; x++)
+                halves.setPixel(x, y, 0xFFFF0000);
+
+        for (int pixel : halves.resize(3, 2, Resample.BICUBIC, AlphaMode.PREMULTIPLIED).data())
+            assertThat(Integer.toHexString(pixel), ColorMath.red(pixel) <= ColorMath.alpha(pixel), equalTo(true));
+    }
+
+    @Test
+    @DisplayName("resize BICUBIC keeps an opaque buffer opaque")
+    void resizeBicubicKeepsOpaque() {
+        PixelBuffer opaque = PixelBuffer.of(gradient(8, 8).data(), 8, 8, false);
+
+        for (AlphaMode mode : AlphaMode.values()) {
+            PixelBuffer resized = opaque.resize(5, 3, Resample.BICUBIC, mode);
+            assertThat(resized.hasAlpha(), equalTo(false));
+            for (int pixel : resized.data())
+                assertThat(ColorMath.alpha(pixel), equalTo(0xFF));
+        }
+    }
+
+    @Test
     @DisplayName("resize BILINEAR reads past an edge as the edge pixel")
     void resizeBilinearClampsToTheEdgePixel() {
         // A ramp over four columns, doubled: the outermost outputs sit a quarter pixel past the first

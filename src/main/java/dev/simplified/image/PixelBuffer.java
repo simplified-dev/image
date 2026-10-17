@@ -366,43 +366,50 @@ public class PixelBuffer {
     }
 
     /**
-     * Resamples this buffer to the given dimensions using the specified filter.
-     * <p>
-     * {@link Resample#NEAREST} and {@link Resample#BILINEAR} sample directly from the pixel array;
-     * {@link Resample#BICUBIC} delegates to {@link Graphics2D} with high-quality hints.
-     * <p>
-     * {@link Resample#BILINEAR} mixes every channel as it is held and rounds each once, which is
-     * correct for {@link AlphaMode#PREMULTIPLIED} pixels; a {@link AlphaMode#STRAIGHT} pixel beside
-     * a transparent one takes on part of the transparent pixel's colour.
+     * Resamples this buffer, holding {@link AlphaMode#STRAIGHT} colour, to the given dimensions using
+     * the specified filter.
      *
      * @param w the target width
      * @param h the target height
      * @param filter the resampling filter
      * @return a new pixel buffer of size {@code w x h}
      * @throws IllegalArgumentException if {@code w} or {@code h} is not positive
+     * @see #resize(int, int, Resample, AlphaMode)
      */
     public @NotNull PixelBuffer resize(int w, int h, @NotNull Resample filter) {
+        return resize(w, h, filter, AlphaMode.STRAIGHT);
+    }
+
+    /**
+     * Resamples this buffer to the given dimensions using the specified filter, mixing its pixels in
+     * the convention they are held in.
+     * <p>
+     * {@link Resample#NEAREST} copies pixels and reads no convention. {@link Resample#BILINEAR}
+     * samples the pixel array directly: {@link AlphaMode#STRAIGHT} colour is weighted by its alpha
+     * for the mix and divided back after, so a transparent neighbour adds no colour, and
+     * {@link AlphaMode#PREMULTIPLIED} colour mixes as it is held, each channel at or under its alpha.
+     * {@link Resample#BICUBIC} draws through {@link Graphics2D} with high-quality hints, declaring the
+     * raster in the same convention. The result holds the convention this buffer holds and carries
+     * alpha only when this buffer does. A buffer whose alpha carries no data mixes every channel as it
+     * is held under either convention, which hold the same colour there.
+     *
+     * @param w the target width
+     * @param h the target height
+     * @param filter the resampling filter
+     * @param alphaMode the convention this buffer's pixels are held in
+     * @return a new pixel buffer of size {@code w x h}
+     * @throws IllegalArgumentException if {@code w} or {@code h} is not positive
+     */
+    public @NotNull PixelBuffer resize(int w, int h, @NotNull Resample filter, @NotNull AlphaMode alphaMode) {
         if (w <= 0 || h <= 0)
             throw new IllegalArgumentException("Resize dimensions must be positive, got %dx%d".formatted(w, h));
 
-        if (filter == Resample.BICUBIC) {
-            BufferedImage src = this.toBufferedImage();
-            BufferedImage dst = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
-            Graphics2D g = dst.createGraphics();
-            try {
-                g.setComposite(AlphaComposite.Src);
-                g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
-                g.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
-                g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                g.drawImage(src, 0, 0, w, h, null);
-            } finally {
-                g.dispose();
-            }
-            return wrap(dst);
-        }
+        if (filter == Resample.BICUBIC)
+            return resizeBicubic(w, h, alphaMode);
 
         int[] result = new int[w * h];
         boolean nearest = filter == Resample.NEAREST;
+        boolean weighByAlpha = this.hasAlpha && alphaMode == AlphaMode.STRAIGHT;
         forEachRow(0, h, y -> {
             int outRow = y * w;
             if (nearest) {
@@ -416,15 +423,48 @@ public class PixelBuffer {
                 float srcY = ((y + 0.5f) * this.height) / h - 0.5f;
                 for (int x = 0; x < w; x++) {
                     float srcX = ((x + 0.5f) * this.width) / w - 0.5f;
-                    sampleBilinear(this.data, this.width, this.height, false, srcX, srcY, false, sample, 0);
-                    result[outRow + x] = ColorMath.pack(
-                        channel(sample[0], 255), channel(sample[1], 255), channel(sample[2], 255), channel(sample[3], 255)
-                    );
+                    sampleBilinear(this.data, this.width, this.height, false, srcX, srcY, weighByAlpha, sample, 0);
+                    result[outRow + x] = this.hasAlpha
+                        ? packSample(sample[0], sample[1], sample[2], sample[3], alphaMode)
+                        : ColorMath.pack(channel(sample[0], 255), channel(sample[1], 255), channel(sample[2], 255), channel(sample[3], 255));
                 }
             }
         });
 
         return new PixelBuffer(result, w, h, this.hasAlpha);
+    }
+
+    /**
+     * Resamples this buffer bicubically through {@link Graphics2D}, declaring the source and target
+     * rasters in {@code alphaMode} so the interpolation weights colour by alpha exactly once. A buffer
+     * whose alpha carries no data is drawn as straight colour whatever {@code alphaMode} says, the two
+     * conventions holding the same colour there.
+     *
+     * @param w the target width
+     * @param h the target height
+     * @param alphaMode the convention this buffer's pixels are held in
+     * @return a new pixel buffer of size {@code w x h}, carrying alpha only when this buffer does
+     */
+    private @NotNull PixelBuffer resizeBicubic(int w, int h, @NotNull AlphaMode alphaMode) {
+        int type = this.hasAlpha && alphaMode == AlphaMode.PREMULTIPLIED
+            ? BufferedImage.TYPE_INT_ARGB_PRE
+            : BufferedImage.TYPE_INT_ARGB;
+        BufferedImage src = new BufferedImage(this.width, this.height, type);
+        System.arraycopy(this.data, 0, ((DataBufferInt) src.getRaster().getDataBuffer()).getData(), 0, this.data.length);
+
+        BufferedImage dst = new BufferedImage(w, h, type);
+        Graphics2D g = dst.createGraphics();
+        try {
+            g.setComposite(AlphaComposite.Src);
+            g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
+            g.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
+            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            g.drawImage(src, 0, 0, w, h, null);
+        } finally {
+            g.dispose();
+        }
+
+        return new PixelBuffer(((DataBufferInt) dst.getRaster().getDataBuffer()).getData(), w, h, this.hasAlpha);
     }
 
     /**
