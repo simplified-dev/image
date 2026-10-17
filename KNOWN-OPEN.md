@@ -5,7 +5,7 @@ Defects present in the current tree and not yet fixed, most severe first. Each e
 ## GIF without a NETSCAPE block reads as "loop forever"
 `GifImageReader.parseLoopCount` returns 0 when the file carries no NETSCAPE2.0 application extension, and `AnimatedImageData` defines a loop count of 0 as infinite. A GIF that plays once therefore decodes to an `AnimatedImageData` that claims infinite looping, and any re-encode carries that forward. HIGH once a caller depends on play-once fidelity.
 
-- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:103-108`, `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:134-149` (`parseLoopCount`), `src/main/java/dev/simplified/image/data/AnimatedImageData.java:179-184` (`Builder.withLoopCount`)
+- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:103-108`, `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:134-149` (`parseLoopCount`), `src/main/java/dev/simplified/image/AnimatedImageData.java:179-184` (`Builder.withLoopCount`)
 - Severity: **MEDIUM**
 - Type: **BUG**
 - Status: **OPEN**
@@ -101,7 +101,7 @@ When `GifWriteOptions` are supplied, `GifImageWriter` takes the loop count only 
 ## `Background.composite` lays every image down as premultiplied colour, whatever it holds
 `composite` blits each frame onto the fill with `BlendMode.PREMULTIPLIED`, on the assumption that a finished render's colours already carry their alpha, and premultiplies the fill only under an image declared `PREMULTIPLIED`. A straight image - anything decoded - is therefore laid down with its colour unscaled and comes out too bright wherever it is partly transparent. `getAlphaMode` would let it blend a straight image with `NORMAL`, but every caller in the workspace passes asset-renderer renders, which hold premultiplied colour under the default `STRAIGHT` until that consumer declares them, so honouring the label now would move their bytes. MEDIUM once a caller composites a decoded image.
 
-- Affected: `src/main/java/dev/simplified/image/Background.java:90-105` (`composite`), `src/main/java/dev/simplified/image/Background.java:116-125` (`over`)
+- Affected: `src/main/java/dev/simplified/image/Background.java:88-103` (`composite`), `src/main/java/dev/simplified/image/Background.java:114-123` (`over`)
 - Severity: **LOW**
 - Type: **RISK**
 - Status: **OPEN**
@@ -109,7 +109,7 @@ When `GifWriteOptions` are supplied, `GifImageWriter` takes the loop count only 
 ## `Background.composite` drops an animation's canvas size
 The `AnimatedImageData` it rebuilds never calls `withWidth` or `withHeight`, so its canvas becomes the first frame's size and an animation whose canvas is larger than its first frame loses the rest. Nothing in the workspace builds such an animation and composites it: the GIF reader and `FrameNormalizer` set no canvas size, and the WebP reader sets one but composes every frame to the whole canvas, so its first frame is canvas-sized. MEDIUM once a caller composites an animation whose first frame is smaller than its canvas.
 
-- Affected: `src/main/java/dev/simplified/image/Background.java:98-104` (`composite`), `src/main/java/dev/simplified/image/data/AnimatedImageData.java:213-214` (`Builder.build`)
+- Affected: `src/main/java/dev/simplified/image/Background.java:96-102` (`composite`), `src/main/java/dev/simplified/image/AnimatedImageData.java:213-214` (`Builder.build`)
 - Severity: **LOW**
 - Type: **BUG**
 - Status: **OPEN**
@@ -165,7 +165,7 @@ There are four copies of the interpreter launcher and three of the PSNR loop, wh
 ## ICO magic collides with a 256-byte ISOBMFF `ftyp` box
 The ICO arm of `ImageFormat.matches` accepts `00 00 01 00`, which is also the big-endian size field of a 256-byte `ftyp` box, and `ImageFactory` registers the ICO reader before any format added later. No ISOBMFF-based format is registered today; MEDIUM once one (AVIF, HEIF) is added after ICO.
 
-- Affected: `src/main/java/dev/simplified/image/ImageFormat.java:81-85`, `src/main/java/dev/simplified/image/ImageFactory.java:79`
+- Affected: `src/main/java/dev/simplified/image/ImageFormat.java:81-85`, `src/main/java/dev/simplified/image/ImageFactory.java:77`
 - Severity: **LOW**
 - Type: **RISK**
 - Status: **OPEN**
@@ -181,7 +181,7 @@ The ICO arm of `ImageFormat.matches` accepts `00 00 01 00`, which is also the bi
 ## Loop-count unit differs per container but is stored raw
 The GIF NETSCAPE loop count and the WebP `ANIM` loop count pass unchanged into `AnimatedImageData.loopCount`, although players are widely reported to read the two in different units (repetitions after the first play versus total plays; UNVERIFIED against browser source). `AnimatedImageData` documents no unit beyond "0 for infinite".
 
-- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:107`, `src/main/java/dev/simplified/image/codec/webp/WebPImageReader.java:99-104`, `src/main/java/dev/simplified/image/data/AnimatedImageData.java:26`
+- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageReader.java:107`, `src/main/java/dev/simplified/image/codec/webp/WebPImageReader.java:99-104`, `src/main/java/dev/simplified/image/AnimatedImageData.java:26`
 - Severity: **LOW**
 - Type: **RISK**
 - Status: **OPEN**
@@ -189,7 +189,7 @@ The GIF NETSCAPE loop count and the WebP `ANIM` loop count pass unchanged into `
 ## No disposal/blend-aware timeline renderer
 `FrameNormalizer` resizes and positions frames but passes disposal and blend through unchanged, and nothing composites a GIF/WebP timeline (offsets, `OVER` blending, `RESTORE_*` disposal) into full canvases. A target format that only carries full-canvas frames cannot be written from such input without one.
 
-- Affected: `src/main/java/dev/simplified/image/transform/FrameNormalizer.java:32-138`
+- Affected: `src/main/java/dev/simplified/image/frame/FrameNormalizer.java:31-137`
 - Severity: **LOW**
 - Type: **GAP**
 - Status: **OPEN**
@@ -221,7 +221,7 @@ Lines 3 and 28 say the library reads and writes BMP, GIF, JPEG, PNG and WebP, th
 ## README calls ImageData a sealed type; it is not
 The project tree labels `ImageData.java` the "sealed base type", but `ImageData` is a plain `public interface` with no `sealed` modifier or `permits` clause, so any class may implement it.
 
-- Affected: `README.md:226`, `src/main/java/dev/simplified/image/ImageData.java:19`
+- Affected: `README.md:226`, `src/main/java/dev/simplified/image/ImageData.java:17`
 - Severity: **LOW**
 - Type: **GAP**
 - Status: **OPEN**
@@ -229,7 +229,7 @@ The project tree labels `ImageData.java` the "sealed base type", but `ImageData`
 ## `ImageFactory` javadoc lists 5 auto-registered formats; 10 are registered
 The class javadoc names JPEG, PNG, BMP, GIF and WebP, while the constructor registers 10 readers and 10 writers.
 
-- Affected: `src/main/java/dev/simplified/image/ImageFactory.java:56`
+- Affected: `src/main/java/dev/simplified/image/ImageFactory.java:54`
 - Severity: **LOW**
 - Type: **GAP**
 - Status: **OPEN**
@@ -245,7 +245,7 @@ Four class headers describe shipped features as absent or future work: `VP8Encod
 ## `resize` takes no alpha convention, and its two smoothing filters assume opposite ones
 `BILINEAR` mixes every channel as it is held, which is correct for premultiplied colour and darkens a straight pixel beside a transparent one toward the transparent pixel's colour. `BICUBIC` draws through AWT with the raster declared straight, which is correct for straight colour and weights a premultiplied buffer by alpha twice. A caller cannot say which it holds, and switching filter switches the convention assumed. Nothing in the workspace resizes with either today. `resize(w, h, Resample, AlphaMode)` would route the bilinear sampler's alpha weighting and declare the AWT raster premultiplied where asked. `FrameNormalizer` scales frames through the same AWT bicubic from a straight-declared image, so it weights a premultiplied animation's colour by alpha twice, and fills its letterbox with a straight `Color`; it carries the animation's convention onto its output without honouring it. Nothing in the workspace normalizes premultiplied frames.
 
-- Affected: `src/main/java/dev/simplified/image/pixel/PixelBuffer.java:375-419` (`resize`), `src/main/java/dev/simplified/image/transform/FrameNormalizer.java:87-138` (`normalize`)
+- Affected: `src/main/java/dev/simplified/image/pixel/PixelBuffer.java:375-419` (`resize`), `src/main/java/dev/simplified/image/frame/FrameNormalizer.java:86-137` (`normalize`)
 - Severity: **LOW**
 - Type: **GAP**
 - Status: **OPEN**

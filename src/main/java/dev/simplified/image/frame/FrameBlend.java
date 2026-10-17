@@ -1,4 +1,4 @@
-package dev.simplified.image.data;
+package dev.simplified.image.frame;
 
 import dev.simplified.annotations.EnumLookup;
 import dev.simplified.annotations.Getter;

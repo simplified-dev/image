@@ -1,10 +1,9 @@
-package dev.simplified.image.transform;
+package dev.simplified.image.frame;
 
 import dev.simplified.annotations.UtilityClass;
 import dev.simplified.collection.Concurrent;
 import dev.simplified.collection.ConcurrentList;
-import dev.simplified.image.data.AnimatedImageData;
-import dev.simplified.image.data.ImageFrame;
+import dev.simplified.image.AnimatedImageData;
 import dev.simplified.image.pixel.PixelBuffer;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;

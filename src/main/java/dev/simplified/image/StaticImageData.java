@@ -1,4 +1,4 @@
-package dev.simplified.image.data;
+package dev.simplified.image;
 
 import dev.simplified.annotations.AccessLevel;
 import dev.simplified.annotations.Getter;
@@ -6,7 +6,7 @@ import dev.simplified.annotations.NamingStyle;
 import dev.simplified.annotations.RequiredArgsConstructor;
 import dev.simplified.collection.Concurrent;
 import dev.simplified.collection.ConcurrentList;
-import dev.simplified.image.ImageData;
+import dev.simplified.image.frame.ImageFrame;
 import dev.simplified.image.pixel.AlphaMode;
 import dev.simplified.image.pixel.PixelBuffer;
 import org.jetbrains.annotations.NotNull;

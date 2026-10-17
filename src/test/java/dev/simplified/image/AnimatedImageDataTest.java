@@ -1,5 +1,6 @@
-package dev.simplified.image.data;
+package dev.simplified.image;
 
+import dev.simplified.image.frame.ImageFrame;
 import dev.simplified.image.pixel.PixelBuffer;
 import org.jetbrains.annotations.NotNull;
 import org.junit.jupiter.api.DisplayName;

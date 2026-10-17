@@ -1,4 +1,4 @@
-package dev.simplified.image.data;
+package dev.simplified.image.frame;
 
 import dev.simplified.image.pixel.PixelBuffer;
 import org.jetbrains.annotations.NotNull;

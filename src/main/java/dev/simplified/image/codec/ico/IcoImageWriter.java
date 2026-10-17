@@ -2,12 +2,12 @@ package dev.simplified.image.codec.ico;
 
 import dev.simplified.annotations.Cleanup;
 import dev.simplified.annotations.SilentThrows;
+import dev.simplified.image.AnimatedImageData;
 import dev.simplified.image.ImageData;
 import dev.simplified.image.ImageFormat;
+import dev.simplified.image.StaticImageData;
 import dev.simplified.image.codec.ImageWriter;
 import dev.simplified.image.codec.png.PngImageWriter;
-import dev.simplified.image.data.AnimatedImageData;
-import dev.simplified.image.data.StaticImageData;
 import dev.simplified.image.option.ImageWriteOptions;
 import dev.simplified.util.io.ByteArrayDataOutput;
 import org.jetbrains.annotations.NotNull;
