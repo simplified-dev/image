@@ -4,8 +4,9 @@ import dev.simplified.collection.Concurrent;
 import dev.simplified.collection.ConcurrentList;
 import dev.simplified.image.AnimatedImageData;
 import dev.simplified.image.ImageData;
+import dev.simplified.image.ImageFactory;
+import dev.simplified.image.ImageFormat;
 import dev.simplified.image.PixelBuffer;
-import dev.simplified.image.exception.ImageEncodeException;
 import dev.simplified.image.frame.ImageFrame;
 import dev.simplified.image.frame.LoopCount;
 import dev.simplified.image.option.WebPWriteOptions;
@@ -20,7 +21,6 @@ import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.instanceOf;
 import static org.hamcrest.Matchers.sameInstance;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
  * Pins the loop count {@link WebPImageWriter} declares, read out of the {@code ANIM} chunk's bytes,
@@ -51,9 +51,20 @@ class WebPLoopCountTest {
     }
 
     @Test
-    @DisplayName("a count whose plays exceed the chunk's 16 bits is refused")
-    void playsBeyondSixteenBitsAreRefused() {
-        assertThrows(ImageEncodeException.class, () -> write(animation(LoopCount.of(65535)), null));
+    @DisplayName("a count whose plays exceed the chunk's 16 bits is written as the most it declares")
+    void playsBeyondSixteenBitsAreCapped() {
+        assertThat(animLoopCount(write(animation(LoopCount.of(65535)), null)), equalTo(65535));
+        assertThat(animLoopCount(write(animation(LoopCount.of(Integer.MAX_VALUE - 1)), null)), equalTo(65535));
+    }
+
+    @Test
+    @DisplayName("a GIF repeating 65535 times converts to a WebP playing 65535 times")
+    void gifRepeatingSixteenBitsConverts() {
+        byte[] gif = ImageFactory.toByteArray(animation(LoopCount.of(65535)), ImageFormat.GIF);
+        AnimatedImageData decoded = (AnimatedImageData) ImageFactory.fromByteArray(gif, ImageFormat.GIF);
+
+        assertThat(decoded.getLoopCount(), equalTo(LoopCount.of(65535)));
+        assertThat(animLoopCount(write(decoded, null)), equalTo(65535));
     }
 
     @Test

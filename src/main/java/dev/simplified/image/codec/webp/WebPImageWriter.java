@@ -12,7 +12,6 @@ import dev.simplified.image.codec.webp.vp8.VP8Encoder;
 import dev.simplified.image.codec.webp.vp8.VP8EncoderSession;
 import dev.simplified.image.codec.webp.vp8l.NearLosslessPreprocess;
 import dev.simplified.image.codec.webp.vp8l.VP8LEncoder;
-import dev.simplified.image.exception.ImageEncodeException;
 import dev.simplified.image.frame.FrameBlend;
 import dev.simplified.image.frame.FrameDisposal;
 import dev.simplified.image.frame.ImageFrame;
@@ -351,20 +350,16 @@ public class WebPImageWriter implements ImageWriter {
      * Resolves the count an {@code ANIM} chunk declares for a loop count.
      * <p>
      * The chunk counts plays, the first included, and {@code 0} plays forever, so it declares one
-     * more than the repeats a finite count holds.
+     * more than the repeats a finite count holds. A count that plays more often than the chunk's
+     * 16-bit field holds is declared as {@value #MAX_ANIM_LOOP_COUNT} plays, as libwebp's
+     * {@code gif2webp} declares a GIF repeating 65535 times: one play short of what it asks rather
+     * than no file at all.
      *
      * @param loopCount the loop count to declare
      * @return the count the chunk declares
-     * @throws ImageEncodeException when the count plays more often than the chunk's 16-bit field
-     *     declares
      */
     private static int animLoopCount(@NotNull LoopCount loopCount) {
-        int plays = loopCount.plays().orElse(0);
-
-        if (plays > MAX_ANIM_LOOP_COUNT)
-            throw new ImageEncodeException("Loop count '%s' plays more than the %s times a WebP declares", loopCount, MAX_ANIM_LOOP_COUNT);
-
-        return plays;
+        return Math.min(loopCount.plays().orElse(0), MAX_ANIM_LOOP_COUNT);
     }
 
     private static byte @NotNull [] buildAnimPayload(int backgroundColor, int loopCount) {

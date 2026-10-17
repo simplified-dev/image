@@ -2,6 +2,7 @@ package dev.simplified.image.option;
 
 import dev.simplified.annotations.Getter;
 import dev.simplified.annotations.RequiredArgsConstructor;
+import dev.simplified.image.exception.ImageEncodeException;
 import dev.simplified.image.frame.LoopCount;
 import org.jetbrains.annotations.NotNull;
 
@@ -104,6 +105,9 @@ public record GifWriteOptions(
 
         /**
          * Sets how many times the animation repeats after its first play, in place of the image's own.
+         * <p>
+         * A GIF declares at most 65535 repeats, and writing a count that repeats more often throws
+         * {@link ImageEncodeException}.
          *
          * @param loopCount the repeats after the first play to declare
          * @return this builder for chaining

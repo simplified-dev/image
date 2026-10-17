@@ -130,6 +130,9 @@ public class WebPWriteOptions implements ImageWriteOptions {
 
         /**
          * Sets how many times the animation repeats after its first play, in place of the image's own.
+         * <p>
+         * A WebP declares plays rather than repeats, and at most 65535 of them, so a count that plays
+         * more often, such as a GIF's 65535 repeats, is written as 65535 plays.
          *
          * @param loopCount the repeats after the first play to declare
          * @return this builder for chaining
