@@ -106,12 +106,12 @@ The ICO arm of `ImageFormat.matches` accepts `00 00 01 00`, which is also the bi
 - Type: **BUG**
 - Status: **OPEN**
 
-## `PixelGraphics.drawImage`'s rectangle and transform forms overwrite instead of compositing
-The source/destination-rectangle form and the `AffineTransform` form write every pixel with alpha above zero through `setPixelSafe`: a partly transparent pixel replaces the destination instead of blending over it, a flipped rectangle loses its flip to the min corners, and the clip is ignored. The `(img, x, y)` and `(img, x, y, w, h)` forms blend with `BlendMode.NORMAL`. No workspace consumer calls the two forms today.
+## `PixelGraphics` shape drawing ignores the clip
+`setClip`, `clipRect` and `clip` record a rectangle that only the `drawImage` forms read. `fillRect`, `drawRect`, the round-rect, oval, arc, line and polygon methods write through `setPixelSafe`, which bounds a pixel to the target and not to the clip, so a shape drawn after a clip is set lands outside it. No workspace consumer sets a clip on a `PixelGraphics` today.
 
-- Affected: `src/main/java/dev/simplified/image/pixel/PixelGraphics.java:695-719`, `src/main/java/dev/simplified/image/pixel/PixelGraphics.java:727-753`
+- Affected: `src/main/java/dev/simplified/image/pixel/PixelGraphics.java:124-127` (`setPixelSafe`), `:257-305`, `:385-578`
 - Severity: **LOW**
-- Type: **BUG**
+- Type: **GAP**
 - Status: **OPEN**
 
 ## `VP8Encoder` holds libwebp lambdas no scorer reads

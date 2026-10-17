@@ -126,6 +126,37 @@ public class PixelGraphics extends Graphics2D {
             this.target.setPixel(x, y, argb);
     }
 
+    /**
+     * Composites one pixel of a drawn image onto the target with {@link BlendMode#NORMAL}, as the
+     * unclipped image forms do through {@link PixelBuffer#blit}. A fully transparent pixel, and one
+     * outside the target or outside the clip, is skipped. The clip is read in user space under the
+     * current translation.
+     *
+     * @param x the device x coordinate
+     * @param y the device y coordinate
+     * @param argb the image pixel
+     */
+    private void drawImagePixel(int x, int y, int argb) {
+        if (ColorMath.alpha(argb) == 0) return;
+        if (x < 0 || x >= this.target.width() || y < 0 || y >= this.target.height()) return;
+        if (this.clip != null && !this.clip.contains(x - this.translateX, y - this.translateY)) return;
+        this.target.setPixel(x, y, ColorMath.blend(argb, this.target.getPixel(x, y), BlendMode.NORMAL));
+    }
+
+    /**
+     * Composites every pixel of {@code source} onto the target with its top-left corner at device
+     * coordinates {@code (x, y)}, through {@link #drawImagePixel}.
+     *
+     * @param source the image pixels
+     * @param x the device x coordinate of the top-left corner
+     * @param y the device y coordinate of the top-left corner
+     */
+    private void drawImagePixels(@NotNull PixelBuffer source, int x, int y) {
+        for (int sy = 0; sy < source.height(); sy++)
+            for (int sx = 0; sx < source.width(); sx++)
+                drawImagePixel(x + sx, y + sy, source.getPixel(sx, sy));
+    }
+
     // --- text rendering (subclass responsibility) ---
 
     @Override
@@ -665,20 +696,32 @@ public class PixelGraphics extends Graphics2D {
 
     @Override
     public boolean drawImage(@NotNull Image img, int x, int y, @Nullable ImageObserver observer) {
-        if (img instanceof BufferedImage bi) {
-            this.target.blit(PixelBuffer.wrap(bi), this.translateX + x, this.translateY + y);
-            return true;
-        }
-        return false;
+        if (!(img instanceof BufferedImage bi)) return false;
+        PixelBuffer source = PixelBuffer.wrap(bi);
+
+        if (this.clip == null)
+            this.target.blit(source, this.translateX + x, this.translateY + y);
+        else
+            drawImagePixels(source, this.translateX + x, this.translateY + y);
+
+        return true;
     }
 
     @Override
     public boolean drawImage(@NotNull Image img, int x, int y, int width, int height, @Nullable ImageObserver observer) {
-        if (img instanceof BufferedImage bi) {
-            this.target.blitScaled(PixelBuffer.wrap(bi), this.translateX + x, this.translateY + y, width, height);
+        if (!(img instanceof BufferedImage bi)) return false;
+        PixelBuffer source = PixelBuffer.wrap(bi);
+
+        if (this.clip == null) {
+            this.target.blitScaled(source, this.translateX + x, this.translateY + y, width, height);
             return true;
         }
-        return false;
+
+        if (width <= 0 || height <= 0) return true;
+        PixelBuffer scaled = PixelBuffer.create(width, height);
+        scaled.blitScaled(source, 0, 0, width, height, BlendMode.REPLACE);
+        drawImagePixels(scaled, this.translateX + x, this.translateY + y);
+        return true;
     }
 
     @Override
@@ -703,16 +746,19 @@ public class PixelGraphics extends Graphics2D {
 
         int srcMinX = Math.min(sx1, sx2), srcMinY = Math.min(sy1, sy2);
         int dstMinX = Math.min(dx1, dx2), dstMinY = Math.min(dy1, dy2);
+        // A corner pair reversed on one side only mirrors the image along that axis: (dx1, dy1)
+        // always receives (sx1, sy1).
+        boolean flipX = (dx2 < dx1) != (sx2 < sx1);
+        boolean flipY = (dy2 < dy1) != (sy2 < sy1);
 
         for (int y = 0; y < dh; y++) {
-            int srcY = srcMinY + y * sh / dh;
+            int offY = y * sh / dh;
+            int srcY = flipY ? srcMinY + sh - 1 - offY : srcMinY + offY;
             for (int x = 0; x < dw; x++) {
-                int srcX = srcMinX + x * sw / dw;
-                if (srcX >= 0 && srcX < source.width() && srcY >= 0 && srcY < source.height()) {
-                    int pixel = source.getPixel(srcX, srcY);
-                    if (ColorMath.alpha(pixel) > 0)
-                        setPixelSafe(this.translateX + dstMinX + x, this.translateY + dstMinY + y, pixel);
-                }
+                int offX = x * sw / dw;
+                int srcX = flipX ? srcMinX + sw - 1 - offX : srcMinX + offX;
+                if (srcX >= 0 && srcX < source.width() && srcY >= 0 && srcY < source.height())
+                    drawImagePixel(this.translateX + dstMinX + x, this.translateY + dstMinY + y, source.getPixel(srcX, srcY));
             }
         }
         return true;
@@ -739,11 +785,8 @@ public class PixelGraphics extends Graphics2D {
                     inv.transform(new double[]{dx, dy}, 0, src, 0, 1);
                     int srcX = (int) Math.round(src[0]);
                     int srcY = (int) Math.round(src[1]);
-                    if (srcX >= 0 && srcX < source.width() && srcY >= 0 && srcY < source.height()) {
-                        int pixel = source.getPixel(srcX, srcY);
-                        if (ColorMath.alpha(pixel) > 0)
-                            setPixelSafe(this.translateX + dx, this.translateY + dy, pixel);
-                    }
+                    if (srcX >= 0 && srcX < source.width() && srcY >= 0 && srcY < source.height())
+                        drawImagePixel(this.translateX + dx, this.translateY + dy, source.getPixel(srcX, srcY));
                 }
             }
         } catch (java.awt.geom.NoninvertibleTransformException e) {
@@ -754,7 +797,7 @@ public class PixelGraphics extends Graphics2D {
 
     @Override
     public void drawImage(@NotNull BufferedImage img, @Nullable BufferedImageOp op, int x, int y) {
-        this.target.blit(PixelBuffer.wrap(img), this.translateX + x, this.translateY + y);
+        drawImage(img, x, y, null);
     }
 
     @Override
