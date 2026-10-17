@@ -418,13 +418,13 @@ final class VP8Tables {
 
     /**
      * Default probabilities for the inter-frame Y-mode tree (one per internal node
-     * of {@link #YMODE_TREE}). RFC 6386 section 16.2 {@code ymode_prob}.
+     * of {@link #YMODE_TREE}). RFC 6386 section 16.1 {@code ymode_prob}.
      */
     static final int[] YMODE_PROBA_INTER = { 112, 86, 140, 37 };
 
     /**
      * Default probabilities for the inter-frame UV-mode tree (one per internal node
-     * of {@link #UV_MODE_TREE}). RFC 6386 section 16.2 {@code uv_mode_prob}.
+     * of {@link #UV_MODE_TREE}). RFC 6386 section 16.1 {@code uv_mode_prob}.
      */
     static final int[] UV_MODE_PROBA_INTER = { 162, 101, 204 };
 
@@ -433,7 +433,7 @@ final class VP8Tables {
      * per internal node of {@link #BMODE_TREE}). Unlike the keyframe path which uses
      * {@link #KF_BMODE_PROB} indexed by the {@code (above, left)} neighbour modes, inter
      * frames code each sub-block's B-mode with these fixed, context-free probabilities
-     * per RFC 6386 section 16.2 / libvpx {@code vp8_bmode_prob}.
+     * per RFC 6386 section 16.1 / libvpx {@code vp8_bmode_prob}.
      */
     static final int[] BMODE_PROBA_INTER = { 120, 90, 79, 133, 87, 85, 80, 111, 151 };
 

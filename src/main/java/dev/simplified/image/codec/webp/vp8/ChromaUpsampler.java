@@ -195,11 +195,10 @@ final class ChromaUpsampler {
     }
 
     /**
-     * BT.601 YCbCr -> ARGB conversion for a single pixel. Keeps the same coefficients the
-     * prior nearest-neighbor decoder used: {@code y -= 16}, {@code u -= 128}, {@code v -= 128},
-     * {@code R = clamp((298y + 409v + 128) >> 8)} etc. Not bit-exact with libwebp's YUV->RGB
-     * (libwebp uses a different fixed-point layout), but the output differs by at most 1 LSB
-     * per channel, well below the upsampling drift this task was chasing.
+     * BT.601 YCbCr -> ARGB conversion for a single pixel: {@code y -= 16}, {@code u -= 128},
+     * {@code v -= 128}, {@code R = clamp((298y + 409v + 128) >> 8)} etc. Not bit-exact with
+     * libwebp's YUV->RGB, which uses a different fixed-point layout; the output differs from it by
+     * at most 1 LSB per channel.
      */
     private static int yuvToArgb(int y, int u, int v) {
         int yy = y - 16;

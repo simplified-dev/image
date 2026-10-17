@@ -5,7 +5,7 @@ Defects present in the current tree and not yet fixed, most severe first. Each e
 ## VP8 encoder point-samples 4:2:0 chroma instead of averaging
 `Macroblock.fromARGB` takes each 2x2 block's Cb/Cr from its top-left pixel rather than averaging the four pixels, so every lossy WebP encode aliases thin colour detail such as one-pixel lines and coloured text edges. The bitstream stays valid; the cost is fidelity.
 
-- Affected: `src/main/java/dev/simplified/image/codec/webp/vp8/Macroblock.java:62-67` (`fromARGB`); callers `src/main/java/dev/simplified/image/codec/webp/vp8/VP8Encoder.java:1594`, `:2208`, `:3103`
+- Affected: `src/main/java/dev/simplified/image/codec/webp/vp8/Macroblock.java:53-58` (`fromARGB`); callers `src/main/java/dev/simplified/image/codec/webp/vp8/VP8Encoder.java:1594`, `:2208`, `:3103`
 - Severity: **MEDIUM**
 - Type: **BUG**
 - Status: **OPEN**
@@ -64,6 +64,14 @@ When `usePartialFrames` holds - every lossless write, and every lossy write with
 - Affected: `src/main/java/dev/simplified/image/pixel/Background.java:91-110` (`composite`), `src/main/java/dev/simplified/image/pixel/Background.java:121-130` (`over`)
 - Severity: **LOW**
 - Type: **RISK**
+- Status: **OPEN**
+
+## `Background.composite` backgrounds each frame's rectangle rather than the canvas
+`over` fills a buffer the size of each frame, so the canvas outside every frame keeps no fill, and a partial `OVER` frame comes out opaque over its rectangle under an opaque fill, hiding what earlier frames drew where it was transparent. A checkerboard is anchored at each frame's own corner, so its cells shift between frames at different offsets. A decoded GIF, partial `OVER` frames at offsets, reaches it; nothing in the workspace composites one, every animation asset-renderer composites placing its frames at the origin. MEDIUM once a caller composites a decoded GIF. The code fix waits on the disposal/blend-aware timeline renderer this library lacks.
+
+- Affected: `src/main/java/dev/simplified/image/pixel/Background.java:91-110` (`composite`), `src/main/java/dev/simplified/image/pixel/Background.java:121-130` (`over`)
+- Severity: **LOW**
+- Type: **BUG**
 - Status: **OPEN**
 
 ## ICO magic collides with a 256-byte ISOBMFF `ftyp` box

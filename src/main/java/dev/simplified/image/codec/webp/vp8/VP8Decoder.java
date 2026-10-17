@@ -160,7 +160,7 @@ public final class VP8Decoder {
         final int[] mbMvRow;
         final int[] mbMvCol;
 
-        // Per-4x4-sub-block MV grid for SPLITMV MBs (RFC 6386 section 17.3). Layout:
+        // Per-4x4-sub-block MV grid for SPLITMV MBs (RFC 6386 section 16.4). Layout:
         //   bmiRow[mbIdx * 16 + k] where k is the 4x4 sub-block index (0..15 raster).
         // Used by neighbouring SPLITMV MBs at the boundary to look up the right-column
         // sub-MV (left neighbour) or bottom-row sub-MV (above neighbour) via
@@ -475,7 +475,7 @@ public final class VP8Decoder {
         if (s.useSkipProba)
             s.skipP = br.decodeUint(8);
 
-        // ── Inter-frame mode / MV probabilities (RFC 6386 sections 16.2, 17.2) ──
+        // ── Inter-frame mode / MV probabilities (RFC 6386 sections 16.1, 16.2, 17.2) ──
         if (!keyFrame) {
             s.probIntra = br.decodeUint(8);
             s.probLast = br.decodeUint(8);
@@ -881,7 +881,7 @@ public final class VP8Decoder {
         int[][] subModes = null;
         if (isI4x4) {
             subModes = new int[4][4];
-            // RFC 6386 section 16.2: inter-frame B_PRED sub-block modes use the fixed
+            // RFC 6386 section 16.1: inter-frame B_PRED sub-block modes use the fixed
             // context-free {@link VP8Tables#BMODE_PROBA_INTER}, not the keyframe
             // context-dependent {@link VP8Tables#KF_BMODE_PROB[above][left]}.
             for (int by = 0; by < 4; by++) {
@@ -1088,7 +1088,7 @@ public final class VP8Decoder {
     }
 
     /**
-     * SPLITMV decode path (RFC 6386 section 17.3). Parses the 4-way partitioning scheme,
+     * SPLITMV decode path (RFC 6386 section 16.4). Parses the 4-way partitioning scheme,
      * then per-slot: resolves left/above neighbour sub-MVs, classifies context (5-way),
      * decodes LEFT/ABOVE/ZERO/NEW reference, fills the covered 4x4 slots. Persists the
      * final 16-slot BMI grid plus the scheme on {@link State#bmiRow} / {@link State#bmiCol}

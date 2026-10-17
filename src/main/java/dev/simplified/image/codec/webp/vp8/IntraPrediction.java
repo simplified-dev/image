@@ -40,10 +40,6 @@ final class IntraPrediction {
     static final int B_HU_PRED = 9;
 
     /**
-     * Number of macroblock luma modes (including B_PRED).
-     */
-    static final int NUM_YMODES = 5;
-    /**
      * Number of 4x4 sub-block modes.
      */
     static final int NUM_4x4_MODES = 10;

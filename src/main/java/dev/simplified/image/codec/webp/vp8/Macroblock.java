@@ -24,15 +24,6 @@ final class Macroblock {
     final short[] cr = new short[64];
 
     /**
-     * Selected 16x16 prediction mode.
-     */
-    int yMode = IntraPrediction.DC_PRED;
-    /**
-     * Selected chroma prediction mode.
-     */
-    int uvMode = IntraPrediction.DC_PRED;
-
-    /**
      * Fills this macroblock from ARGB pixel data at the given position.
      *
      * @param pixels the full image ARGB pixel array

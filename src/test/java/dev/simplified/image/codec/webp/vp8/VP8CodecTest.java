@@ -439,7 +439,7 @@ public class VP8CodecTest {
             assertThat("wire col = dxShift * 4", mv[1], is(dxShift * 4));
         }
 
-        @Test @DisplayName("computeBestSubBlockMv: per-sub-block 8x8 search isolates per-slot source (RFC 6386 section 17.3)")
+        @Test @DisplayName("computeBestSubBlockMv: per-sub-block 8x8 search isolates per-slot source (RFC 6386 section 16.4)")
         void subBlockSearch8x8PerSlot() {
             // QUARTERS scheme has 4 sub-MVs each over an 8x8 sub-block. Probe the top-left
             // and bottom-right slots with distinct shifts to confirm the search reads only
@@ -1153,13 +1153,13 @@ public class VP8CodecTest {
                 + r3.cnt[NearMvs.CNT_NEAR] + r3.cnt[NearMvs.CNT_SPLITMV], is(0));
         }
 
-        @Test @DisplayName("conformance: SPLITMV self round-trip via forced-encode hook (RFC 6386 section 17.3)")
+        @Test @DisplayName("conformance: SPLITMV self round-trip via forced-encode hook (RFC 6386 section 16.4)")
         void splitMvSelfRoundTrip() {
             // 32x32 keyframe (2x2 MBs) followed by a forced-SPLITMV P-frame: every MB
             // emits scheme TOP_BOTTOM with two SUB_MV_REF_ZERO sub-MVs + mb_skip = 1,
             // so reconstruction is a straight LAST-reference copy. At q=1.0 filter_level
             // is 0 on both frames, so the decoded P-frame must be bit-exact with the
-            // decoded keyframe. Exercises the decoder's RFC 6386 section 17.3 parse:
+            // decoded keyframe. Exercises the decoder's RFC 6386 section 16.4 parse:
             // MV_REF_TREE=SPLITMV leaf, MBSPLIT_TREE=TOP_BOTTOM, per-slot
             // SUB_MV_REF_TREE=ZERO4X4 at the LEFT_ABOVE_BOTH_ZERO context, plus the
             // cross-MB bmi neighbour lookups (MB 0,0 is the seed; MBs 1,0 / 0,1 / 1,1
@@ -1390,7 +1390,7 @@ public class VP8CodecTest {
                     pf.length));
         }
 
-        @Test @DisplayName("conformance: subMvRefContext mirrors decoder's 5-way classifier (RFC 6386 section 17.3)")
+        @Test @DisplayName("conformance: subMvRefContext mirrors decoder's 5-way classifier (RFC 6386 section 16.4)")
         void subMvRefContextClassifier() {
             // The encoder's rate-cost estimation for SPLITMV must index the same
             // SUB_MV_REF_PROB row the decoder will read. VP8Decoder.decodeSplitMv

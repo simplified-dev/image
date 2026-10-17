@@ -221,7 +221,7 @@ class GifInterlaceTest {
     private record ForeignGif(byte @NotNull [] bytes, @NotNull List<List<List<Integer>>> frames) {
 
         /** The size, as a power of two, of a frame's local colour table. */
-        private static final int LOCAL_TABLE_BITS = 2;
+        private static final int LOCAL_TABLE_BITS = 3;
 
         /** The size, as a power of two, of the global colour table. */
         private static final int GLOBAL_TABLE_BITS = 8;
@@ -230,9 +230,9 @@ class GifInterlaceTest {
          * Encodes frames of the given shapes.
          * <p>
          * With one global table of 256 colours, row {@code y} of frame {@code f} is index
-         * {@code 1 + y + 8 * f}, so each row's colour is unique to it. With a local table of 4
-         * colours per frame, it is index {@code y % 4} of a table no other frame shares, which is
-         * unique within every frame of up to 4 rows.
+         * {@code 1 + y + 8 * f}, so each row's colour is unique to it. With a local table of 8
+         * colours per frame, it is index {@code y % 8} of a table no other frame shares, which is
+         * unique within every frame of up to 8 rows.
          *
          * @param shapes the size and storage of each frame
          * @param localTables whether each frame carries a local colour table in place of one global

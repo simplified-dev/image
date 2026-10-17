@@ -132,7 +132,7 @@ public final class VP8Encoder {
         final int[] mbMvRow;
         final int[] mbMvCol;
 
-        // Per-4x4-sub-block MV grid for SPLITMV MBs (RFC 6386 section 17.3). Layout
+        // Per-4x4-sub-block MV grid for SPLITMV MBs (RFC 6386 section 16.4). Layout
         // mirrors VP8Decoder.State:
         //   bmiRow[mbIdx * 16 + k] where k is the 4x4 sub-block index (0..15 raster).
         // Populated only for SPLITMV MBs - non-SPLITMV MBs leave their slots at the
@@ -267,7 +267,7 @@ public final class VP8Encoder {
         // with one-frame lag (libvpx's approach - avoids a two-pass encode).
         final int[][][] mvBranches = new int[2][VP8Tables.NUM_MV_PROBAS][2];
 
-        // Per-frame Y-mode / UV-mode probabilities (RFC 6386 section 16.2). For P-frames
+        // Per-frame Y-mode / UV-mode probabilities (RFC 6386 section 16.1). For P-frames
         // the header may emit an all-or-nothing update block overriding the default
         // INTER table; for keyframes these remain at the defaults.
         final int[] yModeProba;
@@ -603,7 +603,7 @@ public final class VP8Encoder {
      * {@link VP8Tables#SUB_MV_REF_ZERO} sub-MVs. All sub-MVs resolve to {@code (0, 0)}
      * and {@code mb_skip} is set, so the decoded reconstruction is a straight copy of
      * the session's {@code LAST} reference - bit-identical to what ZEROMV+skip would
-     * produce, but routed through the RFC 6386 section 17.3 SPLITMV parse path.
+     * produce, but routed through the RFC 6386 section 16.4 SPLITMV parse path.
      * <p>
      * Exercises the decoder's SPLITMV wire format at a fixed pattern, whatever the R-D
      * candidate search would pick for the frame. Source pixels are not used for
@@ -1351,7 +1351,7 @@ public final class VP8Encoder {
             e.encodeUint(INTER_SKIP_PROBA, 8);
         }
 
-        // Inter-frame mode/MV probabilities (RFC 6386 sections 16.2 and 17.2).
+        // Inter-frame mode/MV probabilities (RFC 6386 sections 16.1, 16.2 and 17.2).
         if (!s.isKeyframe) {
             e.encodeUint(INTER_PROB_INTRA, 8);   // prob_intra
             e.encodeUint(INTER_PROB_LAST, 8);    // prob_last
@@ -1438,7 +1438,7 @@ public final class VP8Encoder {
 
     /**
      * Emits the all-or-nothing proba-update block for the inter-frame Y-mode (4 slots)
-     * or UV-mode (3 slots) tree (RFC 6386 section 16.2). A single {@code encodeBool}
+     * or UV-mode (3 slots) tree (RFC 6386 section 16.1). A single {@code encodeBool}
      * gate at 50/50 prob controls whether the full {@code slots * 8} bits of new probs
      * follow. When the update is cost-beneficial the passed {@code probs} array is
      * mutated to the new values so subsequent MB emits use the updated probs.
@@ -1906,7 +1906,7 @@ public final class VP8Encoder {
      * B_PRED 4x4 sub-block-mode macroblock inside a P-frame. Y-mode emits the
      * {@link IntraPrediction#B_PRED} leaf of {@link VP8Tables#YMODE_TREE}, followed by
      * 16 sub-block modes via the context-free {@link VP8Tables#BMODE_PROBA_INTER} per
-     * RFC 6386 section 16.2. No Y2 block (each 4x4 sub-block has its own DC + AC coefs).
+     * RFC 6386 section 16.1. No Y2 block (each 4x4 sub-block has its own DC + AC coefs).
      */
     private static final class BPredIntraInPCandidate extends InterCandidate {
         final int uvMode;
@@ -2193,7 +2193,7 @@ public final class VP8Encoder {
      *   <li><b>Intra i16x16 in P</b> - full 16x16 intra encode with inter-frame mode
      *       probabilities.</li>
      *   <li><b>Intra B_PRED in P</b> - 4x4 sub-block-mode intra with fixed inter-frame
-     *       sub-block mode probabilities (RFC 6386 section 16.2). The fallback for
+     *       sub-block mode probabilities (RFC 6386 section 16.1). The fallback for
      *       locally textured MBs where i16 is too coarse.</li>
      * </ul>
      * The winner's {@link InterCandidate#commit} emits its header + residual bits, commits
@@ -2292,12 +2292,12 @@ public final class VP8Encoder {
             s, mb, mbX, mbY, skipBit0, baseIntraHeader, lambda
         ));
 
-        // --- Intra B_PRED in P (4x4 sub-block modes at fixed probs, RFC 6386 section 16.2) ---
+        // --- Intra B_PRED in P (4x4 sub-block modes at fixed probs, RFC 6386 section 16.1) ---
         best = chooseBetter(best, buildBPredIntraInPCandidate(
             s, mb, mbX, mbY, skipBit0, baseIntraHeader, lambda
         ));
 
-        // --- SPLITMV (skip-only, RFC 6386 section 17.3) ---
+        // --- SPLITMV (skip-only, RFC 6386 section 16.4) ---
         // Heuristic gate: skip the per-scheme search when the best non-SPLITMV candidate
         // already has low SSE. Per-sub-block MVs only help when the whole-MB prediction
         // doesn't fit; smooth content where ZEROMV / NEAREST / NEW already nail it
@@ -2383,7 +2383,7 @@ public final class VP8Encoder {
     }
 
     /**
-     * Classifies the sub-MV reference probability context (RFC 6386 section 17.3 /
+     * Classifies the sub-MV reference probability context (RFC 6386 section 16.4 /
      * libvpx {@code vp8_sub_mv_ref_prob3}) given the LEFT and ABOVE neighbour
      * sub-MVs. Returns one of the 5 row indices into {@link VP8Tables#SUB_MV_REF_PROB}:
      * {@code 0 = NORMAL}, {@code 1 = LEFT_ZERO}, {@code 2 = ABOVE_ZERO},
@@ -4215,7 +4215,7 @@ public final class VP8Encoder {
 
     /**
      * Emits the 16 sub-block modes for an inter-frame B_PRED macroblock. RFC 6386
-     * section 16.2 specifies that inter-frame B_PRED uses the <b>context-free</b>
+     * section 16.1 specifies that inter-frame B_PRED uses the <b>context-free</b>
      * fixed {@link VP8Tables#BMODE_PROBA_INTER} per sub-block, unlike the keyframe
      * variant in {@link #emitBPredModes} which indexes the context-dependent
      * {@link VP8Tables#KF_BMODE_PROB} by neighbouring modes. Still updates
