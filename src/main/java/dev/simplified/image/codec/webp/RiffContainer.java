@@ -13,7 +13,7 @@ import org.jetbrains.annotations.NotNull;
  * Each chunk is {@code [4-byte FourCC] [4-byte LE size] [payload] [padding]}.
  * Chunks are word-aligned (padded to even byte boundaries).
  */
-public final class RiffContainer {
+final class RiffContainer {
 
     private RiffContainer() { }
 

@@ -1,13 +1,13 @@
 package dev.simplified.image.codec.webp.vp8;
 
-import dev.simplified.collection.Concurrent;
-import dev.simplified.collection.ConcurrentList;
 import dev.simplified.image.PixelBuffer;
-import dev.simplified.image.codec.webp.RiffContainer;
-import dev.simplified.image.codec.webp.WebPChunk;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.charset.StandardCharsets;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.is;
@@ -188,9 +188,7 @@ public class VP8CodecTest {
             buf.fill(0xFFFF0000);
             byte[] vp8Payload = VP8Encoder.encode(buf, 0.75f);
 
-            ConcurrentList<WebPChunk> chunks = Concurrent.newList();
-            chunks.add(RiffContainer.createChunk(WebPChunk.Type.VP8, vp8Payload));
-            byte[] riff = RiffContainer.write(chunks);
+            byte[] riff = wrapInRiff(vp8Payload);
 
             verifyDecodesInLibwebp(riff, 2, 2, "dc_only_2x2");
         }
@@ -203,9 +201,7 @@ public class VP8CodecTest {
                     buf.setPixel(x, y, 0xFF000000 | ((x * 16) << 16) | ((y * 16) << 8));
             byte[] vp8Payload = VP8Encoder.encode(buf, 0.75f);
 
-            ConcurrentList<WebPChunk> chunks = Concurrent.newList();
-            chunks.add(RiffContainer.createChunk(WebPChunk.Type.VP8, vp8Payload));
-            byte[] riff = RiffContainer.write(chunks);
+            byte[] riff = wrapInRiff(vp8Payload);
 
             verifyDecodesInLibwebp(riff, 16, 16, "dc_only_16x16");
         }
@@ -290,9 +286,7 @@ public class VP8CodecTest {
                     buf.setPixel(x, y, 0xFF000000 | (g << 16) | (g << 8) | g);
                 }
             byte[] vp8Payload = VP8Encoder.encode(buf, 1.0f);
-            ConcurrentList<WebPChunk> chunks = Concurrent.newList();
-            chunks.add(RiffContainer.createChunk(WebPChunk.Type.VP8, vp8Payload));
-            byte[] riff = RiffContainer.write(chunks);
+            byte[] riff = wrapInRiff(vp8Payload);
 
             int[] decoded = decodeWithLibwebp(riff, 16, 32);
             double psnr = computePsnr(buf, decoded, 16, 32);
@@ -326,9 +320,7 @@ public class VP8CodecTest {
                     buf.setPixel(x, y, 0xFF000000 | (r << 16) | (g << 8) | b);
                 }
             byte[] vp8 = VP8Encoder.encode(buf, 0.9f);
-            ConcurrentList<WebPChunk> chunks = Concurrent.newList();
-            chunks.add(RiffContainer.createChunk(WebPChunk.Type.VP8, vp8));
-            byte[] riff = RiffContainer.write(chunks);
+            byte[] riff = wrapInRiff(vp8);
 
             int[] decoded = decodeWithLibwebp(riff, 32, 48);
             double psnr = computePsnr(buf, decoded, 32, 48);
@@ -364,9 +356,7 @@ public class VP8CodecTest {
                     buf.setPixel(x, y, 0xFF000000 | (v << 16) | (v << 8) | v);
                 }
             byte[] vp8 = VP8Encoder.encode(buf, 1.0f);
-            ConcurrentList<WebPChunk> chunks = Concurrent.newList();
-            chunks.add(RiffContainer.createChunk(WebPChunk.Type.VP8, vp8));
-            byte[] riff = RiffContainer.write(chunks);
+            byte[] riff = wrapInRiff(vp8);
 
             int[] decoded = decodeWithLibwebp(riff, 16, 16);
             double psnr = computePsnr(buf, decoded, 16, 16);
@@ -385,9 +375,7 @@ public class VP8CodecTest {
                     buf.setPixel(x, y, 0xFF000000 | ((x * 16) << 16) | ((y * 16) << 8));
 
             byte[] vp8Payload = VP8Encoder.encode(buf, 1.0f);
-            ConcurrentList<WebPChunk> chunks = Concurrent.newList();
-            chunks.add(RiffContainer.createChunk(WebPChunk.Type.VP8, vp8Payload));
-            byte[] riff = RiffContainer.write(chunks);
+            byte[] riff = wrapInRiff(vp8Payload);
 
             int[] decoded = decodeWithLibwebp(riff, 16, 16);
             double psnr = computePsnr(buf, decoded, 16, 16);
@@ -417,9 +405,7 @@ public class VP8CodecTest {
             PixelBuffer src, float quality, int expectR, int expectG, int expectB, int tolerance
         ) throws Exception {
             byte[] vp8Payload = VP8Encoder.encode(src, quality);
-            ConcurrentList<WebPChunk> chunks = Concurrent.newList();
-            chunks.add(RiffContainer.createChunk(WebPChunk.Type.VP8, vp8Payload));
-            byte[] riff = RiffContainer.write(chunks);
+            byte[] riff = wrapInRiff(vp8Payload);
 
             int[] decoded = decodeWithLibwebp(riff, src.width(), src.height());
             int centerX = src.width() / 2;
@@ -840,9 +826,7 @@ public class VP8CodecTest {
                     src.setPixel(x, y, 0xFF000000 | ((x * 8) << 16) | ((y * 8) << 8));
 
             byte[] vp8 = VP8Encoder.encode(src, 0.9f);
-            ConcurrentList<WebPChunk> chunks = Concurrent.newList();
-            chunks.add(RiffContainer.createChunk(WebPChunk.Type.VP8, vp8));
-            byte[] riff = RiffContainer.write(chunks);
+            byte[] riff = wrapInRiff(vp8);
 
             int[] decoded = ConformanceHelper.decodeWithLibwebp(riff, 32, 32);
             if (decoded == null) return;  // libwebp/Python unavailable - skipped.
@@ -866,9 +850,7 @@ public class VP8CodecTest {
 
             PixelBuffer ours = VP8Decoder.decode(vp8);
 
-            ConcurrentList<WebPChunk> chunks = Concurrent.newList();
-            chunks.add(RiffContainer.createChunk(WebPChunk.Type.VP8, vp8));
-            byte[] riff = RiffContainer.write(chunks);
+            byte[] riff = wrapInRiff(vp8);
             int[] libwebp = ConformanceHelper.decodeWithLibwebp(riff, 32, 32);
             if (libwebp == null) return;
 
@@ -2962,6 +2944,28 @@ public class VP8CodecTest {
                         i, coeffs[i], decoded[i], type, first, ctx0));
         }
 
+    }
+
+    // ──── RIFF wrapping ────
+
+    /**
+     * Wraps a VP8 payload in the smallest WebP file that holds it: the {@code RIFF} header, the
+     * {@code WEBP} form type and one {@code VP8 } chunk, padded to an even length.
+     *
+     * @param vp8 the VP8 bitstream
+     * @return the WebP file bytes
+     */
+    private static byte[] wrapInRiff(byte[] vp8) {
+        int padded = vp8.length + (vp8.length & 1);
+        return ByteBuffer.allocate(20 + padded)
+            .order(ByteOrder.LITTLE_ENDIAN)
+            .put("RIFF".getBytes(StandardCharsets.US_ASCII))
+            .putInt(12 + padded)
+            .put("WEBP".getBytes(StandardCharsets.US_ASCII))
+            .put("VP8 ".getBytes(StandardCharsets.US_ASCII))
+            .putInt(vp8.length)
+            .put(vp8)
+            .array();
     }
 
 }

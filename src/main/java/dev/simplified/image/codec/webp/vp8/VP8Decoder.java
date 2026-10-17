@@ -60,7 +60,7 @@ public final class VP8Decoder {
      * @param bmiRow per-4x4-sub-block MV row (length {@code mbCols * mbRows * 16})
      * @param bmiCol per-4x4-sub-block MV column
      */
-    public record FrameMetadata(
+    record FrameMetadata(
         int width, int height, int mbCols, int mbRows, boolean isKeyframe,
         boolean @NotNull [] mbIsI4x4, boolean @NotNull [] mbIsInter,
         int @NotNull [] mbMvRow, int @NotNull [] mbMvCol,
@@ -76,7 +76,7 @@ public final class VP8Decoder {
      * @param pixels reconstructed ARGB pixel plane
      * @param metadata per-MB decisions captured during decode
      */
-    public record DecodedFrame(@NotNull PixelBuffer pixels, @NotNull FrameMetadata metadata) { }
+    record DecodedFrame(@NotNull PixelBuffer pixels, @NotNull FrameMetadata metadata) { }
 
     /**
      * Decodes a VP8 keyframe and returns both the reconstructed pixels and a
@@ -92,7 +92,7 @@ public final class VP8Decoder {
      * @return reconstructed pixels + per-MB metadata
      * @throws ImageDecodeException if the bitstream is malformed or uses unsupported features
      */
-    public static @NotNull DecodedFrame decodeWithMetadata(byte @NotNull [] data) {
+    static @NotNull DecodedFrame decodeWithMetadata(byte @NotNull [] data) {
         State[] captured = new State[1];
         PixelBuffer pixels = decodeFrameWithStateCapture(data, null, captured);
         State s = captured[0];

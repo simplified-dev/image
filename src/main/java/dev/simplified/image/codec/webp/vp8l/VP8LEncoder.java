@@ -1,7 +1,6 @@
 package dev.simplified.image.codec.webp.vp8l;
 
 import dev.simplified.image.PixelBuffer;
-import dev.simplified.image.codec.webp.RiffContainer;
 import org.jetbrains.annotations.NotNull;
 
 /**
@@ -69,7 +68,7 @@ public final class VP8LEncoder {
 
     /**
      * Encodes {@code pixels} into a VP8L payload suitable for wrapping in a {@code VP8L}
-     * WebP chunk (via {@link RiffContainer#createChunk}).
+     * WebP chunk (via {@code RiffContainer#createChunk}).
      *
      * @param pixels the ARGB source buffer
      * @return the encoded VP8L bitstream
