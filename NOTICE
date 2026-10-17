@@ -72,8 +72,9 @@ Classes in dev.simplified.image.codec.webp.vp8:
   - SubpelPrediction: the six-tap sub-pixel prediction filters
     (vp8/common/filter.c)
   - VP8Tables: the inter-frame mode, motion-vector and SPLITMV tables
-    (vp8/common/entropymode.c, vp8/common/modecont.c,
-    vp8/decoder/decodemv.c)
+    (vp8/common/entropymode.c, vp8/common/vp8_entropymodedata.h,
+    vp8/common/entropymv.c, vp8/common/modecont.c,
+    vp8/common/findnearmv.c, vp8/decoder/decodemv.c)
   - VP8Encoder: the default loop-filter deltas (vp8/encoder/onyx_if.c)
 
 Copyright (c) 2010, The WebM Project authors. All rights reserved.

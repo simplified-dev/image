@@ -162,14 +162,6 @@ Nothing constructs `Quantizer` or `RateDistortion` except each other, and nothin
 - Type: **GAP**
 - Status: **OPEN**
 
-## `VP8Tables.MV_UPDATE_PROBA` cites a libwebp source that likely does not hold it
-Its javadoc says it matches libwebp's `kMVUpdateProba` in `src/dec/tree_dec.c`. libwebp decodes keyframes only, so the table more likely comes from libvpx (unverified). NOTICE therefore does not credit libwebp with motion-vector tables.
-
-- Affected: `src/main/java/dev/simplified/image/codec/webp/vp8/VP8Tables.java:658` (`MV_UPDATE_PROBA`)
-- Severity: **LOW**
-- Type: **GAP**
-- Status: **OPEN**
-
 ## The project's own copyright holder is named nowhere
 `LICENSE.md` is the bare Apache-2.0 text with no copyright line, so `NOTICE` opens with the project name and licence only.
 
