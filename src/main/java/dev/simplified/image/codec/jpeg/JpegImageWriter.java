@@ -4,11 +4,13 @@ import dev.simplified.annotations.Cleanup;
 import dev.simplified.annotations.SilentThrows;
 import dev.simplified.image.ImageData;
 import dev.simplified.image.ImageFormat;
-import dev.simplified.image.codec.ImageWriteOptions;
+import dev.simplified.image.PixelBuffer;
 import dev.simplified.image.codec.ImageWriter;
+import dev.simplified.image.option.ImageWriteOptions;
+import dev.simplified.image.option.JpegWriteOptions;
 import dev.simplified.image.pixel.AlphaMode;
-import dev.simplified.image.pixel.PixelBuffer;
 import dev.simplified.util.io.ByteArrayDataOutput;
+import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -22,6 +24,7 @@ import java.awt.image.BufferedImage;
 /**
  * Writes JPEG images via {@link ImageIO} with configurable quality.
  */
+@ApiStatus.Internal
 public class JpegImageWriter implements ImageWriter {
 
     @Override

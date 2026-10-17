@@ -3,6 +3,7 @@ package dev.simplified.image.pixel;
 import dev.simplified.annotations.AccessLevel;
 import dev.simplified.annotations.AllArgsConstructor;
 import dev.simplified.annotations.UtilityClass;
+import dev.simplified.image.PixelBuffer;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 

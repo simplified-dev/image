@@ -4,11 +4,12 @@ import dev.simplified.annotations.Cleanup;
 import dev.simplified.annotations.SilentThrows;
 import dev.simplified.image.ImageData;
 import dev.simplified.image.ImageFormat;
-import dev.simplified.image.codec.ImageWriteOptions;
+import dev.simplified.image.PixelBuffer;
 import dev.simplified.image.codec.ImageWriter;
+import dev.simplified.image.option.ImageWriteOptions;
 import dev.simplified.image.pixel.AlphaMode;
-import dev.simplified.image.pixel.PixelBuffer;
 import dev.simplified.util.io.ByteArrayDataOutput;
+import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -17,6 +18,7 @@ import org.jetbrains.annotations.Nullable;
  *
  * @see <a href="https://qoiformat.org/qoi-specification.pdf">QOI specification</a>
  */
+@ApiStatus.Internal
 public class QoiImageWriter implements ImageWriter {
 
     private static final int QOI_OP_RGB = 0xFE;

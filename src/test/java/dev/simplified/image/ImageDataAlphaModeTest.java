@@ -2,13 +2,10 @@ package dev.simplified.image;
 
 import dev.simplified.collection.Concurrent;
 import dev.simplified.collection.ConcurrentList;
-import dev.simplified.image.data.AnimatedImageData;
-import dev.simplified.image.data.FrameBlend;
-import dev.simplified.image.data.FrameDisposal;
-import dev.simplified.image.data.ImageFrame;
-import dev.simplified.image.data.StaticImageData;
+import dev.simplified.image.frame.FrameBlend;
+import dev.simplified.image.frame.FrameDisposal;
+import dev.simplified.image.frame.ImageFrame;
 import dev.simplified.image.pixel.AlphaMode;
-import dev.simplified.image.pixel.PixelBuffer;
 import org.jetbrains.annotations.NotNull;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -68,14 +65,13 @@ class ImageDataAlphaModeTest {
     @Test
     @DisplayName("every reader decodes to straight colour")
     void decodedImagesAreStraight() {
-        ImageFactory factory = new ImageFactory();
         ImageData source = StaticImageData.of(square(16, 0xC0336699));
 
         for (ImageFormat format : new ImageFormat[] {
             ImageFormat.PNG, ImageFormat.JPEG, ImageFormat.BMP, ImageFormat.GIF, ImageFormat.WEBP,
             ImageFormat.TIFF, ImageFormat.ICO, ImageFormat.QOI, ImageFormat.TGA, ImageFormat.PNM
         }) {
-            ImageData decoded = factory.fromByteArray(factory.toByteArray(source, format));
+            ImageData decoded = ImageFactory.fromByteArray(ImageFactory.toByteArray(source, format));
             assertThat(format.name(), decoded.getAlphaMode(), equalTo(AlphaMode.STRAIGHT));
         }
     }

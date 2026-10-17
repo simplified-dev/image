@@ -13,7 +13,7 @@ import org.jetbrains.annotations.Nullable;
  * To minimize data copying, the payload is stored as an offset and length
  * into the original byte array rather than as a copied sub-array.
  */
-public record WebPChunk(@Nullable Type type,
+record WebPChunk(@Nullable Type type,
                         @NotNull String fourCC,
                         byte @NotNull [] source,
                         int payloadOffset,
@@ -36,7 +36,7 @@ public record WebPChunk(@Nullable Type type,
     @Getter
     @EnumLookup
     @RequiredArgsConstructor
-    public enum Type {
+    enum Type {
 
         VP8("VP8 "),
         VP8L("VP8L"),

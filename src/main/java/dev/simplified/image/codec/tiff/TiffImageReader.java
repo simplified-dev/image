@@ -4,17 +4,18 @@ import dev.simplified.annotations.Cleanup;
 import dev.simplified.annotations.SilentThrows;
 import dev.simplified.collection.Concurrent;
 import dev.simplified.collection.ConcurrentList;
+import dev.simplified.image.AnimatedImageData;
 import dev.simplified.image.ImageData;
 import dev.simplified.image.ImageFormat;
-import dev.simplified.image.codec.ImageReadOptions;
+import dev.simplified.image.PixelBuffer;
+import dev.simplified.image.StaticImageData;
 import dev.simplified.image.codec.ImageReader;
-import dev.simplified.image.data.AnimatedImageData;
-import dev.simplified.image.data.FrameBlend;
-import dev.simplified.image.data.FrameDisposal;
-import dev.simplified.image.data.ImageFrame;
-import dev.simplified.image.data.StaticImageData;
 import dev.simplified.image.exception.ImageDecodeException;
-import dev.simplified.image.pixel.PixelBuffer;
+import dev.simplified.image.frame.FrameBlend;
+import dev.simplified.image.frame.FrameDisposal;
+import dev.simplified.image.frame.ImageFrame;
+import dev.simplified.image.option.ImageReadOptions;
+import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -30,6 +31,7 @@ import java.io.ByteArrayInputStream;
  * {@value #PAGE_DELAY_MS}-ms per-page delay, matching the GIF/WebP convention of
  * promoting any multi-frame image to animated output.
  */
+@ApiStatus.Internal
 public class TiffImageReader implements ImageReader {
 
     private static final int PAGE_DELAY_MS = 100;

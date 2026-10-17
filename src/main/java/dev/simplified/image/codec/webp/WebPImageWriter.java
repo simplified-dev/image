@@ -3,20 +3,22 @@ package dev.simplified.image.codec.webp;
 
 import dev.simplified.collection.Concurrent;
 import dev.simplified.collection.ConcurrentList;
+import dev.simplified.image.AnimatedImageData;
 import dev.simplified.image.ImageData;
 import dev.simplified.image.ImageFormat;
-import dev.simplified.image.codec.ImageWriteOptions;
+import dev.simplified.image.PixelBuffer;
 import dev.simplified.image.codec.ImageWriter;
-import dev.simplified.image.codec.webp.lossless.NearLosslessPreprocess;
-import dev.simplified.image.codec.webp.lossless.VP8LEncoder;
-import dev.simplified.image.codec.webp.lossy.VP8Encoder;
-import dev.simplified.image.codec.webp.lossy.VP8EncoderSession;
-import dev.simplified.image.data.AnimatedImageData;
-import dev.simplified.image.data.FrameBlend;
-import dev.simplified.image.data.FrameDisposal;
-import dev.simplified.image.data.ImageFrame;
+import dev.simplified.image.codec.webp.vp8.VP8Encoder;
+import dev.simplified.image.codec.webp.vp8.VP8EncoderSession;
+import dev.simplified.image.codec.webp.vp8l.NearLosslessPreprocess;
+import dev.simplified.image.codec.webp.vp8l.VP8LEncoder;
+import dev.simplified.image.frame.FrameBlend;
+import dev.simplified.image.frame.FrameDisposal;
+import dev.simplified.image.frame.ImageFrame;
+import dev.simplified.image.option.ImageWriteOptions;
+import dev.simplified.image.option.WebPWriteOptions;
 import dev.simplified.image.pixel.AlphaMode;
-import dev.simplified.image.pixel.PixelBuffer;
+import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -26,6 +28,7 @@ import java.util.concurrent.CompletableFuture;
  * Writes WebP images (static and animated) using a pure Java implementation
  * of the VP8L lossless and VP8 lossy codecs.
  */
+@ApiStatus.Internal
 public class WebPImageWriter implements ImageWriter {
 
     @Override

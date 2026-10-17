@@ -4,7 +4,7 @@ import dev.simplified.annotations.UtilityClass;
 import org.jetbrains.annotations.NotNull;
 
 /**
- * Static helpers for ARGB colour math, blending, and tinting.
+ * Static helpers for ARGB colour math and blending.
  * <p>
  * All methods operate on packed 32-bit ARGB ints in the native byte order
  * {@code 0xAARRGGBB}. No object allocation - pure bit math.
@@ -174,36 +174,12 @@ public class ColorMath {
      * @param argb the packed ARGB pixel
      * @return the luminance in {@code [0, 255]}
      */
-    static float luma(int argb) {
+    public static float luma(int argb) {
         int a = alpha(argb);
         int r = red(argb);
         int g = green(argb);
         int b = blue(argb);
         return (r * 0.299f + g * 0.587f + b * 0.114f) * (a / 255f);
-    }
-
-    // --- tinting ---
-
-    /**
-     * Multiplies every pixel's RGB channels by the given tint, preserving alpha.
-     *
-     * @param source the source pixel buffer
-     * @param argbTint the packed ARGB tint colour
-     * @return a new tinted pixel buffer with the same dimensions
-     */
-    public static @NotNull PixelBuffer tint(@NotNull PixelBuffer source, int argbTint) {
-        int w = source.width();
-        int h = source.height();
-        int[] result = new int[w * h];
-        int[] src = source.data();
-
-        int tr = red(argbTint);
-        int tg = green(argbTint);
-        int tb = blue(argbTint);
-
-        PixelBuffer.forEachRow(0, h, y -> PixelVector.tint(src, result, y * w, w, tr, tg, tb));
-
-        return PixelBuffer.of(result, w, h);
     }
 
     // --- private helpers ---

@@ -1,5 +1,6 @@
 package dev.simplified.image.pixel;
 
+import dev.simplified.image.PixelBuffer;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

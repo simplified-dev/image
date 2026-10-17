@@ -1,9 +1,10 @@
 package dev.simplified.image.codec.gif;
 
+import dev.simplified.image.AnimatedImageData;
 import dev.simplified.image.ImageData;
-import dev.simplified.image.data.AnimatedImageData;
-import dev.simplified.image.data.ImageFrame;
-import dev.simplified.image.pixel.PixelBuffer;
+import dev.simplified.image.PixelBuffer;
+import dev.simplified.image.frame.ImageFrame;
+import dev.simplified.image.option.GifWriteOptions;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.junit.jupiter.api.DisplayName;
@@ -61,7 +62,7 @@ class GifDelayTest {
     @Test
     @DisplayName("the carry repays its debt over a period longer than a single frame")
     void carrySpansManyFrames() {
-        int[] declared = writeAndReadDelays(frames(100, 19), options(DelayFidelity.EXACT));
+        int[] declared = writeAndReadDelays(frames(100, 19), options(GifWriteOptions.DelayFidelity.EXACT));
 
         // 19 ms is not on the grid at all, so the carry runs a period-10 cycle spending 19 cs per
         // 10 frames rather than drifting by a whole centisecond every frame.
@@ -72,7 +73,7 @@ class GifDelayTest {
     @Test
     @DisplayName("below the honored minimum the carry has nothing left to repay with")
     void carryCannotRepayBelowTheMinimum() {
-        int[] declared = writeAndReadDelays(frames(100, 19), options(DelayFidelity.PLAYABLE));
+        int[] declared = writeAndReadDelays(frames(100, 19), options(GifWriteOptions.DelayFidelity.PLAYABLE));
 
         // Every frame is raised to the 2 cs minimum, so the debt only grows - the declared total
         // overshoots by 5% and no later frame can give the time back. This is the cost of
@@ -86,7 +87,7 @@ class GifDelayTest {
     @Test
     @DisplayName("PLAYABLE never declares the 1 cs delay that players rewrite to 100 ms")
     void playableRaisesSubGridFrames() {
-        int[] declared = writeAndReadDelays(subTickFrames(), options(DelayFidelity.PLAYABLE));
+        int[] declared = writeAndReadDelays(subTickFrames(), options(GifWriteOptions.DelayFidelity.PLAYABLE));
 
         // A 50 ms tick split three ways cannot hold three honored frames - 3 x 2 cs overruns it -
         // so the strip declares 60 ms against 50 ms of intent. Slow, rather than tenfold slow.
@@ -97,7 +98,7 @@ class GifDelayTest {
     @Test
     @DisplayName("EXACT declares the true timing, 1 cs and all")
     void exactDeclaresTrueTiming() {
-        int[] declared = writeAndReadDelays(subTickFrames(), options(DelayFidelity.EXACT));
+        int[] declared = writeAndReadDelays(subTickFrames(), options(GifWriteOptions.DelayFidelity.EXACT));
         assertThat(boxed(declared), contains(2, 1, 2));
         assertThat(sum(declared), equalTo(5));
     }
@@ -105,8 +106,8 @@ class GifDelayTest {
     @Test
     @DisplayName("the two fidelities agree wherever the minimum cannot bind")
     void fidelitiesAgreeAboveTheMinimum() {
-        int[] playable = writeAndReadDelays(frames(20, 33), options(DelayFidelity.PLAYABLE));
-        int[] exact = writeAndReadDelays(frames(20, 33), options(DelayFidelity.EXACT));
+        int[] playable = writeAndReadDelays(frames(20, 33), options(GifWriteOptions.DelayFidelity.PLAYABLE));
+        int[] exact = writeAndReadDelays(frames(20, 33), options(GifWriteOptions.DelayFidelity.EXACT));
         assertThat(boxed(playable), equalTo(boxed(exact)));
     }
 
@@ -115,7 +116,7 @@ class GifDelayTest {
     void playableIsTheDefault() {
         assertThat(
             boxed(writeAndReadDelays(subTickFrames(), null)),
-            equalTo(boxed(writeAndReadDelays(subTickFrames(), options(DelayFidelity.PLAYABLE))))
+            equalTo(boxed(writeAndReadDelays(subTickFrames(), options(GifWriteOptions.DelayFidelity.PLAYABLE))))
         );
     }
 
@@ -168,7 +169,7 @@ class GifDelayTest {
 
     // ──── fixtures ────
 
-    private static @NotNull GifWriteOptions options(@NotNull DelayFidelity fidelity) {
+    private static @NotNull GifWriteOptions options(@NotNull GifWriteOptions.DelayFidelity fidelity) {
         return GifWriteOptions.builder().withDelayFidelity(fidelity).build();
     }
 

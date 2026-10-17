@@ -51,6 +51,12 @@ tasks.withType<JavaCompile> {
     options.compilerArgs.add("-Xlint:-options")
 }
 
+// javadoc resolves the incubator module at doclet time, so without this VectorOps reports the
+// package as not visible.
+tasks.withType<Javadoc>().configureEach {
+    (options as StandardJavadocDocletOptions).addStringOption("-add-modules", "jdk.incubator.vector")
+}
+
 tasks.test {
     useJUnitPlatform()
     jvmArgs(vectorModuleArgs)

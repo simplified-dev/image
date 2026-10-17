@@ -1,8 +1,11 @@
 package dev.simplified.image.codec;
 
+import dev.simplified.image.AnimatedImageData;
 import dev.simplified.image.ImageData;
 import dev.simplified.image.ImageFactory;
 import dev.simplified.image.ImageFormat;
+import dev.simplified.image.PixelBuffer;
+import dev.simplified.image.StaticImageData;
 import dev.simplified.image.codec.bmp.BmpImageWriter;
 import dev.simplified.image.codec.gif.GifImageWriter;
 import dev.simplified.image.codec.ico.IcoImageWriter;
@@ -12,16 +15,14 @@ import dev.simplified.image.codec.pnm.PnmImageWriter;
 import dev.simplified.image.codec.qoi.QoiImageWriter;
 import dev.simplified.image.codec.tga.TgaImageWriter;
 import dev.simplified.image.codec.tiff.TiffImageWriter;
-import dev.simplified.image.codec.tiff.TiffWriteOptions;
 import dev.simplified.image.codec.webp.WebPImageWriter;
-import dev.simplified.image.codec.webp.WebPWriteOptions;
-import dev.simplified.image.data.AnimatedImageData;
-import dev.simplified.image.data.FrameBlend;
-import dev.simplified.image.data.FrameDisposal;
-import dev.simplified.image.data.ImageFrame;
-import dev.simplified.image.data.StaticImageData;
+import dev.simplified.image.frame.FrameBlend;
+import dev.simplified.image.frame.FrameDisposal;
+import dev.simplified.image.frame.ImageFrame;
+import dev.simplified.image.option.ImageWriteOptions;
+import dev.simplified.image.option.TiffWriteOptions;
+import dev.simplified.image.option.WebPWriteOptions;
 import dev.simplified.image.pixel.AlphaMode;
-import dev.simplified.image.pixel.PixelBuffer;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.junit.jupiter.api.DynamicTest;
@@ -128,12 +129,10 @@ class StraightEncodeBytesTest {
 
     @TestFactory
     Stream<DynamicTest> factoryWritesTheWriterBytes() {
-        ImageFactory factory = new ImageFactory();
-
         return CASES.stream()
             .map(entry -> DynamicTest.dynamicTest(entry.name(), () -> {
                 ImageData image = image(entry.animated(), null);
-                assertThat(factory.toByteArray(image, entry.format(), entry.options()), equalTo(entry.write(image)));
+                assertThat(ImageFactory.toByteArray(image, entry.format(), entry.options()), equalTo(entry.write(image)));
             }));
     }
 

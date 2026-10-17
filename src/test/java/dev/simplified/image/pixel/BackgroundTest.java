@@ -1,0 +1,165 @@
+package dev.simplified.image.pixel;
+
+import dev.simplified.image.AnimatedImageData;
+import dev.simplified.image.ImageData;
+import dev.simplified.image.PixelBuffer;
+import dev.simplified.image.StaticImageData;
+import dev.simplified.image.codec.png.PngImageReader;
+import dev.simplified.image.codec.png.PngImageWriter;
+import dev.simplified.image.frame.ImageFrame;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.is;
+import static org.hamcrest.Matchers.sameInstance;
+
+class BackgroundTest {
+
+    @Test
+    @DisplayName("solid background fills every pixel; an alpha-zero solid reports transparent")
+    void solidFillAndTransparency() {
+        assertThat(Background.TRANSPARENT.isTransparent(), is(true));
+        assertThat(Background.solid(0x00123456).isTransparent(), is(true));
+        assertThat(Background.solid(0xFF112233).isTransparent(), is(false));
+
+        PixelBuffer buffer = PixelBuffer.create(2, 2);
+        Background.solid(0xFF112233).fill(buffer);
+        for (int y = 0; y < 2; y++)
+            for (int x = 0; x < 2; x++)
+                assertThat(buffer.getPixel(x, y), is(0xFF112233));
+    }
+
+    @Test
+    @DisplayName("checkerboard alternates colour every cell from the top-left origin")
+    void checkerboardPattern() {
+        PixelBuffer buffer = PixelBuffer.create(16, 16);
+        Background.checkerboard(0xFFAAAAAA, 0xFF555555, 8).fill(buffer);
+        assertThat(buffer.getPixel(0, 0), is(0xFFAAAAAA));
+        assertThat(buffer.getPixel(8, 0), is(0xFF555555));
+        assertThat(buffer.getPixel(0, 8), is(0xFF555555));
+        assertThat(buffer.getPixel(8, 8), is(0xFFAAAAAA));
+    }
+
+    @Test
+    @DisplayName("composite is a no-op for a transparent background")
+    void transparentNoOp() {
+        ImageData image = StaticImageData.of(PixelBuffer.create(4, 4));
+        assertThat(Background.TRANSPARENT.composite(image), is(sameInstance(image)));
+    }
+
+    @Test
+    @DisplayName("composite blits the render source-over a solid fill")
+    void compositesOverSolid() {
+        PixelBuffer rendered = PixelBuffer.create(2, 1);
+        rendered.setPixel(0, 0, 0x00000000); // transparent - background shows through
+        rendered.setPixel(1, 0, 0xFF0000FF); // opaque blue - stays blue
+
+        ImageData out = Background.solid(0xFFFF0000).composite(StaticImageData.of(rendered));
+        PixelBuffer result = out.toPixelBuffer();
+        assertThat(result.getPixel(0, 0), is(0xFFFF0000));
+        assertThat(result.getPixel(1, 0), is(0xFF0000FF));
+    }
+
+    @Test
+    @DisplayName("composite shows the fill through a translucent render as drawing it over the fill would")
+    void compositesTranslucentRenderAsDrawnOverFill() {
+        int source = 0x80FFFFFF;
+        int fill = 0xFF204060;
+        PixelBuffer rendered = PixelBuffer.create(1, 1);
+        rendered.setPixel(0, 0, ColorMath.blend(source, ColorMath.TRANSPARENT, BlendMode.NORMAL));
+
+        PixelBuffer result = Background.solid(fill).composite(StaticImageData.of(rendered)).toPixelBuffer();
+        assertThat(result.getPixel(0, 0), is(0xFF90A0B0));
+        assertThat(result.getPixel(0, 0), is(ColorMath.blend(source, fill, BlendMode.NORMAL)));
+    }
+
+    @Test
+    @DisplayName("composite preserves animated frame count and per-frame timing")
+    void preservesAnimation() {
+        ImageData animated = AnimatedImageData.builder()
+            .withFrame(ImageFrame.of(PixelBuffer.create(2, 2), 40))
+            .withFrame(ImageFrame.of(PixelBuffer.create(2, 2), 60))
+            .build();
+
+        ImageData out = Background.solid(0xFF222222).composite(animated);
+        assertThat(out.isAnimated(), is(true));
+        assertThat(out.getFrames().size(), is(2));
+        assertThat(out.getFrames().getFirst().delayMs(), is(40));
+        assertThat(out.getFrames().getLast().delayMs(), is(60));
+        assertThat(out.getFrames().getFirst().pixels().getPixel(0, 0), is(0xFF222222));
+    }
+
+    @Test
+    @DisplayName("composite keeps the convention the image is held in")
+    void compositeKeepsTheConvention() {
+        for (AlphaMode mode : AlphaMode.values()) {
+            ImageData still = StaticImageData.of(PixelBuffer.create(2, 2), mode);
+            ImageData animated = AnimatedImageData.builder()
+                .withFrame(ImageFrame.of(PixelBuffer.create(2, 2), 40))
+                .withFrame(ImageFrame.of(PixelBuffer.create(2, 2), 60))
+                .withAlphaMode(mode)
+                .build();
+
+            assertThat(Background.solid(0xFF000000).composite(still).getAlphaMode(), is(mode));
+            assertThat(Background.solid(0xFF000000).composite(animated).getAlphaMode(), is(mode));
+            assertThat(Background.checkerboard().composite(still).getAlphaMode(), is(mode));
+            assertThat(Background.checkerboard().composite(animated).getAlphaMode(), is(mode));
+        }
+    }
+
+    @Test
+    @DisplayName("a translucent fill under a premultiplied image is premultiplied, so it encodes as the colour given")
+    void translucentFillUnderPremultipliedImage() {
+        int fill = 0x80336699;
+        int premultipliedFill = 0x801A334D;
+        int render = 0x80400000;
+        PixelBuffer rendered = PixelBuffer.create(2, 1);
+        rendered.setPixel(1, 0, render);
+
+        ImageData out = Background.solid(fill).composite(StaticImageData.of(rendered, AlphaMode.PREMULTIPLIED));
+        PixelBuffer result = out.toPixelBuffer();
+        assertThat(result.getPixel(0, 0), is(premultipliedFill));
+        assertThat(result.getPixel(1, 0), is(ColorMath.blend(render, premultipliedFill, BlendMode.PREMULTIPLIED)));
+
+        // Laid down unpremultiplied, the fill would encode as 0x8066CBFF. Premultiplied, it encodes as
+        // the colour given to the level a premultiplied pixel at alpha 128 holds: the red of 0x33
+        // premultiplies to 0x1A, which divides back to 0x34.
+        int decoded = new PngImageReader().read(new PngImageWriter().write(out)).toPixelBuffer().getPixel(0, 0);
+        assertThat(Integer.toHexString(decoded), is(Integer.toHexString(0x80346699)));
+        for (int shift = 0; shift <= 24; shift += 8)
+            assertThat(Math.abs(((decoded >>> shift) & 0xFF) - ((fill >>> shift) & 0xFF)) <= 1, is(true));
+    }
+
+    @Test
+    @DisplayName("every translucent cell of a checkerboard under a premultiplied image is premultiplied")
+    void translucentCheckerboardUnderPremultipliedImage() {
+        ImageData image = StaticImageData.of(PixelBuffer.create(2, 1), AlphaMode.PREMULTIPLIED);
+        PixelBuffer result = Background.checkerboard(0x80336699, 0x40FFFFFF, 1).composite(image).toPixelBuffer();
+
+        assertThat(result.getPixel(0, 0), is(0x801A334D));
+        assertThat(result.getPixel(1, 0), is(0x40404040));
+    }
+
+    @Test
+    @DisplayName("a translucent fill under a straight image is laid down as given")
+    void translucentFillUnderStraightImage() {
+        PixelBuffer result = Background.solid(0x80336699).composite(StaticImageData.of(PixelBuffer.create(1, 1))).toPixelBuffer();
+        assertThat(result.getPixel(0, 0), is(0x80336699));
+    }
+
+    @Test
+    @DisplayName("an opaque fill composites the same pixels whichever convention the image is held in")
+    void opaqueFillIgnoresTheConvention() {
+        PixelBuffer rendered = PixelBuffer.create(4, 4);
+        for (int i = 0; i < 16; i++)
+            rendered.data()[i] = ((i * 17) << 24) | ((i * 7) << 16) | ((i * 3) << 8) | i;
+
+        for (Background background : new Background[] { Background.solid(0xFF204060), Background.checkerboard() }) {
+            PixelBuffer straight = background.composite(StaticImageData.of(rendered)).toPixelBuffer();
+            PixelBuffer premultiplied = background.composite(StaticImageData.of(rendered, AlphaMode.PREMULTIPLIED)).toPixelBuffer();
+            assertThat(premultiplied.data(), is(straight.data()));
+        }
+    }
+
+}

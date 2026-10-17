@@ -1,0 +1,195 @@
+package dev.simplified.image.option;
+
+import dev.simplified.annotations.Getter;
+import dev.simplified.annotations.RequiredArgsConstructor;
+import org.jetbrains.annotations.NotNull;
+
+import java.awt.Graphics2D;
+
+/**
+ * GIF-specific encoding options.
+ *
+ * @param loopCount animation loop count ({@code 0} for infinite)
+ * @param transparent whether one palette slot should be reserved as fully transparent
+ * @param transparentColorIndex the palette slot to mark as transparent when {@code transparent} is set
+ * @param backgroundRgb the RGB color to composite partial-alpha pixels onto before
+ *     quantizing. GIF supports only 1-bit transparency, so partial alpha otherwise gets
+ *     rendered as a dithered checkerboard by {@link Graphics2D}. Any pixel with
+ *     {@code alpha &lt; alphaThreshold} becomes fully transparent; everything else is
+ *     flattened onto this color and becomes fully opaque.
+ * @param alphaThreshold pixels with alpha strictly below this value ({@code 0}-{@code 255})
+ *     are treated as fully transparent; pixels at or above are flattened onto
+ *     {@code backgroundRgb}. Default {@code 128}.
+ * @param delayFidelity how frame delays finer than GIF's centisecond grid are resolved, trading
+ *     an exact declared total against a delay every player honors. Default
+ *     {@link DelayFidelity#PLAYABLE}.
+ */
+public record GifWriteOptions(
+    int loopCount,
+    boolean transparent,
+    int transparentColorIndex,
+    int backgroundRgb,
+    int alphaThreshold,
+    @NotNull DelayFidelity delayFidelity
+) implements ImageWriteOptions {
+
+    /**
+     * Returns a new builder for GIF write options.
+     *
+     * @return a new builder instance
+     */
+    public static @NotNull Builder builder() {
+        return new Builder();
+    }
+
+    /**
+     * How faithfully emitted frame delays follow the source timing when a schedule asks for finer
+     * resolution than GIF's centisecond grid can express.
+     * <p>
+     * The GIF writer quantizes the cumulative timeline rather than each delay on its own, so
+     * the declared total stays exact no matter how many frames there are. This setting governs the one
+     * case quantizing alone cannot resolve - a frame whose share of the timeline rounds below the
+     * smallest delay the audience honors - and it trades the two accuracies against each other:
+     * <ul>
+     * <li><b>What the file declares.</b> {@link #EXACT} keeps the declared total right for any
+     * schedule averaging at least 10 ms per frame.</li>
+     * <li><b>What a player shows.</b> {@link #PLAYABLE} never declares a delay that players rewrite,
+     * at the cost of declaring a longer total than intended.</li>
+     * </ul>
+     * The two differ only below 20 ms per frame. At or above it, rounding yields at least 2 cs on its
+     * own and both settings emit identical bytes.
+     */
+    @Getter
+    @RequiredArgsConstructor
+    public enum DelayFidelity {
+
+        /**
+         * Never declares 1 cs, which every surveyed player substitutes 100 ms for - a tenfold
+         * slowdown rather than the fast playback the value asks for. Frames that would round below
+         * 2 cs are raised to it, so a strip finer than 20 ms per frame declares a longer total than
+         * intended instead of playing at a tenth of its intended speed. The right choice for anything
+         * a browser will play, and the default.
+         */
+        PLAYABLE(2),
+
+        /**
+         * Declares the source timing down to GIF's 1 cs minimum, keeping the declared total exact for
+         * any schedule averaging at least 10 ms per frame. A 1 cs delay reaches tooling that reads the
+         * file's own numbers intact, and is substituted with 100 ms by every browser surveyed, so this
+         * suits files that get measured rather than watched.
+         */
+        EXACT(1);
+
+        /**
+         * the smallest delay in centiseconds the writer may declare
+         */
+        private final int minimumDelayCs;
+
+    }
+
+    /**
+     * Builds {@link GifWriteOptions} instances.
+     */
+    public static class Builder {
+
+        private int loopCount = 0;
+        private boolean transparent = false;
+        private int transparentColorIndex = 0;
+        private int backgroundRgb = 0x000000;
+        private int alphaThreshold = 128;
+        private DelayFidelity delayFidelity = DelayFidelity.PLAYABLE;
+
+        /**
+         * Sets the animation loop count.
+         *
+         * @param loopCount the number of times to loop (0 for infinite)
+         * @return this builder for chaining
+         */
+        public @NotNull Builder withLoopCount(int loopCount) {
+            this.loopCount = loopCount;
+            return this;
+        }
+
+        /**
+         * Enables transparency rendering.
+         *
+         * @return this builder for chaining
+         */
+        public @NotNull Builder isTransparent() {
+            return this.isTransparent(true);
+        }
+
+        /**
+         * Sets whether the GIF should be rendered with transparency.
+         *
+         * @param transparent true to enable transparency
+         * @return this builder for chaining
+         */
+        public @NotNull Builder isTransparent(boolean transparent) {
+            this.transparent = transparent;
+            return this;
+        }
+
+        /**
+         * Sets the palette index to treat as transparent.
+         *
+         * @param colorIndex the transparent color index (0-255)
+         * @return this builder for chaining
+         */
+        public @NotNull Builder withTransparentColorIndex(int colorIndex) {
+            this.transparentColorIndex = colorIndex;
+            return this;
+        }
+
+        /**
+         * Sets the RGB color that partial-alpha pixels are composited onto before
+         * quantizing. Avoids the GIF-writer dithering partial transparency into an RGB
+         * checkerboard.
+         *
+         * @param rgb the 24-bit RGB color (defaults to {@code 0x000000})
+         * @return this builder for chaining
+         */
+        public @NotNull Builder withBackgroundRgb(int rgb) {
+            this.backgroundRgb = rgb & 0xFFFFFF;
+            return this;
+        }
+
+        /**
+         * Sets the alpha threshold below which a pixel is treated as fully transparent.
+         * At or above the threshold, the pixel is composited onto the configured
+         * background color and becomes fully opaque.
+         *
+         * @param threshold the threshold in {@code [0, 255]}; default {@code 128}
+         * @return this builder for chaining
+         */
+        public @NotNull Builder withAlphaThreshold(int threshold) {
+            this.alphaThreshold = Math.max(0, Math.min(255, threshold));
+            return this;
+        }
+
+        /**
+         * Sets how delays finer than GIF's centisecond grid are resolved.
+         *
+         * @param delayFidelity the fidelity to encode with; defaults to
+         *     {@link DelayFidelity#PLAYABLE}
+         * @return this builder for chaining
+         */
+        public @NotNull Builder withDelayFidelity(@NotNull DelayFidelity delayFidelity) {
+            this.delayFidelity = delayFidelity;
+            return this;
+        }
+
+        public @NotNull GifWriteOptions build() {
+            return new GifWriteOptions(
+                this.loopCount,
+                this.transparent,
+                this.transparentColorIndex,
+                this.backgroundRgb,
+                this.alphaThreshold,
+                this.delayFidelity
+            );
+        }
+
+    }
+
+}

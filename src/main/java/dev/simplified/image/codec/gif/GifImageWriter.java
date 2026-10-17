@@ -3,18 +3,20 @@ package dev.simplified.image.codec.gif;
 import dev.simplified.annotations.Cleanup;
 import dev.simplified.annotations.SilentThrows;
 import dev.simplified.collection.ConcurrentList;
+import dev.simplified.image.AnimatedImageData;
 import dev.simplified.image.ImageData;
 import dev.simplified.image.ImageFormat;
-import dev.simplified.image.codec.ImageWriteOptions;
 import dev.simplified.image.codec.ImageWriter;
-import dev.simplified.image.data.AnimatedImageData;
-import dev.simplified.image.data.FrameBlend;
-import dev.simplified.image.data.FrameDisposal;
-import dev.simplified.image.data.ImageFrame;
+import dev.simplified.image.frame.FrameBlend;
+import dev.simplified.image.frame.FrameDisposal;
+import dev.simplified.image.frame.ImageFrame;
+import dev.simplified.image.option.GifWriteOptions;
+import dev.simplified.image.option.ImageWriteOptions;
 import dev.simplified.image.pixel.AlphaMode;
 import dev.simplified.image.pixel.BlendMode;
 import dev.simplified.image.pixel.ColorMath;
 import dev.simplified.util.io.ByteArrayDataOutput;
+import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -44,6 +46,7 @@ import java.util.Map;
  * {@link FrameDisposal#RESTORE_TO_BACKGROUND}, and so starts from a clear canvas rather than showing
  * the frame before it through its transparent pixels.
  */
+@ApiStatus.Internal
 public class GifImageWriter implements ImageWriter {
 
     /**
@@ -64,7 +67,7 @@ public class GifImageWriter implements ImageWriter {
         int transparentColorIndex = 0;
         int backgroundRgb = 0x000000;
         int alphaThreshold = 128;
-        DelayFidelity delayFidelity = DelayFidelity.PLAYABLE;
+        GifWriteOptions.DelayFidelity delayFidelity = GifWriteOptions.DelayFidelity.PLAYABLE;
 
         if (options instanceof GifWriteOptions gifOptions) {
             loopCount = gifOptions.loopCount();
@@ -527,7 +530,7 @@ public class GifImageWriter implements ImageWriter {
      */
     private static int @NotNull [] quantizeDelays(
         @NotNull ConcurrentList<ImageFrame> frames,
-        @NotNull DelayFidelity fidelity
+        @NotNull GifWriteOptions.DelayFidelity fidelity
     ) {
         int[] delaysCs = new int[frames.size()];
         long elapsedMs = 0L;

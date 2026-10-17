@@ -4,11 +4,14 @@ import dev.simplified.annotations.Cleanup;
 import dev.simplified.annotations.SilentThrows;
 import dev.simplified.image.ImageData;
 import dev.simplified.image.ImageFormat;
-import dev.simplified.image.codec.ImageWriteOptions;
+import dev.simplified.image.PixelBuffer;
 import dev.simplified.image.codec.ImageWriter;
+import dev.simplified.image.codec.common.LittleEndian;
+import dev.simplified.image.option.ImageWriteOptions;
+import dev.simplified.image.option.TgaWriteOptions;
 import dev.simplified.image.pixel.AlphaMode;
-import dev.simplified.image.pixel.PixelBuffer;
 import dev.simplified.util.io.ByteArrayDataOutput;
+import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -23,6 +26,7 @@ import java.io.IOException;
  * (BGR). RLE packets never cross row boundaries, matching the conservative interpretation
  * of the TGA 2.0 spec.
  */
+@ApiStatus.Internal
 public class TgaImageWriter implements ImageWriter {
 
     private static final int TYPE_TRUE_COLOR = 2;
@@ -60,13 +64,13 @@ public class TgaImageWriter implements ImageWriter {
         out.writeByte(0);
         out.writeByte(0);
         out.writeByte(imageType);
-        writeUint16LE(out, 0);
-        writeUint16LE(out, 0);
+        LittleEndian.writeUint16(out, 0);
+        LittleEndian.writeUint16(out, 0);
         out.writeByte(0);
-        writeUint16LE(out, 0);
-        writeUint16LE(out, 0);
-        writeUint16LE(out, width);
-        writeUint16LE(out, height);
+        LittleEndian.writeUint16(out, 0);
+        LittleEndian.writeUint16(out, 0);
+        LittleEndian.writeUint16(out, width);
+        LittleEndian.writeUint16(out, height);
         out.writeByte(depth);
         out.writeByte(descriptor);
 
@@ -76,8 +80,8 @@ public class TgaImageWriter implements ImageWriter {
             writeRaw(out, buffer, width, height, hasAlpha);
         }
 
-        writeUint32LE(out, 0);
-        writeUint32LE(out, 0);
+        LittleEndian.writeUint32(out, 0);
+        LittleEndian.writeUint32(out, 0);
         out.write(FOOTER_SIGNATURE);
 
         return out.toByteArray();
@@ -141,18 +145,6 @@ public class TgaImageWriter implements ImageWriter {
 
         if (hasAlpha)
             out.writeByte((argb >>> 24) & 0xFF);
-    }
-
-    private static void writeUint16LE(@NotNull ByteArrayDataOutput out, int value) throws IOException {
-        out.writeByte(value & 0xFF);
-        out.writeByte((value >>> 8) & 0xFF);
-    }
-
-    private static void writeUint32LE(@NotNull ByteArrayDataOutput out, int value) throws IOException {
-        out.writeByte(value & 0xFF);
-        out.writeByte((value >>> 8) & 0xFF);
-        out.writeByte((value >>> 16) & 0xFF);
-        out.writeByte((value >>> 24) & 0xFF);
     }
 
 }

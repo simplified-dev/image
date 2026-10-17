@@ -2,20 +2,22 @@ package dev.simplified.image.codec.webp;
 
 import dev.simplified.collection.Concurrent;
 import dev.simplified.collection.ConcurrentList;
+import dev.simplified.image.AnimatedImageData;
 import dev.simplified.image.ImageData;
 import dev.simplified.image.ImageFormat;
-import dev.simplified.image.codec.ImageReadOptions;
+import dev.simplified.image.PixelBuffer;
+import dev.simplified.image.StaticImageData;
 import dev.simplified.image.codec.ImageReader;
-import dev.simplified.image.codec.webp.lossless.VP8LDecoder;
-import dev.simplified.image.codec.webp.lossy.VP8Decoder;
-import dev.simplified.image.codec.webp.lossy.VP8DecoderSession;
-import dev.simplified.image.data.AnimatedImageData;
-import dev.simplified.image.data.FrameBlend;
-import dev.simplified.image.data.FrameDisposal;
-import dev.simplified.image.data.ImageFrame;
-import dev.simplified.image.data.StaticImageData;
+import dev.simplified.image.codec.common.LittleEndian;
+import dev.simplified.image.codec.webp.vp8.VP8Decoder;
+import dev.simplified.image.codec.webp.vp8.VP8DecoderSession;
+import dev.simplified.image.codec.webp.vp8l.VP8LDecoder;
 import dev.simplified.image.exception.ImageDecodeException;
-import dev.simplified.image.pixel.PixelBuffer;
+import dev.simplified.image.frame.FrameBlend;
+import dev.simplified.image.frame.FrameDisposal;
+import dev.simplified.image.frame.ImageFrame;
+import dev.simplified.image.option.ImageReadOptions;
+import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -23,6 +25,7 @@ import org.jetbrains.annotations.Nullable;
  * Reads WebP images (static and animated, lossless and lossy) using a pure Java
  * implementation of the VP8L and VP8 codecs.
  */
+@ApiStatus.Internal
 public class WebPImageReader implements ImageReader {
 
     @Override
@@ -100,7 +103,7 @@ public class WebPImageReader implements ImageReader {
 
         if (animChunk != null && animChunk.payloadLength() >= 6) {
             byte[] animPayload = animChunk.payload();
-            backgroundColor = readLE32(animPayload, 0);
+            backgroundColor = LittleEndian.readUint32(animPayload, 0);
             loopCount = (animPayload[4] & 0xFF) | ((animPayload[5] & 0xFF) << 8);
         }
 
@@ -154,7 +157,7 @@ public class WebPImageReader implements ImageReader {
             int subOffset = 16;
             while (subOffset + 8 <= anmf.length) {
                 String tag = new String(anmf, subOffset, 4);
-                int subSize = readLE32(anmf, subOffset + 4);
+                int subSize = LittleEndian.readUint32(anmf, subOffset + 4);
                 int dataStart = subOffset + 8;
                 if (dataStart + subSize > anmf.length)
                     throw new ImageDecodeException("ANMF sub-chunk %s overruns frame", tag);
@@ -343,13 +346,6 @@ public class WebPImageReader implements ImageReader {
             .filter(chunk -> chunk.type() == type)
             .findFirst()
             .orElse(null);
-    }
-
-    private static int readLE32(byte @NotNull [] data, int offset) {
-        return (data[offset] & 0xFF)
-            | ((data[offset + 1] & 0xFF) << 8)
-            | ((data[offset + 2] & 0xFF) << 16)
-            | ((data[offset + 3] & 0xFF) << 24);
     }
 
 }

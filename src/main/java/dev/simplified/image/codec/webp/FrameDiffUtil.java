@@ -1,6 +1,6 @@
 package dev.simplified.image.codec.webp;
 
-import dev.simplified.image.pixel.PixelBuffer;
+import dev.simplified.image.PixelBuffer;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
