@@ -166,7 +166,8 @@ The two forms of an image, `StaticImageData` and `AnimatedImageData`, sit beside
 A `LoopCount` counts the repeats after the first play: `LoopCount.Preset.NONE`
 plays once, `ONCE` twice and `INFINITE` forever, and `LoopCount.of(n)` plays
 `n + 1` times. Each codec converts it to its container's own unit - a GIF's
-NETSCAPE2.0 block counts repeats, a WebP's `ANIM` chunk counts plays.
+NETSCAPE2.0 block counts repeats, a WebP's `ANIM` chunk counts plays. Write
+options that set no loop count declare the image's own.
 
 ```java
 import dev.simplified.image.AnimatedImageData;

@@ -66,14 +66,6 @@ When `usePartialFrames` holds - every lossless write, and every lossy write with
 - Type: **BUG**
 - Status: **OPEN**
 
-## GIF writer ignores the image's loop count whenever options are passed
-When `GifWriteOptions` are supplied, `GifImageWriter` takes the loop count only from the options, and options that set none declare `LoopCount.Preset.INFINITE`. A finite-loop GIF re-encoded with options, for example to set transparency, loops forever. The WebP writer declares the image's count when its options set none.
-
-- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:80-89`
-- Severity: **LOW**
-- Type: **BUG**
-- Status: **OPEN**
-
 ## GIF writer floors the flatten of a straight image
 `flattenAllFrames` lays a partly transparent straight pixel over the background as `(c * a + bg * (255 - a)) / 255`, an integer division, so every such pixel lands up to a level low: at worst 0.996 of a level from the exact composite over 455,168 cases (backgrounds 0, 1, 16, 127, 128, 198 and 255, every partial alpha, every straight level), where the premultiplied flatten beside it, rounded once, lands within 0.498. A straight image and its premultiplied twin therefore flatten up to a level apart. Rounding it moves the bytes of every GIF written from a straight image with partial alpha. MEDIUM once a caller holds GIF output to an exact composite.
 

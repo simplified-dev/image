@@ -70,7 +70,9 @@ public class GifImageWriter implements ImageWriter {
     @Override
     @SilentThrows
     public byte @NotNull [] write(@NotNull ImageData data, @Nullable ImageWriteOptions options) {
-        LoopCount loopCount = LoopCount.Preset.INFINITE;
+        // An animated image held as anything but an AnimatedImageData carries no count of its own,
+        // and repeats forever.
+        LoopCount loopCount = data instanceof AnimatedImageData animated ? animated.getLoopCount() : LoopCount.Preset.INFINITE;
         boolean transparent = false;
         int transparentColorIndex = 0;
         int backgroundRgb = 0x000000;
@@ -78,14 +80,12 @@ public class GifImageWriter implements ImageWriter {
         GifWriteOptions.DelayFidelity delayFidelity = GifWriteOptions.DelayFidelity.PLAYABLE;
 
         if (options instanceof GifWriteOptions gifOptions) {
-            loopCount = gifOptions.loopCount().orElse(LoopCount.Preset.INFINITE);
+            loopCount = gifOptions.loopCount().orElse(loopCount);
             transparent = gifOptions.transparent();
             transparentColorIndex = gifOptions.transparentColorIndex();
             backgroundRgb = gifOptions.backgroundRgb();
             alphaThreshold = gifOptions.alphaThreshold();
             delayFidelity = gifOptions.delayFidelity();
-        } else if (data instanceof AnimatedImageData animated) {
-            loopCount = animated.getLoopCount();
         }
 
         int[] delaysCs = quantizeDelays(data.getFrames(), delayFidelity);

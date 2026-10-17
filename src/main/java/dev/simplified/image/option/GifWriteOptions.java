@@ -11,7 +11,8 @@ import java.util.Optional;
 /**
  * GIF-specific encoding options.
  *
- * @param loopCount the repeats after the first play to declare, empty to declare endless repeats
+ * @param loopCount the repeats after the first play to declare in place of the image's own, empty
+ *     to declare the image's
  * @param transparent whether one palette slot should be reserved as fully transparent
  * @param transparentColorIndex the palette slot to mark as transparent when {@code transparent} is set
  * @param backgroundRgb the RGB color to composite partial-alpha pixels onto before
@@ -102,7 +103,7 @@ public record GifWriteOptions(
         private DelayFidelity delayFidelity = DelayFidelity.PLAYABLE;
 
         /**
-         * Sets how many times the animation repeats after its first play.
+         * Sets how many times the animation repeats after its first play, in place of the image's own.
          *
          * @param loopCount the repeats after the first play to declare
          * @return this builder for chaining

@@ -76,6 +76,16 @@ class GifLoopCountTest {
     }
 
     @Test
+    @DisplayName("options that set no count declare the image's")
+    void optionsWithoutACountDeclareTheImages() {
+        GifWriteOptions options = GifWriteOptions.builder().isTransparent().build();
+
+        assertThat(GifBlocks.netscapeLoopCounts(write(animation(LoopCount.Preset.NONE), options)), is(empty()));
+        assertThat(GifBlocks.netscapeLoopCounts(write(animation(LoopCount.of(4)), options)), contains(4));
+        assertThat(GifBlocks.netscapeLoopCounts(write(animation(LoopCount.Preset.INFINITE), options)), contains(0));
+    }
+
+    @Test
     @DisplayName("a count in the options is declared over the image's")
     void optionsCountWins() {
         GifWriteOptions options = GifWriteOptions.builder().withLoopCount(LoopCount.Preset.ONCE).build();
