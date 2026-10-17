@@ -284,7 +284,7 @@ src/main/java/dev/simplified/image/
         ├── RiffContainer.java  # RIFF parse/write
         ├── WebPChunk.java      # chunk model + Type enum for FourCC
         ├── FrameDiffUtil.java  # partial-frame ANMF bounding-box diffing
-        ├── vp8/                # VP8Encoder, VP8Decoder, VP8EncoderSession, VP8DecoderSession + BooleanEncoder/Decoder, DCT, IntraPrediction, SubpelPrediction, Quantizer, QuantMatrix, TrellisQuantizer, Macroblock, NearMvs, VP8Tables, VP8Costs, VP8TokenEncoder/Decoder, LoopFilter, RateDistortion, ChromaUpsampler
+        ├── vp8/                # VP8Encoder, VP8Decoder, VP8EncoderSession, VP8DecoderSession + BooleanEncoder/Decoder, DCT, IntraPrediction, SubpelPrediction, QuantMatrix, TrellisQuantizer, Macroblock, NearMvs, VP8Tables, VP8Costs, VP8TokenEncoder/Decoder, LoopFilter, ChromaUpsampler
         └── vp8l/               # VP8LEncoder, VP8LDecoder, NearLosslessPreprocess + BitReader/Writer, HuffmanTree, ColorCache, LZ77, VP8LTransform
 ```
 

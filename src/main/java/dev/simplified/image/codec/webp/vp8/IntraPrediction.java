@@ -40,10 +40,6 @@ final class IntraPrediction {
     static final int B_HU_PRED = 9;
 
     /**
-     * Number of 16x16 luma modes (excluding B_PRED).
-     */
-    static final int NUM_16x16_MODES = 4;
-    /**
      * Number of macroblock luma modes (including B_PRED).
      */
     static final int NUM_YMODES = 5;
@@ -51,10 +47,6 @@ final class IntraPrediction {
      * Number of 4x4 sub-block modes.
      */
     static final int NUM_4x4_MODES = 10;
-    /**
-     * Number of 8x8 chroma modes.
-     */
-    static final int NUM_CHROMA_MODES = 4;
 
     private IntraPrediction() { }
 
@@ -290,22 +282,6 @@ final class IntraPrediction {
             }
             default -> java.util.Arrays.fill(predicted, (short) 128);
         }
-    }
-
-    /**
-     * Computes the sum of squared differences between two blocks.
-     *
-     * @param original the original pixel block
-     * @param predicted the predicted pixel block
-     * @return the sum of squared differences
-     */
-    static long computeSSD(short @NotNull [] original, short @NotNull [] predicted) {
-        long ssd = 0;
-        for (int i = 0; i < original.length; i++) {
-            int diff = original[i] - predicted[i];
-            ssd += (long) diff * diff;
-        }
-        return ssd;
     }
 
     private static short avg2(int a, int b) {

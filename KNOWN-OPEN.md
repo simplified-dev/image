@@ -5,7 +5,7 @@ Defects present in the current tree and not yet fixed, most severe first. Each e
 ## VP8 encoder point-samples 4:2:0 chroma instead of averaging
 `Macroblock.fromARGB` takes each 2x2 block's Cb/Cr from its top-left pixel rather than averaging the four pixels, so every lossy WebP encode aliases thin colour detail such as one-pixel lines and coloured text edges. The bitstream stays valid; the cost is fidelity.
 
-- Affected: `src/main/java/dev/simplified/image/codec/webp/vp8/Macroblock.java:76-81` (`fromARGB`); callers `src/main/java/dev/simplified/image/codec/webp/vp8/VP8Encoder.java:1594`, `:2208`, `:3103`
+- Affected: `src/main/java/dev/simplified/image/codec/webp/vp8/Macroblock.java:62-67` (`fromARGB`); callers `src/main/java/dev/simplified/image/codec/webp/vp8/VP8Encoder.java:1594`, `:2208`, `:3103`
 - Severity: **MEDIUM**
 - Type: **BUG**
 - Status: **OPEN**
@@ -120,14 +120,6 @@ The source/destination-rectangle form and the `AffineTransform` form write every
 - Affected: `src/main/java/dev/simplified/image/pixel/PixelGraphics.java:695-719`, `src/main/java/dev/simplified/image/pixel/PixelGraphics.java:727-753`
 - Severity: **LOW**
 - Type: **BUG**
-- Status: **OPEN**
-
-## `Quantizer`, `RateDistortion` and `Macroblock.toARGB` are dead code
-Nothing constructs `Quantizer` or `RateDistortion` except each other, and nothing calls `Macroblock.toARGB`. `RateDistortion`'s class javadoc still calls it the encoder's mode-decision engine, which it is not: the encoder scores modes itself.
-
-- Affected: `src/main/java/dev/simplified/image/codec/webp/vp8/Quantizer.java:11`, `src/main/java/dev/simplified/image/codec/webp/vp8/RateDistortion.java:12`, `src/main/java/dev/simplified/image/codec/webp/vp8/Macroblock.java:95` (`toARGB`)
-- Severity: **LOW**
-- Type: **GAP**
 - Status: **OPEN**
 
 ## `VP8Encoder` holds libwebp lambdas no scorer reads

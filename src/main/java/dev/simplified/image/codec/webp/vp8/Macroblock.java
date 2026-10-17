@@ -3,11 +3,10 @@ package dev.simplified.image.codec.webp.vp8;
 import org.jetbrains.annotations.NotNull;
 
 /**
- * VP8 macroblock data structure representing a 16x16 pixel region.
+ * VP8 macroblock source samples for a 16x16 pixel region.
  * <p>
- * Contains 16 luma 4x4 sub-blocks, 4 Cb and 4 Cr 4x4 sub-blocks,
- * prediction modes, quantized coefficients, and reconstructed pixels.
- * Handles RGB-to-YCbCr conversion on input and YCbCr-to-RGB on output.
+ * Holds the 256 luma samples and the 8x8 Cb and Cr samples the encoder predicts and codes,
+ * converted from ARGB by {@link #fromARGB}.
  */
 final class Macroblock {
 
@@ -23,19 +22,6 @@ final class Macroblock {
      * Cr chroma samples (8x8 = 64 values).
      */
     final short[] cr = new short[64];
-
-    /**
-     * Reconstructed luma (after decode or encode round-trip).
-     */
-    final short[] reconY = new short[256];
-    /**
-     * Reconstructed Cb.
-     */
-    final short[] reconCb = new short[64];
-    /**
-     * Reconstructed Cr.
-     */
-    final short[] reconCr = new short[64];
 
     /**
      * Selected 16x16 prediction mode.
@@ -79,41 +65,6 @@ final class Macroblock {
                     cb[cy * 8 + cx] = (short) clamp(((-38 * r - 74 * g + 112 * b + 128) >> 8) + 128);
                     cr[cy * 8 + cx] = (short) clamp(((112 * r - 94 * g - 18 * b + 128) >> 8) + 128);
                 }
-            }
-        }
-    }
-
-    /**
-     * Converts reconstructed YCbCr data back to ARGB and writes to the pixel array.
-     *
-     * @param pixels the output ARGB pixel array
-     * @param mbX the macroblock column index
-     * @param mbY the macroblock row index
-     * @param imageWidth the full image width
-     * @param imageHeight the full image height
-     */
-    void toARGB(int @NotNull [] pixels, int mbX, int mbY, int imageWidth, int imageHeight) {
-        int startX = mbX * 16;
-        int startY = mbY * 16;
-
-        for (int dy = 0; dy < 16; dy++) {
-            int py = startY + dy;
-            if (py >= imageHeight) break;
-
-            for (int dx = 0; dx < 16; dx++) {
-                int px = startX + dx;
-                if (px >= imageWidth) break;
-
-                int yVal = reconY[dy * 16 + dx] - 16;
-                int cbVal = reconCb[(dy >> 1) * 8 + (dx >> 1)] - 128;
-                int crVal = reconCr[(dy >> 1) * 8 + (dx >> 1)] - 128;
-
-                // ITU-R BT.601 inverse
-                int r = clamp((298 * yVal + 409 * crVal + 128) >> 8);
-                int g = clamp((298 * yVal - 100 * cbVal - 208 * crVal + 128) >> 8);
-                int b = clamp((298 * yVal + 516 * cbVal + 128) >> 8);
-
-                pixels[py * imageWidth + px] = 0xFF000000 | (r << 16) | (g << 8) | b;
             }
         }
     }
