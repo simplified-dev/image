@@ -6,11 +6,15 @@ import dev.simplified.image.PixelBuffer;
 import dev.simplified.image.StaticImageData;
 import dev.simplified.image.codec.png.PngImageReader;
 import dev.simplified.image.codec.png.PngImageWriter;
+import dev.simplified.image.frame.FrameBlend;
+import dev.simplified.image.frame.FrameDisposal;
 import dev.simplified.image.frame.ImageFrame;
+import dev.simplified.image.frame.LoopCount;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.instanceOf;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.sameInstance;
 
@@ -88,6 +92,44 @@ class BackgroundTest {
         assertThat(out.getFrames().getFirst().delayMs(), is(40));
         assertThat(out.getFrames().getLast().delayMs(), is(60));
         assertThat(out.getFrames().getFirst().pixels().getPixel(0, 0), is(0xFF222222));
+    }
+
+    @Test
+    @DisplayName("composite keeps an animation's canvas and playback when the canvas is larger than its first frame")
+    void keepsTheCanvasOfAnAnimation() {
+        AnimatedImageData animated = AnimatedImageData.builder()
+            .withWidth(8)
+            .withHeight(6)
+            .withFrame(ImageFrame.of(PixelBuffer.create(2, 2), 40, 1, 1, FrameDisposal.DO_NOT_DISPOSE, FrameBlend.OVER))
+            .withFrame(ImageFrame.of(PixelBuffer.create(3, 3), 60, 4, 2, FrameDisposal.RESTORE_TO_PREVIOUS, FrameBlend.SOURCE))
+            .withLoopCount(LoopCount.of(3))
+            .withBackgroundColor(0xFF00FF00)
+            .withAlphaMode(AlphaMode.PREMULTIPLIED)
+            .build();
+
+        ImageData out = Background.solid(0xFF222222).composite(animated);
+        assertThat(out, is(instanceOf(AnimatedImageData.class)));
+
+        AnimatedImageData composited = (AnimatedImageData) out;
+        assertThat(composited.getWidth(), is(8));
+        assertThat(composited.getHeight(), is(6));
+        assertThat(composited.getLoopCount(), is(LoopCount.of(3)));
+        assertThat(composited.getBackgroundColor(), is(0xFF00FF00));
+        assertThat(composited.getAlphaMode(), is(AlphaMode.PREMULTIPLIED));
+        assertThat(composited.getTotalDurationMs(), is(100));
+        assertThat(composited.getFrames().size(), is(2));
+
+        for (int i = 0; i < 2; i++) {
+            ImageFrame source = animated.getFrames().get(i);
+            ImageFrame frame = composited.getFrames().get(i);
+            assertThat(frame.width(), is(source.width()));
+            assertThat(frame.height(), is(source.height()));
+            assertThat(frame.delayMs(), is(source.delayMs()));
+            assertThat(frame.offsetX(), is(source.offsetX()));
+            assertThat(frame.offsetY(), is(source.offsetY()));
+            assertThat(frame.disposal(), is(source.disposal()));
+            assertThat(frame.blend(), is(source.blend()));
+        }
     }
 
     @Test

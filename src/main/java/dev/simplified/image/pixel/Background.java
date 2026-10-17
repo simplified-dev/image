@@ -78,10 +78,12 @@ public sealed interface Background permits Background.Solid, Background.Checkerb
     /**
      * Composites {@code image} over this background, applied as the very last step. Each frame is
      * laid with {@link BlendMode#PREMULTIPLIED} onto a freshly filled background buffer of the same
-     * size; per-frame timing and metadata are preserved, and the result holds the convention
-     * {@code image} holds. Under an image held in {@link AlphaMode#PREMULTIPLIED} the fill is
-     * premultiplied first. A {@linkplain #isTransparent() transparent} background returns
-     * {@code image} unchanged.
+     * size, and the result holds the convention {@code image} holds. Under an image held in
+     * {@link AlphaMode#PREMULTIPLIED} the fill is premultiplied first. A
+     * {@linkplain #isTransparent() transparent} background returns {@code image} unchanged.
+     * <p>
+     * An animation keeps its canvas size and each frame's timing, offset, disposal and blend, and -
+     * when it is an {@link AnimatedImageData} - its loop count and background colour.
      *
      * @param image the finished render
      * @return the backgrounded image, or {@code image} unchanged when this background is transparent
@@ -94,7 +96,11 @@ public sealed interface Background permits Background.Solid, Background.Checkerb
         if (!image.isAnimated())
             return StaticImageData.of(over(image.getFrames().getFirst().pixels(), alphaMode), alphaMode);
 
-        AnimatedImageData.Builder builder = AnimatedImageData.builder().withAlphaMode(alphaMode);
+        AnimatedImageData.Builder builder = AnimatedImageData.builder()
+            .withWidth(image.getWidth())
+            .withHeight(image.getHeight())
+            .withAlphaMode(alphaMode);
+
         if (image instanceof AnimatedImageData animated)
             builder.withLoopCount(animated.getLoopCount()).withBackgroundColor(animated.getBackgroundColor());
         for (ImageFrame frame : image.getFrames())
