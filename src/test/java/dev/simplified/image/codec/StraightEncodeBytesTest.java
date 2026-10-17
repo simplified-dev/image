@@ -129,7 +129,6 @@ class StraightEncodeBytesTest {
 
     @TestFactory
     Stream<DynamicTest> factoryWritesTheWriterBytes() {
-
         return CASES.stream()
             .map(entry -> DynamicTest.dynamicTest(entry.name(), () -> {
                 ImageData image = image(entry.animated(), null);

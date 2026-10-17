@@ -138,13 +138,13 @@ public class ImageFactory {
      * @param format the image format to use
      * @param options format-specific read options, or null for defaults
      * @return the decoded image data
-     * @throws ImageException if decoding fails or no reader is registered for the format
+     * @throws ImageException if decoding fails
      */
     public static @NotNull ImageData fromByteArray(byte @NotNull [] bytes, @NotNull ImageFormat format, @Nullable ImageReadOptions options) {
         ImageReader reader = READERS.stream()
             .filter(r -> r.getFormat() == format)
             .findFirst()
-            .orElseThrow(() -> new UnsupportedFormatException("No reader registered for format '%s'", format.getFormatName()));
+            .orElseThrow(() -> new UnsupportedFormatException("No built-in reader for format '%s'", format.getFormatName()));
 
         return reader.read(bytes, options);
     }
@@ -263,13 +263,13 @@ public class ImageFactory {
      * @param format the target image format
      * @param options format-specific write options, or null for defaults
      * @return the encoded bytes
-     * @throws ImageException if encoding fails or no writer is registered for the format
+     * @throws ImageException if encoding fails
      */
     public static byte @NotNull [] toByteArray(@NotNull ImageData data, @NotNull ImageFormat format, @Nullable ImageWriteOptions options) {
         ImageWriter writer = WRITERS.stream()
             .filter(w -> w.getFormat() == format)
             .findFirst()
-            .orElseThrow(() -> new UnsupportedFormatException("No writer registered for format '%s'", format.getFormatName()));
+            .orElseThrow(() -> new UnsupportedFormatException("No built-in writer for format '%s'", format.getFormatName()));
 
         return writer.write(data, options);
     }
