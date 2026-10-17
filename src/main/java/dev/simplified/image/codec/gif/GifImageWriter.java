@@ -11,6 +11,9 @@ import dev.simplified.image.data.AnimatedImageData;
 import dev.simplified.image.data.FrameBlend;
 import dev.simplified.image.data.FrameDisposal;
 import dev.simplified.image.data.ImageFrame;
+import dev.simplified.image.pixel.AlphaMode;
+import dev.simplified.image.pixel.BlendMode;
+import dev.simplified.image.pixel.ColorMath;
 import dev.simplified.util.io.ByteArrayDataOutput;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -147,6 +150,11 @@ public class GifImageWriter implements ImageWriter {
      * below {@code alphaThreshold} become transparent-marker pixels (ARGB {@code 0x00000000});
      * everything else is blended onto {@code backgroundRgb} and emitted fully opaque
      * ({@code 0xFF......}).
+     * <p>
+     * A partly transparent pixel is blended by the convention {@link ImageData#getAlphaMode()}
+     * reports: premultiplied colour is laid over the background with
+     * {@link BlendMode#PREMULTIPLIED}, rounded once, and straight colour is weighted by its alpha
+     * against the background.
      */
     private static int @NotNull [] flattenAllFrames(
         @NotNull ImageData data,
@@ -154,6 +162,8 @@ public class GifImageWriter implements ImageWriter {
         boolean transparent,
         int alphaThreshold
     ) {
+        boolean premultiplied = data.getAlphaMode() == AlphaMode.PREMULTIPLIED;
+        int opaqueBackground = 0xFF000000 | backgroundRgb;
         int bgR = (backgroundRgb >> 16) & 0xFF;
         int bgG = (backgroundRgb >> 8) & 0xFF;
         int bgB = backgroundRgb & 0xFF;
@@ -173,6 +183,10 @@ public class GifImageWriter implements ImageWriter {
                 }
                 if (a >= 255) {
                     out[offset + i] = 0xFF000000 | (argb & 0xFFFFFF);
+                    continue;
+                }
+                if (premultiplied) {
+                    out[offset + i] = 0xFF000000 | ColorMath.blend(argb, opaqueBackground, BlendMode.PREMULTIPLIED);
                     continue;
                 }
                 int r = (argb >> 16) & 0xFF;

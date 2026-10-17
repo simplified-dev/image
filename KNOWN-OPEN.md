@@ -21,7 +21,7 @@ Defects present in the current tree and not yet fixed, most severe first. Each e
 ## GIF writer misreads frames of different sizes and drops frame offsets
 `flattenAllFrames` packs every frame's pixels back to back, but the write loop reads frame i at `i * frameStride`, where `frameStride` is the largest frame's area, so an animation whose frames differ in size is written from the wrong slices and the last one overruns the array: frames of 4x4, 2x2 and 2x2 throw `ArrayIndexOutOfBoundsException: Index 32 out of bounds for length 24`. `configureFrameMetadata` writes only the GraphicControlExtension and never the ImageDescriptor's `imageLeftPosition` / `imageTopPosition`, so every frame is written at the origin. A GIF this library decodes - partial frames at offsets - therefore cannot be re-encoded: it throws, or, where its partial frames happen to share one size, it is written with every frame moved to the top-left corner. HIGH once a caller re-encodes decoded GIFs.
 
-- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:103-126` (`write`, the `frameStride` read), `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:151` (`flattenAllFrames`), `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:552-570` (`configureFrameMetadata`)
+- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:106-129` (`write`, the `frameStride` read), `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:159` (`flattenAllFrames`), `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:566-584` (`configureFrameMetadata`)
 - Severity: **MEDIUM**
 - Type: **BUG**
 - Status: **OPEN**
@@ -50,14 +50,6 @@ Line 20 says the encoder is keyframe-only 16x16 intra with no B_PRED and no inte
 - Type: **GAP**
 - Status: **OPEN**
 
-## Encoders read every buffer as straight colour, so a premultiplied buffer has no encode path
-`toBufferedImage` declares its pixels straight (`ColorModel.getRGBdefault()`, raster not premultiplied), and `GifImageWriter.flattenAllFrames` composites each pixel over the background as straight colour. A buffer holding premultiplied colour - anything drawn with source-over onto a transparent surface, which is what asset-renderer hands out - is therefore written with its colour already scaled by alpha, and a viewer or the GIF flatten scales it again: every partly transparent pixel lands darker than it was drawn, a translucent subject whole and an anti-aliased edge as a dark fringe. A caller can convert first with `unpremultiplyAlpha`; no encoder takes an `AlphaMode`. asset-renderer's PNG and GIF output carries this today. HIGH once a consumer shows a translucent render visibly darker.
-
-- Affected: `src/main/java/dev/simplified/image/pixel/PixelBuffer.java:1089-1101` (`toBufferedImage`), `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:151-189` (`flattenAllFrames`)
-- Severity: **MEDIUM**
-- Type: **GAP**
-- Status: **OPEN**
-
 ## No downscale averages: `blitScaled` decimates
 `blitScaled` and `blitScaledFxaa` map each destination pixel to one source pixel (`x * sw / dw`, read from the column table `sourceColumns` builds) and offer no other filter, and `resize` offers `NEAREST`, a 2x2 `BILINEAR` with no prefilter, and AWT `BICUBIC`. The library's one box filter, `PixelMask.downsample`, is boolean. A supersampled render scaled down through either composite keeps one sample of each block and discards the rest, so the supersampling averages nothing, and a `BILINEAR` downscale beyond 2x aliases the same way. asset-renderer's `RasterPass` scales down through `blitScaledFxaa` when it anti-aliases and through `blitScaled` when it does not: FXAA smooths the hi-res pixels the scale-down samples, and the scale-down still keeps one sample per block - a decimation of a filtered source. What such a caller needs is an area-averaging downsample of premultiplied colour.
 
@@ -69,7 +61,7 @@ Line 20 says the encoder is keyframe-only 16x16 intra with no B_PRED and no inte
 ## WebP write options cannot force infinite looping over a finite count
 `WebPImageWriter` reads a loop count of 0 in `WebPWriteOptions` as "unset" and falls back to the image's own loop count. `withLoopCount(0)`, which means infinite, is therefore ignored whenever the `AnimatedImageData` carries a finite count.
 
-- Affected: `src/main/java/dev/simplified/image/codec/webp/WebPImageWriter.java:61-63`
+- Affected: `src/main/java/dev/simplified/image/codec/webp/WebPImageWriter.java:65-67`
 - Severity: **LOW**
 - Type: **BUG**
 - Status: **OPEN**
@@ -77,7 +69,15 @@ Line 20 says the encoder is keyframe-only 16x16 intra with no B_PRED and no inte
 ## GIF writer ignores the image's loop count whenever options are passed
 When `GifWriteOptions` are supplied, `GifImageWriter` takes the loop count only from the options, whose default of 0 means infinite. A finite-loop GIF re-encoded with options, for example to set transparency, loops forever. The WebP writer applies the opposite precedence.
 
-- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:66-75`
+- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:69-78`
+- Severity: **LOW**
+- Type: **BUG**
+- Status: **OPEN**
+
+## GIF writer floors the flatten of a straight image
+`flattenAllFrames` lays a partly transparent straight pixel over the background as `(c * a + bg * (255 - a)) / 255`, an integer division, so every such pixel lands up to a level low: at worst 0.996 of a level from the exact composite over 455,168 cases (backgrounds 0, 1, 16, 127, 128, 198 and 255, every partial alpha, every straight level), where the premultiplied flatten beside it, rounded once, lands within 0.498. A straight image and its premultiplied twin therefore flatten up to a level apart. Rounding it moves the bytes of every GIF written from a straight image with partial alpha. MEDIUM once a caller holds GIF output to an exact composite.
+
+- Affected: `src/main/java/dev/simplified/image/codec/gif/GifImageWriter.java:195-197` (`flattenAllFrames`)
 - Severity: **LOW**
 - Type: **BUG**
 - Status: **OPEN**
