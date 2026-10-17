@@ -25,6 +25,11 @@ import org.jetbrains.annotations.Nullable;
 /**
  * Reads WebP images (static and animated, lossless and lossy) using a pure Java
  * implementation of the VP8L and VP8 codecs.
+ * <p>
+ * An animated image's frames are read composed: each is the whole canvas as it stands once its
+ * frame has been drawn, at the origin, blended {@link FrameBlend#SOURCE} and disposed
+ * {@link FrameDisposal#RESTORE_TO_BACKGROUND}, so it replaces the frame before it whatever blend
+ * and disposal the file declares for its frame.
  */
 @ApiStatus.Internal
 public class WebPImageReader implements ImageReader {
@@ -247,9 +252,12 @@ public class WebPImageReader implements ImageReader {
 
             // Snapshot the full canvas as this frame's pixels so callers see
             // composed full-image data (matching libwebp's WebPAnimDecoder).
+            // The snapshot has already taken this frame's blend and the prior
+            // frame's disposal, so it carries neither: it is a whole canvas
+            // that replaces the one before it.
             int[] snapshot = canvas.clone();
             PixelBuffer composed = PixelBuffer.of(snapshot, canvasWidth, canvasHeight);
-            frames.add(ImageFrame.of(composed, durationMs, 0, 0, disposal, blend));
+            frames.add(ImageFrame.of(composed, durationMs));
 
             priorFrameX = frameX;
             priorFrameY = frameY;
