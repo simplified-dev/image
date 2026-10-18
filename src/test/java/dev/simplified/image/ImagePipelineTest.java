@@ -20,6 +20,7 @@ import dev.simplified.image.codec.tga.TgaImageReader;
 import dev.simplified.image.codec.tga.TgaImageWriter;
 import dev.simplified.image.codec.tiff.TiffImageReader;
 import dev.simplified.image.codec.tiff.TiffImageWriter;
+import dev.simplified.image.exception.ImageDecodeException;
 import dev.simplified.image.exception.UnsupportedFormatException;
 import dev.simplified.image.frame.FrameNormalizer;
 import dev.simplified.image.frame.ImageFrame;
@@ -925,6 +926,26 @@ public class ImagePipelineTest {
             ImageData decoded = new IcoImageReader().read(encoded);
             PixelBuffer got = decoded.getFrames().getFirst().pixels();
             assertThat(got.getPixel(0, 0), is(0xFFABCDEF));
+        }
+
+        @Test
+        void subimagePastIntRangeIsRefused() {
+            // The second entry is the larger, so the one read, and its offset and size add up past
+            // Integer.MAX_VALUE: only a sum taken in long sees the subimage run past the data.
+            byte[] ico = new byte[42];
+            ico[2] = 1;
+            ico[4] = 2;
+            int[][] entries = {{1, 4, 38}, {32, 0x20, 0x7FFFFFF0}};
+            for (int e = 0; e < entries.length; e++) {
+                int at = 6 + 16 * e;
+                ico[at] = (byte) entries[e][0];
+                ico[at + 1] = (byte) entries[e][0];
+                for (int i = 0; i < 4; i++) {
+                    ico[at + 8 + i] = (byte) (entries[e][1] >>> (8 * i));
+                    ico[at + 12 + i] = (byte) (entries[e][2] >>> (8 * i));
+                }
+            }
+            assertThrows(ImageDecodeException.class, () -> new IcoImageReader().read(ico));
         }
 
         @Test

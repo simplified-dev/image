@@ -77,7 +77,7 @@ public class IcoImageReader implements ImageReader {
         int blobSize = LittleEndian.readUint32(data, entryOff + 8);
         int blobOff = LittleEndian.readUint32(data, entryOff + 12);
 
-        if (blobOff < 0 || blobSize <= 0 || blobOff + blobSize > data.length)
+        if (blobOff < 0 || blobSize <= 0 || (long) blobOff + blobSize > data.length)
             throw new ImageDecodeException("ICO subimage data out of bounds");
 
         byte[] blob = Arrays.copyOfRange(data, blobOff, blobOff + blobSize);
