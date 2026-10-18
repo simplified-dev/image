@@ -55,6 +55,21 @@ class VP8LibvpxParityTest {
         assertDecodesAsLibvpx("shear", stream, 128, 96);
     }
 
+    @Test
+    @DisplayName("libvpx's SPLITMV residuals decode here as libvpx decodes them")
+    void libvpxSplitMvResidualsDecodeAsLibvpxDoes() throws IOException {
+        // At a fine quantizer libvpx codes most of these scenes' SPLITMV macroblocks with a
+        // residual, which carries no Y2 block: each of its sixteen luma blocks holds its own DC.
+        List<PixelBuffer> shear = new ArrayList<>();
+        List<PixelBuffer> opposed = new ArrayList<>();
+        for (int frame = 0; frame < 10; frame++) {
+            shear.add(shear(128, 96, frame));
+            opposed.add(opposed(170, 134, frame));
+        }
+        assertDecodesAsLibvpx("libvpx's shear", LibvpxOracle.encode(shear, 4), 128, 96);
+        assertDecodesAsLibvpx("libvpx's opposed", LibvpxOracle.encode(opposed, 4), 170, 134);
+    }
+
     /**
      * Decodes a stream through this library and through libvpx, and fails on the first sample where
      * they part.

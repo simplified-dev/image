@@ -1038,9 +1038,12 @@ public final class VP8Decoder {
      * Residual-decode and commit for an inter MB whose MC prediction has already been
      * built into {@code predY} / {@code predU} / {@code predV}. Shared between the
      * whole-MB inter path ({@link #decodeInterWithMv}) and the SPLITMV per-sub-block
-     * path which builds prediction differently but uses the same token layout. A skipped
-     * MB clears its contexts through {@link #clearNzForSkip}, a SPLITMV one keeping its Y2
-     * context as libvpx's {@code vp8_reset_mb_tokens_context} does.
+     * path. A whole-MB residual codes a Y2 block and sixteen luma AC blocks; a SPLITMV one
+     * codes no Y2 block, its sixteen luma blocks each carrying their own DC as B_PRED's do,
+     * and leaves the Y2 context as it found it, as libvpx's {@code vp8_decode_mb_tokens}
+     * reads a macroblock without {@code has_y2_block}. A skipped MB clears its contexts
+     * through {@link #clearNzForSkip}, a SPLITMV one keeping its Y2 context as libvpx's
+     * {@code vp8_reset_mb_tokens_context} does.
      *
      * @param splitMv whether the MB is SPLITMV
      */
@@ -1060,27 +1063,32 @@ public final class VP8Decoder {
             // Skip: no residual, prediction is the final reconstruction.
             clearNzForSkip(top, left, splitMv);
         } else {
-            // Y2 first (inter MBs that aren't B_PRED always have Y2).
-            short[] zz = new short[16];
-            int ctx = top[8] + left[8];
-            int nz = VP8TokenDecoder.decode(td, zz, 0, ctx, VP8Tables.TYPE_I16_DC, s.proba);
-            top[8] = left[8] = nz;
-            int anyNz = nz;
-            short[] y2Raster = zigzagToRaster(zz);
-            y2Raster[0] = (short) (y2Raster[0] * s.y2Dc);
-            for (int i = 1; i < 16; i++) y2Raster[i] = (short) (y2Raster[i] * s.y2Ac);
-            DCT.inverseWHT(y2Raster, dcValues);
+            // Y2 first, for a whole-MB residual only; a SPLITMV one has none.
+            int anyNz = 0;
+            if (!splitMv) {
+                short[] zz = new short[16];
+                int ctx = top[8] + left[8];
+                int nz = VP8TokenDecoder.decode(td, zz, 0, ctx, VP8Tables.TYPE_I16_DC, s.proba);
+                top[8] = left[8] = nz;
+                anyNz = nz;
+                short[] y2Raster = zigzagToRaster(zz);
+                y2Raster[0] = (short) (y2Raster[0] * s.y2Dc);
+                for (int i = 1; i < 16; i++) y2Raster[i] = (short) (y2Raster[i] * s.y2Ac);
+                DCT.inverseWHT(y2Raster, dcValues);
+            }
 
-            // 16 Y AC blocks.
+            // 16 Y blocks: AC only behind a Y2 block, DC and AC for SPLITMV.
+            int yFirst = splitMv ? 0 : 1;
+            int yType = splitMv ? VP8Tables.TYPE_I4_AC : VP8Tables.TYPE_I16_AC;
             for (int y = 0; y < 4; y++) {
                 for (int x = 0; x < 4; x++) {
                     short[] yzz = new short[16];
                     int yctx = top[x] + left[y];
-                    int ynz = VP8TokenDecoder.decode(td, yzz, 1, yctx, VP8Tables.TYPE_I16_AC, s.proba);
+                    int ynz = VP8TokenDecoder.decode(td, yzz, yFirst, yctx, yType, s.proba);
                     top[x] = left[y] = ynz;
                     anyNz |= ynz;
                     short[] raster = zigzagToRaster(yzz);
-                    raster[0] = dcValues[y * 4 + x];
+                    raster[0] = splitMv ? (short) (raster[0] * s.y1Dc) : dcValues[y * 4 + x];
                     for (int i = 1; i < 16; i++) raster[i] = (short) (raster[i] * s.y1Ac);
                     yCoefs[y * 4 + x] = raster;
                 }

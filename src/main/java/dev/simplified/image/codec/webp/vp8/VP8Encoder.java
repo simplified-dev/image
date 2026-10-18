@@ -1846,7 +1846,7 @@ public final class VP8Encoder {
             java.util.Arrays.fill(s.intraL, IntraPrediction.B_DC_PRED);
 
             BooleanEncoder tokenPart = s.tokens[mbY & (NUM_TOKEN_PARTITIONS - 1)];
-            s.mbHasCoeffs[mbIdx] = emitLumaTokens(s, tokenPart, mbX, /*isBPred=*/ false, i16.y2ZigZag, i16.yAcZigZag)
+            s.mbHasCoeffs[mbIdx] = emitLumaTokens(s, tokenPart, mbX, /*is4x4=*/ false, i16.y2ZigZag, i16.yAcZigZag)
                 | emitChromaTokensFromTrellis(s, tokenPart, mbX, u, /*isU=*/ true)
                 | emitChromaTokensFromTrellis(s, tokenPart, mbX, v, /*isU=*/ false);
             commitChromaFromDequant(s.reconU, s.chromaStride, mbX, mbY, predU, u.dequant);
@@ -1900,7 +1900,7 @@ public final class VP8Encoder {
             java.util.Arrays.fill(s.intraL, ctxMode);
 
             BooleanEncoder tokenPart = s.tokens[mbY & (NUM_TOKEN_PARTITIONS - 1)];
-            s.mbHasCoeffs[mbIdx] = emitLumaTokens(s, tokenPart, mbX, /*isBPred=*/ false, i16.y2ZigZag, i16.yAcZigZag)
+            s.mbHasCoeffs[mbIdx] = emitLumaTokens(s, tokenPart, mbX, /*is4x4=*/ false, i16.y2ZigZag, i16.yAcZigZag)
                 | emitChromaTokensFromTrellis(s, tokenPart, mbX, u, /*isU=*/ true)
                 | emitChromaTokensFromTrellis(s, tokenPart, mbX, v, /*isU=*/ false);
             commitChromaFromDequant(s.reconU, s.chromaStride, mbX, mbY, predU, u.dequant);
@@ -1950,7 +1950,7 @@ public final class VP8Encoder {
             commitLumaToRecon(s, mbX, mbY, bpred.recon);
 
             BooleanEncoder tokenPart = s.tokens[mbY & (NUM_TOKEN_PARTITIONS - 1)];
-            s.mbHasCoeffs[mbIdx] = emitLumaTokens(s, tokenPart, mbX, /*isBPred=*/ true, /*y2ZigZag=*/ null, bpred.yAc)
+            s.mbHasCoeffs[mbIdx] = emitLumaTokens(s, tokenPart, mbX, /*is4x4=*/ true, /*y2ZigZag=*/ null, bpred.yAc)
                 | emitChromaTokensFromTrellis(s, tokenPart, mbX, u, /*isU=*/ true)
                 | emitChromaTokensFromTrellis(s, tokenPart, mbX, v, /*isU=*/ false);
             commitChromaFromDequant(s.reconU, s.chromaStride, mbX, mbY, predU, u.dequant);
@@ -2056,7 +2056,8 @@ public final class VP8Encoder {
     /**
      * SPLITMV macroblock with a coded residual ({@code mb_skip = 0}). Same wire
      * layout as {@link SplitMvCandidate} for the MB-type / scheme / sub-MV-ref
-     * bits, but follows with a Y2 + 16 Y AC + chroma token payload built from
+     * bits, but follows with 16 luma blocks that each carry their own DC - no Y2
+     * block, as libvpx codes a SPLITMV residual - and the chroma tokens, built from
      * the (source - per-4x4-MC-prediction) residual. Useful when the per-4x4
      * prediction is close but not exact - the trellis can clean up small
      * mismatches that SPLITMV-skip would leave in the reconstruction.
@@ -2072,7 +2073,7 @@ public final class VP8Encoder {
         final int @NotNull [] slotWireRow;
         final int @NotNull [] slotWireCol;
         final short @NotNull [] predU, predV;
-        final @NotNull I16Result i16;
+        final @NotNull I16Result luma;
         final @NotNull ChromaTrellisResult u;
         final @NotNull ChromaTrellisResult v;
         final int @NotNull [] mvRefProbs;
@@ -2082,7 +2083,7 @@ public final class VP8Encoder {
                                  int @NotNull [] slotInternalRow, int @NotNull [] slotInternalCol,
                                  int @NotNull [] slotWireRow, int @NotNull [] slotWireCol,
                                  short @NotNull [] predU, short @NotNull [] predV,
-                                 @NotNull I16Result i16,
+                                 @NotNull I16Result luma,
                                  @NotNull ChromaTrellisResult u, @NotNull ChromaTrellisResult v,
                                  int @NotNull [] mvRefProbs) {
             super(sse, rate, lambda);
@@ -2097,7 +2098,7 @@ public final class VP8Encoder {
             this.slotWireCol = slotWireCol;
             this.predU = predU;
             this.predV = predV;
-            this.i16 = i16;
+            this.luma = luma;
             this.u = u;
             this.v = v;
             this.mvRefProbs = mvRefProbs;
@@ -2136,13 +2137,13 @@ public final class VP8Encoder {
             s.mbRefFrame[mbIdx] = LoopFilter.REF_LAST;
             s.mbModeLfIdx[mbIdx] = LoopFilter.MODE_SPLITMV;
 
-            commitLumaToRecon(s, mbX, mbY, i16.recon);
+            commitLumaToRecon(s, mbX, mbY, luma.recon);
 
             java.util.Arrays.fill(s.intraT, mbX * 4, mbX * 4 + 4, IntraPrediction.B_DC_PRED);
             java.util.Arrays.fill(s.intraL, IntraPrediction.B_DC_PRED);
 
             BooleanEncoder tokenPart = s.tokens[mbY & (NUM_TOKEN_PARTITIONS - 1)];
-            s.mbHasCoeffs[mbIdx] = emitLumaTokens(s, tokenPart, mbX, /*isBPred=*/ false, i16.y2ZigZag, i16.yAcZigZag)
+            s.mbHasCoeffs[mbIdx] = emitLumaTokens(s, tokenPart, mbX, /*is4x4=*/ true, /*y2ZigZag=*/ null, luma.yAcZigZag)
                 | emitChromaTokensFromTrellis(s, tokenPart, mbX, u, /*isU=*/ true)
                 | emitChromaTokensFromTrellis(s, tokenPart, mbX, v, /*isU=*/ false);
             commitChromaFromDequant(s.reconU, s.chromaStride, mbX, mbY, predU, u.dequant);
@@ -2679,8 +2680,8 @@ public final class VP8Encoder {
      * full per-4x4 MC prediction (luma + chroma via RFC 6386 section 17.4 averaging)
      * and evaluates BOTH the skip flavour ({@link SplitMvCandidate}) and the
      * residual flavour ({@link SplitMvResidualCandidate}, which trellises the
-     * (source - per-4x4-MC) residual through the same Y2 + 16 Y AC + chroma
-     * pipeline used by whole-MB inter residuals). Returns the minimum-R-D winner
+     * (source - per-4x4-MC) residual as 16 luma blocks that carry their own DC, through
+     * {@link #trellisSplitMvLuma}, plus chroma). Returns the minimum-R-D winner
      * across all {scheme, flavour} pairs.
      * <p>
      * Returns {@code null} when none of the considered schemes produced a usable
@@ -2840,25 +2841,23 @@ public final class VP8Encoder {
                 predY, predU, predV, mvRefProbs
             ));
 
-            // Residual flavour: trellis (mb - prediction) through the standard inter
-            // Y2 + 16 Y AC + chroma pipeline (same as InterResidualCandidate). The
-            // decoder treats SPLITMV residuals identically to any other inter
-            // residual (VP8Decoder.decodeInterResidualAndCommit).
-            I16Result i16 = trellisI16(s, mb.y, predY, mbX);
+            // Residual flavour: trellis (mb - prediction) as libvpx codes a SPLITMV
+            // residual - 16 luma blocks that carry their own DC, no Y2 block - plus chroma.
+            I16Result luma = trellisSplitMvLuma(s, mb.y, predY, mbX);
             ChromaTrellisResult u = trellisChroma(s, mbX, mb.cb, predU, /*isU=*/ true);
             ChromaTrellisResult v = trellisChroma(s, mbX, mb.cr, predV, /*isU=*/ false);
             short[] reconU = reconstructChroma8x8(predU, u.dequant);
             short[] reconV = reconstructChroma8x8(predV, v.dequant);
-            long residSse = sumSquaredError(mb.y, i16.recon)
+            long residSse = sumSquaredError(mb.y, luma.recon)
                           + sumSquaredError(mb.cb, reconU)
                           + sumSquaredError(mb.cr, reconV);
             int residTotalRate = skipBit0 + baseInterHeader + splitmvMvRefRate + slotsRate
-                               + i16.rate + u.rate + v.rate;
+                               + luma.rate + u.rate + v.rate;
             best = chooseBetter(best, new SplitMvResidualCandidate(
                 residSse, residTotalRate, lambda, scheme,
                 slotRow16, slotCol16, slotRef,
                 slotInternalRow, slotInternalCol, slotWireRow, slotWireCol,
-                predU, predV, i16, u, v, mvRefProbs
+                predU, predV, luma, u, v, mvRefProbs
             ));
         }
         return best;
@@ -2982,7 +2981,7 @@ public final class VP8Encoder {
 
     /**
      * Computes the bit cost of token-coding the 16 Y AC sub-blocks of a B_PRED MB. Mirrors
-     * {@link #emitLumaTokens}'s {@code isBPred=true} walk: each sub-block is coded as
+     * {@link #emitLumaTokens}'s {@code is4x4=true} walk: each sub-block is coded as
      * {@link VP8Tables#TYPE_I4_AC} starting at coefficient index 0 with a {@code top+left}
      * nz context that propagates through the 4x4 grid in raster order.
      */
@@ -3652,11 +3651,11 @@ public final class VP8Encoder {
     }
 
     /**
-     * Output of the per-MB 16x16 luma encode: zig-zag coefficients for emit + reconstruction.
+     * Output of a per-MB luma encode: zig-zag coefficients for emit + reconstruction.
      */
     private static final class I16Result {
-        final short[] y2ZigZag;              // Y2 block, zig-zag order (16 entries)
-        final short[][] yAcZigZag;           // 16 Y AC blocks, zig-zag order
+        final short[] y2ZigZag;              // Y2 block, zig-zag order (16 entries); null for SPLITMV
+        final short[][] yAcZigZag;           // 16 Y blocks, zig-zag order; AC only behind a Y2 block
         final short[] recon;                 // 256-sample reconstructed MB
         final int rate;                      // sum of residual bit costs across Y2 + 16 Y AC blocks
 
@@ -3746,6 +3745,55 @@ public final class VP8Encoder {
             }
         }
         return new I16Result(y2ZigZag, yAcZigZag, recon, rate);
+    }
+
+    /**
+     * DCTs, trellis-quantizes, and reconstructs a SPLITMV macroblock's 16x16 luma residual
+     * as libvpx codes it: no Y2 block, each of the 16 blocks carrying its own DC and coded at
+     * {@link VP8Tables#TYPE_I4_AC} from coefficient 0, as B_PRED's are. Does NOT mutate the
+     * frame-level {@link State#topNz} or {@link State#leftNz} - those are updated by the emit
+     * pass, which leaves the Y2 slots alone.
+     *
+     * @return the coded blocks in {@link I16Result#yAcZigZag}, no Y2 block, the MB-local
+     *         reconstruction and the blocks' token cost
+     */
+    private static @NotNull I16Result trellisSplitMvLuma(
+        @NotNull State s, short @NotNull [] src, short @NotNull [] pred, int mbX
+    ) {
+        int[] topNz = { s.topNz[mbX][0], s.topNz[mbX][1], s.topNz[mbX][2], s.topNz[mbX][3] };
+        int[] leftNz = { s.leftNz[0], s.leftNz[1], s.leftNz[2], s.leftNz[3] };
+        short[][] yZigZag = new short[16][];
+        short[] recon = new short[256];
+        int rate = 0;
+        for (int by = 0; by < 4; by++) {
+            for (int bx = 0; bx < 4; bx++) {
+                short[] residual = new short[16];
+                for (int y = 0; y < 4; y++)
+                    for (int x = 0; x < 4; x++) {
+                        int idx = (by * 4 + y) * 16 + bx * 4 + x;
+                        residual[y * 4 + x] = (short) (src[idx] - pred[idx]);
+                    }
+                short[] coef = new short[16];
+                DCT.forwardDCT(residual, coef);
+                int ctx = topNz[bx] + leftNz[by];
+                short[] zz = new short[16];
+                int nz = TrellisQuantizer.quantize(
+                    s.tokenCosts, coef, zz, ctx, VP8Tables.TYPE_I4_AC, s.y1Mtx, s.lambdaTrellisI4);
+                rate += VP8Costs.residualCost(s.tokenCosts, ctx, VP8Tables.TYPE_I4_AC, 0, zz);
+                yZigZag[by * 4 + bx] = zz;
+                topNz[bx] = nz;
+                leftNz[by] = nz;
+
+                // The trellis left the dequantized coefficients in coef.
+                DCT.inverseDCT(coef, residual);
+                for (int y = 0; y < 4; y++)
+                    for (int x = 0; x < 4; x++) {
+                        int idx = (by * 4 + y) * 16 + bx * 4 + x;
+                        recon[idx] = (short) clamp(pred[idx] + residual[y * 4 + x]);
+                    }
+            }
+        }
+        return new I16Result(null, yZigZag, recon, rate);
     }
 
     /**
@@ -4142,14 +4190,16 @@ public final class VP8Encoder {
 
     /**
      * Emits the luma coefficient tokens for one MB in libwebp's order: Y2 first
-     * (if {@code !isBPred}), then 16 Y sub-blocks in raster order. Coefficient blocks are
+     * (if {@code !is4x4}), then 16 Y sub-blocks in raster order. Coefficient blocks are
      * already in zig-zag order - trellis writes directly to zig-zag. Updates the
      * {@link State#topNz}/{@link State#leftNz} luma slots.
      *
+     * @param is4x4 whether the MB is B_PRED or SPLITMV, which code no Y2 block and carry
+     *              each luma block's DC in the block
      * @return whether any luma block, Y2 included, carries a non-zero level
      */
     private static boolean emitLumaTokens(
-        @NotNull State s, @NotNull BooleanEncoder t, int mbX, boolean isBPred,
+        @NotNull State s, @NotNull BooleanEncoder t, int mbX, boolean is4x4,
         short @Nullable [] y2ZigZag, short @NotNull [] @NotNull [] yAcZigZag
     ) {
         int[] top = s.topNz[mbX];
@@ -4158,11 +4208,12 @@ public final class VP8Encoder {
 
         int yFirst;
         int yType;
-        if (isBPred) {
+        if (is4x4) {
             yFirst = 0;
             yType = VP8Tables.TYPE_I4_AC;
-            // B_PRED MBs have no Y2 block - per libwebp ParseResiduals, neither encoder
-            // nor decoder touches the Y2 nz context bits (top[8]/left[8]) here.
+            // B_PRED and SPLITMV MBs have no Y2 block - per libwebp ParseResiduals and
+            // libvpx's has_y2_block, neither encoder nor decoder touches the Y2 nz context
+            // bits (top[8]/left[8]) here.
         } else {
             int ctx = top[8] + left[8];
             int nz = VP8TokenEncoder.emit(
