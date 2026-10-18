@@ -7,6 +7,7 @@ import dev.simplified.image.AnimatedImageData;
 import dev.simplified.image.ImageData;
 import dev.simplified.image.ImageFormat;
 import dev.simplified.image.codec.ImageWriter;
+import dev.simplified.image.codec.common.LittleEndian;
 import dev.simplified.image.exception.ImageEncodeException;
 import dev.simplified.image.frame.FrameBlend;
 import dev.simplified.image.frame.FrameDisposal;
@@ -675,11 +676,9 @@ public class GifImageWriter implements ImageWriter {
         IIOMetadataNode netscape = new IIOMetadataNode("ApplicationExtension");
         netscape.setAttribute("applicationID", "NETSCAPE");
         netscape.setAttribute("authenticationCode", "2.0");
-        netscape.setUserObject(new byte[] {
-            0x1,
-            (byte) (netscapeCount & 0xFF),
-            (byte) ((netscapeCount >> 8) & 0xFF)
-        });
+        byte[] loop = { 0x1, 0, 0 };
+        LittleEndian.writeUint16(loop, 1, netscapeCount);
+        netscape.setUserObject(loop);
         appExts.appendChild(netscape);
 
         metadata.setFromTree(formatName, root);

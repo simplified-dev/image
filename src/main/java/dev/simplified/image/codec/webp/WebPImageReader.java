@@ -82,8 +82,8 @@ public class WebPImageReader implements ImageReader {
         boolean hasAnimation = (flags & 0x02) != 0;
         boolean hasAlpha = (flags & 0x10) != 0;
 
-        int canvasWidth = 1 + ((payload[4] & 0xFF) | ((payload[5] & 0xFF) << 8) | ((payload[6] & 0xFF) << 16));
-        int canvasHeight = 1 + ((payload[7] & 0xFF) | ((payload[8] & 0xFF) << 8) | ((payload[9] & 0xFF) << 16));
+        int canvasWidth = 1 + LittleEndian.readUint24(payload, 4);
+        int canvasHeight = 1 + LittleEndian.readUint24(payload, 7);
 
         if (canvasWidth > 16383 || canvasHeight > 16383)
             throw new ImageDecodeException("VP8X canvas dimensions exceed spec maximum: %dx%d", canvasWidth, canvasHeight);
@@ -144,11 +144,11 @@ public class WebPImageReader implements ImageReader {
             if (anmf.length < 16)
                 throw new ImageDecodeException("ANMF chunk too short");
 
-            int frameX = 2 * ((anmf[0] & 0xFF) | ((anmf[1] & 0xFF) << 8) | ((anmf[2] & 0xFF) << 16));
-            int frameY = 2 * ((anmf[3] & 0xFF) | ((anmf[4] & 0xFF) << 8) | ((anmf[5] & 0xFF) << 16));
-            int frameW = 1 + ((anmf[6] & 0xFF) | ((anmf[7] & 0xFF) << 8) | ((anmf[8] & 0xFF) << 16));
-            int frameH = 1 + ((anmf[9] & 0xFF) | ((anmf[10] & 0xFF) << 8) | ((anmf[11] & 0xFF) << 16));
-            int durationMs = (anmf[12] & 0xFF) | ((anmf[13] & 0xFF) << 8) | ((anmf[14] & 0xFF) << 16);
+            int frameX = 2 * LittleEndian.readUint24(anmf, 0);
+            int frameY = 2 * LittleEndian.readUint24(anmf, 3);
+            int frameW = 1 + LittleEndian.readUint24(anmf, 6);
+            int frameH = 1 + LittleEndian.readUint24(anmf, 9);
+            int durationMs = LittleEndian.readUint24(anmf, 12);
             int flagsByte = anmf[15] & 0xFF;
 
             FrameDisposal disposal = (flagsByte & 0x01) != 0

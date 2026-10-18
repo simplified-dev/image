@@ -1,6 +1,7 @@
 package dev.simplified.image.codec.webp.vp8;
 
 import dev.simplified.image.PixelBuffer;
+import dev.simplified.image.codec.common.LittleEndian;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -4608,19 +4609,18 @@ public final class VP8Encoder {
         // stay 0 (simple-filter bilinear reconstruction profile).
         int frameTag = (1 << 4) | (firstSize << 5);
         if (!isKeyframe) frameTag |= 1;
-        frame[offset++] = (byte) (frameTag & 0xFF);
-        frame[offset++] = (byte) ((frameTag >>> 8) & 0xFF);
-        frame[offset++] = (byte) ((frameTag >>> 16) & 0xFF);
+        LittleEndian.writeUint24(frame, offset, frameTag);
+        offset += 3;
 
         if (isKeyframe) {
             frame[offset++] = (byte) 0x9D;
             frame[offset++] = (byte) 0x01;
             frame[offset++] = (byte) 0x2A;
 
-            frame[offset++] = (byte) (width & 0xFF);
-            frame[offset++] = (byte) ((width >>> 8) & 0x3F);
-            frame[offset++] = (byte) (height & 0xFF);
-            frame[offset++] = (byte) ((height >>> 8) & 0x3F);
+            // 14 bits of size, 2 of upscaling left 0.
+            LittleEndian.writeUint16(frame, offset, width & 0x3FFF);
+            LittleEndian.writeUint16(frame, offset + 2, height & 0x3FFF);
+            offset += 4;
         }
 
         System.arraycopy(firstPartition, 0, frame, offset, firstSize);
@@ -4628,10 +4628,8 @@ public final class VP8Encoder {
 
         // (N-1) size prefixes for partitions 0..N-2; the last partition's size is implicit.
         for (int p = 0; p < numParts - 1; p++) {
-            int partSize = tokenPartitions[p].length;
-            frame[offset++] = (byte) (partSize & 0xFF);
-            frame[offset++] = (byte) ((partSize >>> 8) & 0xFF);
-            frame[offset++] = (byte) ((partSize >>> 16) & 0xFF);
+            LittleEndian.writeUint24(frame, offset, tokenPartitions[p].length);
+            offset += 3;
         }
 
         // Concatenated partition bodies.

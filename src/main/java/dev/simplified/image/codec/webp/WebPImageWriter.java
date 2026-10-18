@@ -8,6 +8,7 @@ import dev.simplified.image.ImageData;
 import dev.simplified.image.ImageFormat;
 import dev.simplified.image.PixelBuffer;
 import dev.simplified.image.codec.ImageWriter;
+import dev.simplified.image.codec.common.LittleEndian;
 import dev.simplified.image.codec.webp.vp8.VP8Encoder;
 import dev.simplified.image.codec.webp.vp8.VP8EncoderSession;
 import dev.simplified.image.codec.webp.vp8l.NearLosslessPreprocess;
@@ -343,14 +344,8 @@ public class WebPImageWriter implements ImageWriter {
         if (alpha) flags |= 0x10;
         payload[0] = (byte) flags;
 
-        int w = width - 1;
-        int h = height - 1;
-        payload[4] = (byte) (w & 0xFF);
-        payload[5] = (byte) ((w >> 8) & 0xFF);
-        payload[6] = (byte) ((w >> 16) & 0xFF);
-        payload[7] = (byte) (h & 0xFF);
-        payload[8] = (byte) ((h >> 8) & 0xFF);
-        payload[9] = (byte) ((h >> 16) & 0xFF);
+        LittleEndian.writeUint24(payload, 4, width - 1);
+        LittleEndian.writeUint24(payload, 7, height - 1);
 
         return payload;
     }
@@ -373,12 +368,8 @@ public class WebPImageWriter implements ImageWriter {
 
     private static byte @NotNull [] buildAnimPayload(int backgroundColor, int loopCount) {
         byte[] payload = new byte[6];
-        payload[0] = (byte) (backgroundColor & 0xFF);
-        payload[1] = (byte) ((backgroundColor >> 8) & 0xFF);
-        payload[2] = (byte) ((backgroundColor >> 16) & 0xFF);
-        payload[3] = (byte) ((backgroundColor >> 24) & 0xFF);
-        payload[4] = (byte) (loopCount & 0xFF);
-        payload[5] = (byte) ((loopCount >> 8) & 0xFF);
+        LittleEndian.writeUint32(payload, 0, backgroundColor);
+        LittleEndian.writeUint16(payload, 4, loopCount);
         return payload;
     }
 
@@ -412,26 +403,11 @@ public class WebPImageWriter implements ImageWriter {
         // decoded pixel offset is 2 * raw value, so the offset MUST be even.
         // Callers are expected to have aligned to even coordinates before
         // reaching here (see FrameDiffUtil.computeBoundingBox).
-        int x = pixelOffsetX / 2;
-        int y = pixelOffsetY / 2;
-        int w = width - 1;
-        int h = height - 1;
-
-        payload[0] = (byte) (x & 0xFF);
-        payload[1] = (byte) ((x >> 8) & 0xFF);
-        payload[2] = (byte) ((x >> 16) & 0xFF);
-        payload[3] = (byte) (y & 0xFF);
-        payload[4] = (byte) ((y >> 8) & 0xFF);
-        payload[5] = (byte) ((y >> 16) & 0xFF);
-        payload[6] = (byte) (w & 0xFF);
-        payload[7] = (byte) ((w >> 8) & 0xFF);
-        payload[8] = (byte) ((w >> 16) & 0xFF);
-        payload[9] = (byte) (h & 0xFF);
-        payload[10] = (byte) ((h >> 8) & 0xFF);
-        payload[11] = (byte) ((h >> 16) & 0xFF);
-        payload[12] = (byte) (durationMs & 0xFF);
-        payload[13] = (byte) ((durationMs >> 8) & 0xFF);
-        payload[14] = (byte) ((durationMs >> 16) & 0xFF);
+        LittleEndian.writeUint24(payload, 0, pixelOffsetX / 2);
+        LittleEndian.writeUint24(payload, 3, pixelOffsetY / 2);
+        LittleEndian.writeUint24(payload, 6, width - 1);
+        LittleEndian.writeUint24(payload, 9, height - 1);
+        LittleEndian.writeUint24(payload, 12, durationMs);
         payload[15] = (byte) flags;
 
         int offset = 16;
@@ -453,10 +429,7 @@ public class WebPImageWriter implements ImageWriter {
         dst[offset + 2] = fc[2];
         dst[offset + 3] = fc[3];
         int size = body.length;
-        dst[offset + 4] = (byte) (size & 0xFF);
-        dst[offset + 5] = (byte) ((size >> 8) & 0xFF);
-        dst[offset + 6] = (byte) ((size >> 16) & 0xFF);
-        dst[offset + 7] = (byte) ((size >> 24) & 0xFF);
+        LittleEndian.writeUint32(dst, offset + 4, size);
         System.arraycopy(body, 0, dst, offset + 8, size);
         // Trailing pad byte (if any) is already zero from array allocation.
         return offset + 8 + size + (size & 1);

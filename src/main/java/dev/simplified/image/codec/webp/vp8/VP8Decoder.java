@@ -1,6 +1,7 @@
 package dev.simplified.image.codec.webp.vp8;
 
 import dev.simplified.image.PixelBuffer;
+import dev.simplified.image.codec.common.LittleEndian;
 import dev.simplified.image.exception.ImageDecodeException;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
@@ -335,7 +336,7 @@ public final class VP8Decoder {
         if (data.length < 3)
             throw new ImageDecodeException("VP8 data too short");
 
-        int frameTag = (data[0] & 0xFF) | ((data[1] & 0xFF) << 8) | ((data[2] & 0xFF) << 16);
+        int frameTag = LittleEndian.readUint24(data, 0);
         boolean keyFrame = (frameTag & 0x01) == 0;
         int firstPartSize = (frameTag >>> 5) & 0x7FFFF;
 
@@ -348,8 +349,8 @@ public final class VP8Decoder {
                 throw new ImageDecodeException("VP8 keyframe data too short");
             if (data[3] != (byte) 0x9D || data[4] != (byte) 0x01 || data[5] != (byte) 0x2A)
                 throw new ImageDecodeException("Invalid VP8 sync code");
-            width = ((data[6] & 0xFF) | ((data[7] & 0xFF) << 8)) & 0x3FFF;
-            height = ((data[8] & 0xFF) | ((data[9] & 0xFF) << 8)) & 0x3FFF;
+            width = LittleEndian.readUint16(data, 6) & 0x3FFF;
+            height = LittleEndian.readUint16(data, 8) & 0x3FFF;
             if (width == 0 || height == 0)
                 throw new ImageDecodeException("Invalid VP8 dimensions: %dx%d", width, height);
             headerStart = 10;
@@ -523,9 +524,7 @@ public final class VP8Decoder {
             int partSize;
             if (p < numTokenPartitions - 1) {
                 int o = partSizesOffset + p * 3;
-                partSize = (data[o] & 0xFF)
-                    | ((data[o + 1] & 0xFF) << 8)
-                    | ((data[o + 2] & 0xFF) << 16);
+                partSize = LittleEndian.readUint24(data, o);
             } else {
                 partSize = data.length - cursor;
             }

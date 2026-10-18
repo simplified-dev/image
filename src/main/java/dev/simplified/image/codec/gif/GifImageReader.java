@@ -10,6 +10,7 @@ import dev.simplified.image.ImageFormat;
 import dev.simplified.image.PixelBuffer;
 import dev.simplified.image.StaticImageData;
 import dev.simplified.image.codec.ImageReader;
+import dev.simplified.image.codec.common.LittleEndian;
 import dev.simplified.image.exception.ImageDecodeException;
 import dev.simplified.image.frame.FrameBlend;
 import dev.simplified.image.frame.FrameDisposal;
@@ -102,7 +103,7 @@ public class GifImageReader implements ImageReader {
 
         for (int i = 0; i < descriptors.length; i++) {
             int flags = descriptors[i];
-            int height = (data[flags - 2] & 0xFF) | ((data[flags - 1] & 0xFF) << 8);
+            int height = LittleEndian.readUint16(data, flags - 2);
 
             if ((data[flags] & INTERLACE_FLAG) == 0 || height > MAX_MISREAD_HEIGHT)
                 continue;
@@ -388,7 +389,7 @@ public class GifImageReader implements ImageReader {
             // ImageIO hands over the extension's sub-blocks joined, so the first byte is the first
             // sub-block's id.
             if (child.getUserObject() instanceof byte[] bytes && bytes.length >= 3 && bytes[0] == 1) {
-                int count = (bytes[1] & 0xFF) | ((bytes[2] & 0xFF) << 8);
+                int count = LittleEndian.readUint16(bytes, 1);
                 return count == 0 ? LoopCount.Preset.INFINITE : LoopCount.of(count);
             }
         }
