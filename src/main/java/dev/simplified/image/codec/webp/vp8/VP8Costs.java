@@ -272,18 +272,18 @@ final class VP8Costs {
     // @formatter:on
 
     /**
-     * Fixed bit-cost per chroma 8x8 mode (includes the {@code VP8BitCost(1, 145)}
-     * macroblock-mode selector). libwebp {@code VP8FixedCostsUV[4]}, indexed by
-     * {@code DC_PRED, V_PRED, H_PRED, TM_PRED}.
+     * Fixed bit-cost per chroma 8x8 mode: libwebp {@code VP8FixedCostsUV[4]}, indexed by
+     * this codec's mode numbers, {@code DC_PRED, V_PRED, H_PRED, TM_PRED}. libwebp's own
+     * array runs DC, TM, V, H.
      */
-    static final int[] FIXED_COSTS_UV = { 302, 984, 439, 642 };
+    static final int[] FIXED_COSTS_UV = { 302, 439, 642, 984 };
 
     /**
-     * Fixed bit-cost per 16x16 luma mode (includes the {@code VP8BitCost(0, 145)}
-     * macroblock-mode selector). libwebp {@code VP8FixedCostsI16[4]}, indexed by
-     * {@code DC_PRED, V_PRED, H_PRED, TM_PRED}.
+     * Fixed bit-cost per 16x16 luma mode, the {@code VP8BitCost(1, 145)} that selects 16x16
+     * prediction included: libwebp {@code VP8FixedCostsI16[4]}, indexed by this codec's mode
+     * numbers, {@code DC_PRED, V_PRED, H_PRED, TM_PRED}. libwebp's own array runs DC, TM, V, H.
      */
-    static final int[] FIXED_COSTS_I16 = { 663, 919, 872, 919 };
+    static final int[] FIXED_COSTS_I16 = { 663, 872, 919, 919 };
 
     /**
      * Fixed bit-cost per 4x4 luma sub-block mode, keyed by

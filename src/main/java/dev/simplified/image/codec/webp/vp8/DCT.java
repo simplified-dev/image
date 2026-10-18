@@ -3,7 +3,8 @@ package dev.simplified.image.codec.webp.vp8;
 import org.jetbrains.annotations.NotNull;
 
 /**
- * Forward and inverse 4x4 transforms for VP8 lossy coding.
+ * Forward and inverse 4x4 transforms for VP8 lossy coding, and the Hadamard texture
+ * distortion the encoder's mode decision weighs.
  * <p>
  * These are ports of libwebp's {@code FTransform_C} / {@code TransformOne_C}
  * (forward and inverse DCT in {@code src/dsp/enc.c} and {@code src/dsp/dec.c})
@@ -11,9 +12,16 @@ import org.jetbrains.annotations.NotNull;
  * Walsh-Hadamard). They must match libwebp bit-for-bit: libwebp's decoder
  * applies its own inverse transforms when reading our bitstream, so any
  * rounding drift between our forward transform and theirs becomes pixel
- * error in the decoded image.
+ * error in the decoded image. The texture distortion ports {@code TTransform},
+ * {@code Disto4x4_C} and {@code Disto16x16_C} from {@code src/dsp/enc.c}.
  */
 final class DCT {
+
+    /**
+     * libwebp's {@code kWeightY}: the weight of each Hadamard coefficient in the texture
+     * distortion, row-major by vertical then horizontal frequency.
+     */
+    private static final int[] WEIGHT_Y = { 38, 32, 20, 9, 32, 28, 17, 7, 20, 17, 10, 4, 9, 7, 4, 2 };
 
     /**
      * WEBP_TRANSFORM_AC3_C1 - first cosine constant (~20091/65536).
@@ -186,6 +194,77 @@ final class DCT {
             output[row + 2] = (short) ((a0 - a1) >> 3);
             output[row + 3] = (short) ((a3 - a2) >> 3);
         }
+    }
+
+    /**
+     * Measures how far one 4x4 block's texture sits from another's, matching libwebp's
+     * {@code Disto4x4_C}: the difference between the two blocks' {@link #WEIGHT_Y}-weighted
+     * sums of absolute Hadamard coefficients, divided by 32.
+     *
+     * @param a the first block's samples
+     * @param b the second block's samples, laid out as {@code a}'s are
+     * @param offset the index of each block's top-left sample
+     * @param stride the distance between rows
+     * @return the texture distortion, never negative
+     */
+    static int textureDistortion4x4(short @NotNull [] a, short @NotNull [] b, int offset, int stride) {
+        return Math.abs(weightedHadamard(b, offset, stride) - weightedHadamard(a, offset, stride)) >> 5;
+    }
+
+    /**
+     * Sums {@link #textureDistortion4x4} over the sixteen 4x4 blocks of a 16x16 macroblock,
+     * matching libwebp's {@code Disto16x16_C}.
+     *
+     * @param a the first macroblock's 256 samples, row-major
+     * @param b the second macroblock's 256 samples, row-major
+     * @return the texture distortion, never negative
+     */
+    static int textureDistortion16x16(short @NotNull [] a, short @NotNull [] b) {
+        int distortion = 0;
+        for (int y = 0; y < 16; y += 4)
+            for (int x = 0; x < 16; x += 4)
+                distortion += textureDistortion4x4(a, b, y * 16 + x, 16);
+        return distortion;
+    }
+
+    /**
+     * Returns the {@link #WEIGHT_Y}-weighted sum of a 4x4 block's absolute Hadamard
+     * coefficients, matching libwebp's {@code TTransform}.
+     *
+     * @param in the block's samples
+     * @param offset the index of the block's top-left sample
+     * @param stride the distance between rows
+     * @return the weighted sum
+     */
+    private static int weightedHadamard(short @NotNull [] in, int offset, int stride) {
+        int[] tmp = new int[16];
+
+        // Horizontal pass (per row i).
+        for (int i = 0; i < 4; i++) {
+            int row = offset + i * stride;
+            int a0 = in[row] + in[row + 2];
+            int a1 = in[row + 1] + in[row + 3];
+            int a2 = in[row + 1] - in[row + 3];
+            int a3 = in[row] - in[row + 2];
+            tmp[i * 4] = a0 + a1;
+            tmp[i * 4 + 1] = a3 + a2;
+            tmp[i * 4 + 2] = a3 - a2;
+            tmp[i * 4 + 3] = a0 - a1;
+        }
+
+        // Vertical pass (per column i), weighting each coefficient as it is produced.
+        int sum = 0;
+        for (int i = 0; i < 4; i++) {
+            int a0 = tmp[i] + tmp[8 + i];
+            int a1 = tmp[4 + i] + tmp[12 + i];
+            int a2 = tmp[4 + i] - tmp[12 + i];
+            int a3 = tmp[i] - tmp[8 + i];
+            sum += WEIGHT_Y[i] * Math.abs(a0 + a1)
+                + WEIGHT_Y[4 + i] * Math.abs(a3 + a2)
+                + WEIGHT_Y[8 + i] * Math.abs(a3 - a2)
+                + WEIGHT_Y[12 + i] * Math.abs(a0 - a1);
+        }
+        return sum;
     }
 
 }

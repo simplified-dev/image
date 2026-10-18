@@ -17,8 +17,8 @@ Classes in dev.simplified.image.codec.webp.vp8:
     (src/enc/cost_enc.c, src/enc/cost_enc.h)
   - QuantMatrix, TrellisQuantizer: the quantizer bias and sharpening
     matrices and TrellisQuantizeBlock (src/enc/quant_enc.c)
-  - DCT: the forward and inverse DCT and Walsh-Hadamard transforms
-    (src/dsp/enc.c, src/dsp/dec.c)
+  - DCT: the forward and inverse DCT and Walsh-Hadamard transforms and
+    the texture distortion (src/dsp/enc.c, src/dsp/dec.c)
   - IntraPrediction: the intra predictors and the samples a decoder
     seeds along the frame's edges (src/dsp/dec.c, src/dec/frame_dec.c)
   - LoopFilter: the edge filters, the filter-strength setup and which
@@ -28,6 +28,10 @@ Classes in dev.simplified.image.codec.webp.vp8:
     and GetCoeffsFast (src/dec/vp8_dec.c)
   - ChromaUpsampler: the fancy chroma upsampler and the YUV-to-RGB
     conversion (src/dsp/upsampling.c, src/dsp/yuv.h, src/dec/io_dec.c)
+  - VP8Encoder: the rate-distortion lambdas and intra mode decision,
+    SetupMatrices, PickBestIntra16, PickBestIntra4 and PickBestUV
+    (src/enc/quant_enc.c) with the flatness tests (src/dsp/quant.h), and
+    the segment-map probabilities, SetSegmentProbas (src/enc/frame_enc.c)
 
 Classes in dev.simplified.image.codec.webp.vp8l:
   - NearLosslessPreprocess: near-lossless preprocessing

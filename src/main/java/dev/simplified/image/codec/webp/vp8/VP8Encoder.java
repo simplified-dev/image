@@ -13,14 +13,16 @@ import org.jetbrains.annotations.Nullable;
  * of inter frames is coded through a {@link VP8EncoderSession}, which carries the reference frames
  * between calls.
  * <p>
- * A keyframe macroblock is coded one of two ways, and the lower rate-distortion score wins:
+ * A keyframe macroblock's modes are chosen as libwebp's rate-distortion search chooses them, each
+ * candidate quantized, reconstructed and scored on its distortion, texture distortion, mode cost and
+ * residual rate:
  * <ul>
- *   <li><b>16x16</b> - the DC, V, H or TM prediction with the least distortion plus mode cost, its
- *       sixteen DC coefficients gathered into a Walsh-Hadamard transformed Y2 block</li>
- *   <li><b>B_PRED</b> - each 4x4 sub-block predicted by whichever of the ten sub-block modes scores
- *       best on distortion plus mode cost</li>
+ *   <li><b>16x16</b> - the best of the DC, TM, V and H predictions, its sixteen DC coefficients
+ *       gathered into a Walsh-Hadamard transformed Y2 block</li>
+ *   <li><b>B_PRED</b> - each 4x4 sub-block predicted by the best of the ten sub-block modes, taken
+ *       over 16x16 when the sub-blocks together score lower</li>
  * </ul>
- * Chroma takes the DC, V, H or TM 8x8 prediction the same way. Source ARGB is converted to BT.601
+ * Chroma takes the best of the four 8x8 predictions. Source ARGB is converted to BT.601
  * YCbCr in {@link Macroblock#fromARGB}, residuals are forward-transformed and trellis-quantized
  * against the frame's token costs through {@link TrellisQuantizer}, and the dequantized coefficients
  * rebuild the reconstruction the next macroblock predicts from. Tokens go out through
@@ -83,6 +85,46 @@ public final class VP8Encoder {
      * libwebp's default.
      */
     private static final int INTER_PROB_GF = 128;
+
+    /**
+     * Weight of the texture distortion in an intra mode's score, libwebp's {@code tlambda}.
+     * libwebp scales it by its spatial noise shaping strength, which this encoder does not
+     * have, so it holds the floor of 1 libwebp keeps every lambda at.
+     */
+    static final int TLAMBDA = 1;
+
+    /**
+     * Most non-zero AC levels a 16x16 macroblock's sixteen blocks can hold between them and
+     * still count as flat, libwebp's {@code FLATNESS_LIMIT_I16}.
+     */
+    private static final int FLATNESS_LIMIT_I16 = 0;
+
+    /**
+     * Most non-zero AC levels a 4x4 sub-block can hold and still count as flat, libwebp's
+     * {@code FLATNESS_LIMIT_I4}.
+     */
+    private static final int FLATNESS_LIMIT_I4 = 3;
+
+    /**
+     * Most non-zero AC levels a macroblock's eight chroma blocks can hold between them and
+     * still count as flat, libwebp's {@code FLATNESS_LIMIT_UV}.
+     */
+    private static final int FLATNESS_LIMIT_UV = 2;
+
+    /**
+     * Rate added per block, in {@code 1/256} bits, when a mode other than DC predicts a flat
+     * block, libwebp's {@code FLATNESS_PENALTY}: about one bit, so a flat area is not
+     * mispredicted by a complex mode.
+     */
+    private static final int FLATNESS_PENALTY = 140;
+
+    /**
+     * The four 16x16 and chroma modes in the order libwebp tries them, which settles a tie:
+     * libwebp numbers TM second, where this codec numbers it last.
+     */
+    private static final int[] INTRA_MODE_ORDER = {
+        IntraPrediction.DC_PRED, IntraPrediction.TM_PRED, IntraPrediction.V_PRED, IntraPrediction.H_PRED
+    };
 
     /**
      * Per-frame encoding state threaded through the MB loop.
@@ -172,42 +214,22 @@ public final class VP8Encoder {
         // the quant steps.
         QuantMatrix y1Mtx, y2Mtx, uvMtx;
 
-        // Active R-D lambdas for the MB currently being encoded, derived from the
-        // segment's quant steps via libwebp's {@code SetupMatrices} formulas
-        // ({@code src/enc/quant_enc.c} lines 301-308). {@code score = RD_DISTO_MULT *
-        // distortion + rate * lambda}. Field mapping:
+        // Active R-D lambdas for the MB currently being encoded: libwebp's SetupMatrices
+        // ({@code src/enc/quant_enc.c}) over the segment's mean quantizer steps, each the
+        // rounded mean of a matrix's DC step and 15 copies of its AC step, as libwebp's
+        // ExpandMatrix returns it. A candidate scores
+        // {@code rate * lambda + RD_DISTO_MULT * distortion}.
         // <ul>
-        //   <li>{@code lambdaI4} = libwebp {@code lambda_i4}: per-candidate i4 / i16
-        //       mode scoring ({@code (3 * q_i4^2) >> 7})</li>
-        //   <li>{@code lambdaUv} = libwebp {@code lambda_uv}: UV mode-loop scoring
-        //       ({@code (3 * q_uv^2) >> 6})</li>
-        //   <li>{@code lambdaTrellisI4} / {@code lambdaTrellisI16} /
-        //       {@code lambdaTrellisUv} = libwebp trellis lambdas at respective
-        //       quantizers.</li>
-        //   <li>{@code lambdaI16} = libwebp {@code lambda_i16} ({@code 3 * q_i16^2}).
-        //       libwebp's {@code SetupMatrices} populates it and none of its
-        //       scorers reads it; it is held here for parity.</li>
-        //   <li>{@code lambdaMode} = libwebp {@code lambda_mode}
-        //       ({@code (q_i4^2) >> 7}): libwebp re-scores the winning i16 / i4 / uv
-        //       candidates with it BEFORE cross-candidate comparison, 3x smaller
-        //       than {@code lambdaI4} so cross-candidate selection de-emphasises
-        //       bitrate vs distortion relative to internal per-candidate search.
-        //       No scorer in this encoder reads it; it is held for parity.</li>
-        //   <li>{@code tlambda} = libwebp {@code tlambda} gated on
-        //       {@code method >= 4 && sns_strength > 0}. Our encoder has no
-        //       method / sns analog so it's always 0; held for parity.</li>
+        //   <li>{@code lambdaI16}, {@code lambdaI4} and {@code lambdaUv} score each 16x16
+        //       mode, each sub-block mode and each chroma mode</li>
+        //   <li>{@code lambdaMode} re-scores the winning 16x16 mode and each winning
+        //       sub-block for the choice between 16x16 prediction and B_PRED</li>
+        //   <li>{@code lambdaTrellisI4}, {@code lambdaTrellisI16} and {@code lambdaTrellisUv}
+        //       drive the trellis quantizer; {@code lambdaTrellisI16} also weighs rate in
+        //       the P-frame candidate comparison</li>
         // </ul>
-        // <p>
-        // <b>Divergence from libwebp's q_i16 derivation:</b> libwebp's
-        // {@code q_i16 = ExpandMatrix(y2Mtx, mode=1)} returns {@code y2Mtx.q[0]}
-        // which equals {@code y2Dc} in our derivation. This encoder's
-        // {@code lambdaTrellisI16} formula uses {@code y2Ac} as {@code q_i16},
-        // the value the PSNR test thresholds are calibrated against, while
-        // {@code lambdaI16} and {@code lambdaMode} use libwebp's
-        // {@code q_i16 = y2Dc}.
-        int lambdaI4, lambdaUv;
+        int lambdaI4, lambdaI16, lambdaUv, lambdaMode;
         int lambdaTrellisI4, lambdaTrellisI16, lambdaTrellisUv;
-        int lambdaI16, lambdaMode, tlambda;
 
         // Per-segment pre-derived quant + matrix + lambda tables, indexed by segment ID
         // (0..3). Populated by {@link #rebuildSegmentMatrices} from the frame's base
@@ -228,16 +250,12 @@ public final class VP8Encoder {
         final QuantMatrix[] segY2Mtx = new QuantMatrix[4];
         final QuantMatrix[] segUvMtx = new QuantMatrix[4];
         final int[] segLambdaI4 = new int[4];
+        final int[] segLambdaI16 = new int[4];
         final int[] segLambdaUv = new int[4];
+        final int[] segLambdaMode = new int[4];
         final int[] segLambdaTrellisI4 = new int[4];
         final int[] segLambdaTrellisI16 = new int[4];
         final int[] segLambdaTrellisUv = new int[4];
-        // Per-segment copies of lambdaI16, lambdaMode and tlambda (see the field
-        // block above), populated by {@link #rebuildSegmentMatrices}; no R-D
-        // scorer reads them.
-        final int[] segLambdaI16 = new int[4];
-        final int[] segLambdaMode = new int[4];
-        final int[] segTlambda = new int[4];
 
         final BooleanEncoder header;                // first partition: frame header + per-MB modes
         final BooleanEncoder[] tokens;              // token partitions: MB row {@code y} writes to
@@ -454,31 +472,31 @@ public final class VP8Encoder {
                 segY1Mtx[seg] = QuantMatrix.luma(y1Dc, y1Ac);
                 segY2Mtx[seg] = QuantMatrix.lumaY2(y2Dc, y2Ac);
                 segUvMtx[seg] = QuantMatrix.chroma(uvDc, uvAc);
-                // libwebp-style quantizer-driven lambdas, per-segment. libwebp's
-                // q_i4 / q_uv are the AC-mean over q[1..15] of the respective
-                // matrix - flat AC lane in VP8 so this is simply the AC step
-                // value. These formulas take q_i16 = y2Ac, which diverges from
-                // libwebp's q_i16 = y2Mtx.q[0] = y2Dc; the calibrated PSNR test
-                // thresholds rest on it.
-                int qI4 = y1Ac;
-                int qUv = uvAc;
-                int qI16 = y2Ac;                // this encoder's q_i16; used by segLambdaTrellisI16
+                // libwebp's SetupMatrices lambdas over each matrix's mean step, every
+                // one held at its floor of 1.
+                int qI4 = meanStep(y1Dc, y1Ac);
+                int qI16 = meanStep(y2Dc, y2Ac);
+                int qUv = meanStep(uvDc, uvAc);
                 segLambdaI4[seg] = Math.max(1, (3 * qI4 * qI4) >> 7);
+                segLambdaI16[seg] = Math.max(1, 3 * qI16 * qI16);
                 segLambdaUv[seg] = Math.max(1, (3 * qUv * qUv) >> 6);
+                segLambdaMode[seg] = Math.max(1, (qI4 * qI4) >> 7);
                 segLambdaTrellisI4[seg] = Math.max(1, (7 * qI4 * qI4) >> 3);
                 segLambdaTrellisI16[seg] = Math.max(1, (qI16 * qI16) >> 2);
                 segLambdaTrellisUv[seg] = Math.max(1, (qUv * qUv) << 1);
-                // The libwebp-parity lambdas take libwebp's own q_i16 = y2Dc. No
-                // scorer reads them.
-                int qI16Libwebp = y2Dc;
-                segLambdaI16[seg] = Math.max(1, 3 * qI16Libwebp * qI16Libwebp);
-                segLambdaMode[seg] = Math.max(1, (qI4 * qI4) >> 7);
-                // tlambda is gated on libwebp's method >= 4 && sns_strength > 0.
-                // Our encoder has no method / sns analog, so tlambda stays 0 and
-                // is clamp-to-1 via CheckLambdaValue matching libwebp's guard.
-                int tlambdaScale = 0;
-                segTlambda[seg] = Math.max(1, (tlambdaScale * qI4) >> 5);
             }
+        }
+
+        /**
+         * Returns libwebp's {@code ExpandMatrix} step for a quantizer matrix: the rounded mean of
+         * its 16 steps, the DC step and 15 copies of the AC step.
+         *
+         * @param dc the DC step
+         * @param ac the AC step
+         * @return the mean step
+         */
+        private static int meanStep(int dc, int ac) {
+            return (dc + 15 * ac + 8) >> 4;
         }
 
         /**
@@ -505,15 +523,12 @@ public final class VP8Encoder {
             this.y2Mtx = segY2Mtx[segId];
             this.uvMtx = segUvMtx[segId];
             this.lambdaI4 = segLambdaI4[segId];
+            this.lambdaI16 = segLambdaI16[segId];
             this.lambdaUv = segLambdaUv[segId];
+            this.lambdaMode = segLambdaMode[segId];
             this.lambdaTrellisI4 = segLambdaTrellisI4[segId];
             this.lambdaTrellisI16 = segLambdaTrellisI16[segId];
             this.lambdaTrellisUv = segLambdaTrellisUv[segId];
-            // The libwebp-parity lambdas, swapped with the rest so each holds the
-            // segment's value; no R-D site reads them.
-            this.lambdaI16 = segLambdaI16[segId];
-            this.lambdaMode = segLambdaMode[segId];
-            this.tlambda = segTlambda[segId];
         }
     }
 
@@ -768,7 +783,8 @@ public final class VP8Encoder {
      * <p>
      * When segmentation is enabled, sets {@code s.useSegment = true}, installs
      * {@code AUTO_SEGMENT_QUANT_DELTAS} relative deltas, fills {@code s.mbSegmentId}
-     * with the per-quartile assignment, and calls
+     * with the per-quartile assignment, codes the map at the probabilities its
+     * histogram gives through {@link #setSegmentProbas}, and calls
      * {@link State#rebuildSegmentMatrices} so the per-MB
      * {@link State#applySegment} swap has non-trivial values to pick.
      */
@@ -786,11 +802,39 @@ public final class VP8Encoder {
         s.segmentAbsoluteDelta = false;
         System.arraycopy(assignment, 0, s.mbSegmentId, 0, assignment.length);
         System.arraycopy(quantDelta, 0, s.segmentQuantDelta, 0, 4);
-        // Uniform segment prior: 50/50 at probs[0], 50/50 inside each half.
-        s.segmentProbs[0] = 128;
-        s.segmentProbs[1] = 128;
-        s.segmentProbs[2] = 128;
+        setSegmentProbas(assignment, s.segmentProbs);
         s.rebuildSegmentMatrices(qi);
+    }
+
+    /**
+     * Sets the segment tree's three probabilities from how many macroblocks each segment
+     * holds, as libwebp's {@code SetSegmentProbas} does, so the segment map costs what its
+     * histogram costs rather than two bits a macroblock.
+     *
+     * @param assignment each macroblock's segment, in {@code [0, 3]}
+     * @param probs the three tree probabilities to fill
+     */
+    private static void setSegmentProbas(int @NotNull [] assignment, int @NotNull [] probs) {
+        int[] count = new int[4];
+        for (int segment : assignment)
+            count[segment]++;
+        probs[0] = segmentProba(count[0] + count[1], count[2] + count[3]);
+        probs[1] = segmentProba(count[0], count[1]);
+        probs[2] = segmentProba(count[2], count[3]);
+    }
+
+    /**
+     * Returns a segment-tree branch's probability, libwebp's {@code GetProba}: the share of
+     * its macroblocks taking the left side, scaled to 255 and rounded, or 255 when no
+     * macroblock reaches the branch.
+     *
+     * @param left the macroblocks taking the left side
+     * @param right the macroblocks taking the right side
+     * @return the branch probability
+     */
+    private static int segmentProba(int left, int right) {
+        int total = left + right;
+        return total == 0 ? 255 : (255 * left + total / 2) / total;
     }
 
     /**
@@ -808,8 +852,10 @@ public final class VP8Encoder {
      * (higher quant index = coarser quantization, since VP8 quant step grows with
      * QI) because noise masks artifacts in detailed regions; low-variance MBs stay
      * at the base quantizer to preserve smooth-gradient quality. Values chosen to
-     * hit a ~1-3% bit reduction on mixed-variance natural content without dropping
-     * average PSNR more than ~0.5 dB.
+     * save bytes on mixed-variance natural content without dropping average PSNR
+     * more than ~0.5 dB. A texture the intra predictors reproduce, such as regular
+     * stripes, has no residual left for a coarser quantizer to cut, so segmenting it
+     * costs the map and saves nothing.
      */
     private static final int[] AUTO_SEGMENT_QUANT_DELTAS = { 0, 0, 2, 6 };
 
@@ -923,11 +969,7 @@ public final class VP8Encoder {
         // deltas; this refresh produces the per-segment quantizers the decoder will
         // actually dequantize with, so the encoder's trellis + residualCost match.
         s.rebuildSegmentMatrices(qi);
-        // Uniform segment prior: 50/50 at probs[0], 50/50 inside each half. Works for
-        // any assignment without requiring histogram analysis.
-        s.segmentProbs[0] = 128;
-        s.segmentProbs[1] = 128;
-        s.segmentProbs[2] = 128;
+        setSegmentProbas(mbSegmentAssignment, s.segmentProbs);
 
         // Derive per-segment effective filter levels for LoopFilter.
         int baseFilterLevel = pickFilterLevel(qi);
@@ -1597,79 +1639,49 @@ public final class VP8Encoder {
         Macroblock mb = new Macroblock();
         mb.fromARGB(argb, mbX, mbY, width, height);
 
-        // 2. Extract neighbors for chroma intra prediction (luma neighbors are computed
-        //    inside the per-mode evaluation paths below).
-        short[] yAbove = extractAbove(s.reconY, s.lumaStride, mbX * 16, mbY * 16, 16);
-        short[] yLeft  = extractLeft(s.reconY, s.lumaStride, mbX * 16, mbY * 16, 16);
-        short yAboveLeft = IntraPrediction.aboveLeft(s.reconY, s.lumaStride, mbX * 16, mbY * 16);
-        short[] uAbove = extractAbove(s.reconU, s.chromaStride, mbX * 8, mbY * 8, 8);
-        short[] uLeft  = extractLeft(s.reconU, s.chromaStride, mbX * 8, mbY * 8, 8);
-        short[] vAbove = extractAbove(s.reconV, s.chromaStride, mbX * 8, mbY * 8, 8);
-        short[] vLeft  = extractLeft(s.reconV, s.chromaStride, mbX * 8, mbY * 8, 8);
-        short uvAboveLeft = IntraPrediction.aboveLeft(s.reconU, s.chromaStride, mbX * 8, mbY * 8);
-        short vuAboveLeft = IntraPrediction.aboveLeft(s.reconV, s.chromaStride, mbX * 8, mbY * 8);
-
-        // 3. 16x16 luma path - DCT + trellis + reconstruct into a local 256-sample buffer.
-        short[] predY16 = new short[256];
-        int yMode16 = selectBest16x16Mode(mb.y, yAbove, yLeft, yAboveLeft, predY16);
-        I16Result i16 = trellisI16(s, mb.y, predY16, mbX);
-        long sse16 = sumSquaredError(mb.y, i16.recon);
-        long rdScore16 = sse16 * VP8Costs.RD_DISTO_MULT + (long) i16.rate * s.lambdaTrellisI16;
-
-        // 4. B_PRED luma path - per-sub-block mode + reconstruct into a local 256-sample buffer.
-        BPredResult bpred = encodeBPredLuma(s, mb.y, mbX, mbY);
-
-        // 5. Pick the winner by R-D score. The B_PRED path already accumulates per-sub-block
-        //    {@code sse*RD_DISTO_MULT + rate*lambda_i4}; we compare that against the i16 total.
-        boolean useBPred = bpred.rdScore < rdScore16;
+        // 2. Pick the modes as libwebp's rate-distortion search does: the best 16x16 mode,
+        //    then B_PRED if its sub-blocks score lower, then the best chroma mode.
+        I16Choice i16 = pickBestIntra16(s, mb.y, mbX, mbY);
+        BPredResult bpred = pickBestIntra4(s, mb.y, mbX, mbY, i16.score());
+        boolean useBPred = bpred != null;
+        UvChoice uv = pickBestUv(s, mb, mbX, mbY);
         int mbIdx = mbY * s.mbCols + mbX;
         s.mbIsI4x4[mbIdx] = useBPred;
         s.mbIsInter[mbIdx] = false;
         s.mbRefFrame[mbIdx] = LoopFilter.REF_INTRA;
         s.mbModeLfIdx[mbIdx] = useBPred ? LoopFilter.MODE_BPRED : LoopFilter.MODE_NON_BPRED_INTRA;
 
-        // 6. Chroma: mode selection + DCT + trellis.
-        short[] predU = new short[64];
-        short[] predV = new short[64];
-        int uvMode = selectBestChromaMode(
-            mb.cb, uAbove, uLeft, uvAboveLeft,
-            mb.cr, vAbove, vLeft, vuAboveLeft,
-            predU, predV
-        );
+        // 3. Commit luma reconstruction to the frame's reconY plane.
+        commitLumaToRecon(s, mbX, mbY, useBPred ? bpred.recon : i16.result().recon);
 
-        // 7. Commit luma reconstruction to the frame's reconY plane.
-        commitLumaToRecon(s, mbX, mbY, useBPred ? bpred.recon : i16.recon);
-
-        // 8. Emit per-MB header.
+        // 4. Emit per-MB header.
         BooleanEncoder h = s.header;
         if (useBPred) {
             h.encodeBit(145, 0);                            // is_i4x4 = true
             emitBPredModes(s, h, mbX, bpred.modes);
         } else {
             h.encodeBit(145, 1);                            // 16x16 prediction
-            emitYMode16x16(h, yMode16);
+            emitYMode16x16(h, i16.mode());
             // Fill sub-block neighbour context with the analogous B_*_PRED for later MBs.
-            int ctxMode = mb16ToSubMode(yMode16);
+            int ctxMode = mb16ToSubMode(i16.mode());
             java.util.Arrays.fill(s.intraT, mbX * 4, mbX * 4 + 4, ctxMode);
             java.util.Arrays.fill(s.intraL, ctxMode);
         }
-        emitUvMode(h, uvMode);
+        emitUvMode(h, uv.mode());
 
-        // 9. Quantize chroma and emit tokens. Each chroma plane's nz context slots are its
-        //    own, so trellising both planes ahead of the emits gives each block the
-        //    {@code top_nz + left_nz} context it is emitted under. MB rows are interleaved
-        //    across {@code NUM_TOKEN_PARTITIONS} partitions so a multi-threaded decoder can
-        //    parse rows in parallel.
-        ChromaTrellisResult uResult = trellisChroma(s, mbX, mb.cb, predU, /*isU=*/ true);
-        ChromaTrellisResult vResult = trellisChroma(s, mbX, mb.cr, predV, /*isU=*/ false);
+        // 5. Emit tokens. Chroma's nz context slots are its own, so the levels picked before
+        //    luma is emitted are the levels its context would have produced now. MB rows are
+        //    interleaved across {@code NUM_TOKEN_PARTITIONS} partitions so a multi-threaded
+        //    decoder can parse rows in parallel.
         BooleanEncoder tokenPart = s.tokens[mbY & (NUM_TOKEN_PARTITIONS - 1)];
-        s.mbHasCoeffs[mbIdx] = emitLumaTokens(s, tokenPart, mbX, useBPred, i16.y2ZigZag, useBPred ? bpred.yAc : i16.yAcZigZag)
-            | emitChromaTokensFromTrellis(s, tokenPart, mbX, uResult, /*isU=*/ true)
-            | emitChromaTokensFromTrellis(s, tokenPart, mbX, vResult, /*isU=*/ false);
+        s.mbHasCoeffs[mbIdx] = emitLumaTokens(s, tokenPart, mbX, useBPred, i16.result().y2ZigZag,
+                useBPred ? bpred.yAc : i16.result().yAcZigZag)
+            | emitChromaTokensFromTrellis(s, tokenPart, mbX, uv.u(), /*isU=*/ true)
+            | emitChromaTokensFromTrellis(s, tokenPart, mbX, uv.v(), /*isU=*/ false);
 
-        // 10. Commit chroma reconstruction using the dequantized coefficients from trellis.
-        commitChromaFromDequant(s.reconU, s.chromaStride, mbX, mbY, predU, uResult.dequant);
-        commitChromaFromDequant(s.reconV, s.chromaStride, mbX, mbY, predV, vResult.dequant);
+        // 6. Commit chroma reconstruction using the dequantized coefficients from trellis.
+        commitChromaFromDequant(s.reconU, s.chromaStride, mbX, mbY, uv.predU(), uv.u().dequant);
+        commitChromaFromDequant(s.reconV, s.chromaStride, mbX, mbY, uv.predV(), uv.v().dequant);
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -2291,14 +2303,15 @@ public final class VP8Encoder {
             }
         }
 
-        // --- Intra i16x16 in P ---
+        // --- Intra i16x16 in P, sharing one chroma choice with B_PRED in P ---
+        UvChoice uv = pickBestUv(s, mb, mbX, mbY);
         best = chooseBetter(best, buildIntraInPCandidate(
-            s, mb, mbX, mbY, skipBit0, baseIntraHeader, lambda
+            s, mb, mbX, mbY, uv, skipBit0, baseIntraHeader, lambda
         ));
 
         // --- Intra B_PRED in P (4x4 sub-block modes at fixed probs, RFC 6386 section 16.1) ---
         best = chooseBetter(best, buildBPredIntraInPCandidate(
-            s, mb, mbX, mbY, skipBit0, baseIntraHeader, lambda
+            s, mb, mbX, mbY, uv, skipBit0, baseIntraHeader, lambda
         ));
 
         // --- SPLITMV (skip-only, RFC 6386 section 16.4) ---
@@ -2909,87 +2922,39 @@ public final class VP8Encoder {
 
     /**
      * Builds an {@link IntraInPCandidate} - full 16x16 intra-in-P encode with inter-frame
-     * mode probabilities. Runs {@link #selectBest16x16Mode} + {@link #selectBestChromaMode}
-     * internally; residual rates are accumulated from the luma + chroma trellis passes.
+     * mode probabilities. Takes its luma mode from {@link #pickBestIntra16} and its chroma
+     * from {@code uv}; residual rates are accumulated from the luma + chroma trellis passes.
      */
     private static @NotNull InterCandidate buildIntraInPCandidate(
-        @NotNull State s, @NotNull Macroblock mb, int mbX, int mbY,
+        @NotNull State s, @NotNull Macroblock mb, int mbX, int mbY, @NotNull UvChoice uv,
         int skipBit0, int baseIntraHeader, int lambda
     ) {
-        short[] yAbove = extractAbove(s.reconY, s.lumaStride, mbX * 16, mbY * 16, 16);
-        short[] yLeft  = extractLeft(s.reconY, s.lumaStride, mbX * 16, mbY * 16, 16);
-        short yAboveLeft = IntraPrediction.aboveLeft(s.reconY, s.lumaStride, mbX * 16, mbY * 16);
-        short[] uAbove = extractAbove(s.reconU, s.chromaStride, mbX * 8, mbY * 8, 8);
-        short[] uLeft  = extractLeft(s.reconU, s.chromaStride, mbX * 8, mbY * 8, 8);
-        short[] vAbove = extractAbove(s.reconV, s.chromaStride, mbX * 8, mbY * 8, 8);
-        short[] vLeft  = extractLeft(s.reconV, s.chromaStride, mbX * 8, mbY * 8, 8);
-        short uvAboveLeft = IntraPrediction.aboveLeft(s.reconU, s.chromaStride, mbX * 8, mbY * 8);
-        short vuAboveLeft = IntraPrediction.aboveLeft(s.reconV, s.chromaStride, mbX * 8, mbY * 8);
+        I16Choice i16 = pickBestIntra16(s, mb.y, mbX, mbY);
+        long sse = sumSquaredError(mb.y, i16.result().recon) + uv.sse();
 
-        short[] predY16 = new short[256];
-        int yMode16 = selectBest16x16Mode(mb.y, yAbove, yLeft, yAboveLeft, predY16);
-        I16Result i16 = trellisI16(s, mb.y, predY16, mbX);
-
-        short[] predU = new short[64];
-        short[] predV = new short[64];
-        int uvMode = selectBestChromaMode(
-            mb.cb, uAbove, uLeft, uvAboveLeft,
-            mb.cr, vAbove, vLeft, vuAboveLeft,
-            predU, predV
-        );
-        ChromaTrellisResult u = trellisChroma(s, mbX, mb.cb, predU, /*isU=*/ true);
-        ChromaTrellisResult v = trellisChroma(s, mbX, mb.cr, predV, /*isU=*/ false);
-
-        short[] reconU = reconstructChroma8x8(predU, u.dequant);
-        short[] reconV = reconstructChroma8x8(predV, v.dequant);
-        long sse = sumSquaredError(mb.y, i16.recon)
-                 + sumSquaredError(mb.cb, reconU)
-                 + sumSquaredError(mb.cr, reconV);
-
-        int yModeRate = VP8Costs.treeLeafBitCost(VP8Tables.YMODE_TREE, yMode16, s.yModeProba);
-        int uvModeRate = VP8Costs.treeLeafBitCost(VP8Tables.UV_MODE_TREE, uvMode, s.uvModeProba);
+        int yModeRate = VP8Costs.treeLeafBitCost(VP8Tables.YMODE_TREE, i16.mode(), s.yModeProba);
+        int uvModeRate = VP8Costs.treeLeafBitCost(VP8Tables.UV_MODE_TREE, uv.mode(), s.uvModeProba);
         int rate = skipBit0 + baseIntraHeader + yModeRate + uvModeRate
-                 + i16.rate + u.rate + v.rate;
-        return new IntraInPCandidate(sse, rate, lambda, yMode16, uvMode,
-            predU, predV, i16, u, v);
+                 + i16.result().rate + uv.u().rate + uv.v().rate;
+        return new IntraInPCandidate(sse, rate, lambda, i16.mode(), uv.mode(),
+            uv.predU(), uv.predV(), i16.result(), uv.u(), uv.v());
     }
 
     /**
      * Builds a {@link BPredIntraInPCandidate} - B_PRED 4x4 sub-block-mode intra MB inside
-     * a P-frame. Runs {@link #encodeBPredLuma} for the 16 sub-blocks (each picks its best
-     * of 10 modes by per-sub-block R-D), selects a shared chroma mode via
-     * {@link #selectBestChromaMode}, and accumulates the full rate: header + Y-mode tree
-     * (B_PRED leaf) + 16 sub-block modes at fixed {@link VP8Tables#BMODE_PROBA_INTER} +
-     * UV mode + luma 4x4 token rate (no Y2) + chroma token rate.
+     * a P-frame. Takes its 16 sub-block modes from {@link #pickBestIntra4}, unbounded since
+     * the candidate is weighed against the inter candidates rather than 16x16 alone, and its
+     * chroma from {@code uv}, and accumulates the full rate: header + Y-mode tree (B_PRED
+     * leaf) + 16 sub-block modes at fixed {@link VP8Tables#BMODE_PROBA_INTER} + UV mode +
+     * luma 4x4 token rate (no Y2) + chroma token rate.
      */
     private static @NotNull InterCandidate buildBPredIntraInPCandidate(
-        @NotNull State s, @NotNull Macroblock mb, int mbX, int mbY,
+        @NotNull State s, @NotNull Macroblock mb, int mbX, int mbY, @NotNull UvChoice uv,
         int skipBit0, int baseIntraHeader, int lambda
     ) {
-        short[] uAbove = extractAbove(s.reconU, s.chromaStride, mbX * 8, mbY * 8, 8);
-        short[] uLeft  = extractLeft(s.reconU, s.chromaStride, mbX * 8, mbY * 8, 8);
-        short[] vAbove = extractAbove(s.reconV, s.chromaStride, mbX * 8, mbY * 8, 8);
-        short[] vLeft  = extractLeft(s.reconV, s.chromaStride, mbX * 8, mbY * 8, 8);
-        short uvAboveLeft = IntraPrediction.aboveLeft(s.reconU, s.chromaStride, mbX * 8, mbY * 8);
-        short vuAboveLeft = IntraPrediction.aboveLeft(s.reconV, s.chromaStride, mbX * 8, mbY * 8);
-
-        BPredResult bpred = encodeBPredLuma(s, mb.y, mbX, mbY);
-
-        short[] predU = new short[64];
-        short[] predV = new short[64];
-        int uvMode = selectBestChromaMode(
-            mb.cb, uAbove, uLeft, uvAboveLeft,
-            mb.cr, vAbove, vLeft, vuAboveLeft,
-            predU, predV
-        );
-        ChromaTrellisResult u = trellisChroma(s, mbX, mb.cb, predU, /*isU=*/ true);
-        ChromaTrellisResult v = trellisChroma(s, mbX, mb.cr, predV, /*isU=*/ false);
-
-        short[] reconU = reconstructChroma8x8(predU, u.dequant);
-        short[] reconV = reconstructChroma8x8(predV, v.dequant);
-        long sse = bpred.sse
-                 + sumSquaredError(mb.cb, reconU)
-                 + sumSquaredError(mb.cr, reconV);
+        BPredResult bpred = pickBestIntra4(s, mb.y, mbX, mbY, Long.MAX_VALUE);
+        assert bpred != null : "an unbounded B_PRED search always completes";
+        long sse = bpred.sse + uv.sse();
 
         int yModeRate = VP8Costs.treeLeafBitCost(
             VP8Tables.YMODE_TREE, IntraPrediction.B_PRED, s.yModeProba);
@@ -2998,13 +2963,13 @@ public final class VP8Encoder {
             subModesRate += VP8Costs.treeLeafBitCost(
                 VP8Tables.BMODE_TREE, bpred.modes[i], VP8Tables.BMODE_PROBA_INTER);
         int uvModeRate = VP8Costs.treeLeafBitCost(
-            VP8Tables.UV_MODE_TREE, uvMode, s.uvModeProba);
+            VP8Tables.UV_MODE_TREE, uv.mode(), s.uvModeProba);
         int bpredLumaTokenRate = bpredLumaTokenRate(s, mbX, bpred.yAc);
         int rate = skipBit0 + baseIntraHeader
                  + yModeRate + subModesRate + uvModeRate
-                 + bpredLumaTokenRate + u.rate + v.rate;
-        return new BPredIntraInPCandidate(sse, rate, lambda, uvMode,
-            predU, predV, bpred, u, v);
+                 + bpredLumaTokenRate + uv.u().rate + uv.v().rate;
+        return new BPredIntraInPCandidate(sse, rate, lambda, uv.mode(),
+            uv.predU(), uv.predV(), bpred, uv.u(), uv.v());
     }
 
     /**
@@ -3904,7 +3869,7 @@ public final class VP8Encoder {
         final short[][] yAc;        // 16 quantized coefficient blocks, <b>zig-zag order</b>
         final short[] recon;        // 256 reconstructed luma samples, MB-local raster
         final long sse;             // sum-of-squared-error vs source
-        final long rdScore;         // {@code RD_DISTO_MULT * sse + rate * lambda} summed over sub-blocks
+        final long rdScore;         // the sub-blocks' lambda_mode scores plus the cost of signalling B_PRED
 
         BPredResult(int[] modes, short[][] yAc, short[] recon, long sse, long rdScore) {
             this.modes = modes;
@@ -3916,17 +3881,33 @@ public final class VP8Encoder {
     }
 
     /**
-     * Evaluates the B_PRED path: for each of 16 sub-blocks in raster order, picks the best
-     * of the 10 4x4 prediction modes by SSE, forward-DCTs + quantizes the residual, and
-     * reconstructs into a local 256-sample buffer that subsequent sub-blocks use as
-     * intra neighbours. Does NOT mutate {@code s.reconY}.
+     * Codes a macroblock as B_PRED as libwebp's {@code PickBestIntra4} does, or answers
+     * {@code null} once 16x16 prediction is the cheaper choice. Each sub-block, in raster
+     * order, tries the ten sub-block modes against the sub-blocks reconstructed before it:
+     * trellis-quantized and reconstructed, each mode is scored under {@code lambda_i4} on
+     * its distortion, texture distortion, mode cost and residual rate, a mode other than
+     * DC paying {@link #FLATNESS_PENALTY} when it leaves no more than
+     * {@link #FLATNESS_LIMIT_I4} AC levels. The first lowest score wins, is re-scored under
+     * {@code lambda_mode} and joins a total that starts at the cost of signalling B_PRED;
+     * the search gives up as soon as that total reaches {@code limit}. Does NOT mutate
+     * {@code s.reconY}.
+     * <p>
+     * libwebp also gives up when the sub-block mode costs pass a budget set by its
+     * partition limit. At its default limit sixteen of the dearest mode costs stay under
+     * that budget, so this search keeps none.
+     *
+     * @param limit the {@code lambda_mode} score of the 16x16 choice, or {@link Long#MAX_VALUE}
+     *              to finish the search whatever it costs
+     * @return the B_PRED coding, or {@code null} when its total reaches {@code limit}
      */
-    private static @NotNull BPredResult encodeBPredLuma(@NotNull State s, short @NotNull [] src, int mbX, int mbY) {
+    private static @Nullable BPredResult pickBestIntra4(
+        @NotNull State s, short @NotNull [] src, int mbX, int mbY, long limit
+    ) {
         int[] modes = new int[16];
         short[][] yAc = new short[16][];
         short[] recon = new short[256];
         long totalSse = 0;
-        long totalRDScore = 0;
+        long total = rdScore(s.lambdaMode, VP8Costs.bitCost(0, 145), 0);
 
         // Sub-block mode neighbour context tracked locally (so we don't update s.intraT/L
         // until after we know B_PRED has won).
@@ -3963,7 +3944,9 @@ public final class VP8Encoder {
                 int bestMode = -1;
                 int bestNz = 0;
                 long bestScore = Long.MAX_VALUE;
-                long bestSseValue = Long.MAX_VALUE;
+                long bestSse = 0;
+                long bestDistortion = 0;
+                long bestRate = 0;
                 short[] cand = new short[16];
                 short[] candResidual = new short[16];
                 short[] candDeq = new short[16];
@@ -3986,14 +3969,20 @@ public final class VP8Encoder {
                         candReconBlk[i] = (short) Math.clamp(cand[i] + candResidual[i], 0, 255);
 
                     long sse = sumSquaredError(srcBlock, candReconBlk);
-                    // R-D: lambda_i4 * mode-tree fixed cost, added to distortion. Residual
-                    // cost is intentionally omitted: including it at small quantizers causes
-                    // the encoder to prefer simpler modes with larger quantization error.
-                    long score = sse * VP8Costs.RD_DISTO_MULT
-                        + (long) modeCosts[mode] * s.lambdaI4;
-                    if (score < bestScore) {
+                    long distortion = sse + weighTexture(DCT.textureDistortion4x4(srcBlock, candReconBlk, 0, 4));
+                    long rate = modeCosts[mode];
+                    if (mode != IntraPrediction.B_DC_PRED && acLevels(candZigZag) <= FLATNESS_LIMIT_I4)
+                        rate += FLATNESS_PENALTY;
+                    // The residual rate only adds, so a mode already behind skips costing it.
+                    if (bestMode >= 0 && rdScore(s.lambdaI4, rate, distortion) >= bestScore)
+                        continue;
+                    rate += VP8Costs.residualCost(s.tokenCosts, ctxNz, VP8Tables.TYPE_I4_AC, 0, candZigZag);
+                    long score = rdScore(s.lambdaI4, rate, distortion);
+                    if (bestMode < 0 || score < bestScore) {
                         bestScore = score;
-                        bestSseValue = sse;
+                        bestSse = sse;
+                        bestDistortion = distortion;
+                        bestRate = rate;
                         bestMode = mode;
                         bestNz = nz;
                         System.arraycopy(candReconBlk, 0, bestRecon, 0, 16);
@@ -4001,10 +3990,12 @@ public final class VP8Encoder {
                     }
                 }
 
+                total += rdScore(s.lambdaMode, bestRate, bestDistortion);
+                if (total >= limit)
+                    return null;
                 modes[by * 4 + bx] = bestMode;
                 yAc[by * 4 + bx] = bestCoef;
-                totalSse += bestSseValue;
-                totalRDScore += bestScore;
+                totalSse += bestSse;
 
                 // Write reconstructed sub-block into the local 16x16 buffer.
                 for (int yy = 0; yy < 4; yy++)
@@ -4018,7 +4009,7 @@ public final class VP8Encoder {
             }
         }
 
-        return new BPredResult(modes, yAc, recon, totalSse, totalRDScore);
+        return new BPredResult(modes, yAc, recon, totalSse, total);
     }
 
     /**
@@ -4267,66 +4258,185 @@ public final class VP8Encoder {
     }
 
     /**
-     * Picks the 16x16 luma mode that minimises {@code RD_DISTO_MULT * sse + modeCost * lambda_d}
-     * against the source samples, where {@code modeCost = VP8Costs.FIXED_COSTS_I16[mode]}
-     * and {@code lambda_d = 106} (libwebp's {@code lambda_d_i16} constant from
-     * {@code RefineUsingDistortion} in {@code src/enc/quant_enc.c}). Fills {@code predOut}
-     * with the winning prediction.
+     * A macroblock's 16x16 luma choice.
      *
-     * @return the selected {@link IntraPrediction} mode constant
+     * @param mode the 16x16 prediction mode, an {@link IntraPrediction} constant
+     * @param result the mode's quantized levels and reconstruction
+     * @param score the mode's score under {@code lambda_mode}, the scale B_PRED is weighed on
      */
-    private static int selectBest16x16Mode(
-        short @NotNull [] src, short[] above, short[] left, short aboveLeft,
-        short @NotNull [] predOut
+    private record I16Choice(int mode, @NotNull I16Result result, long score) { }
+
+    /**
+     * A macroblock's chroma choice.
+     *
+     * @param mode the 8x8 prediction mode, an {@link IntraPrediction} constant
+     * @param predU the U plane's prediction
+     * @param predV the V plane's prediction
+     * @param u the U plane's quantized levels and dequantized coefficients
+     * @param v the V plane's quantized levels and dequantized coefficients
+     * @param sse the squared error of both planes' reconstruction against the source
+     */
+    private record UvChoice(
+        int mode, short @NotNull [] predU, short @NotNull [] predV,
+        @NotNull ChromaTrellisResult u, @NotNull ChromaTrellisResult v, long sse
+    ) { }
+
+    /**
+     * Picks the 16x16 luma mode as libwebp's {@code PickBestIntra16} does. Each of the four
+     * modes, in {@link #INTRA_MODE_ORDER}, is predicted, trellis-quantized and reconstructed,
+     * and scored under {@code lambda_i16} on its distortion, texture distortion, mode cost and
+     * residual rate; the first lowest score wins. While the source holds one value and every
+     * mode tried so far leaves it no AC level, a mode's distortion counts twice, so a flat
+     * block stays flat. The winner's score is then re-taken under {@code lambda_mode}, the
+     * scale {@link #pickBestIntra4} weighs B_PRED on.
+     *
+     * @param s the frame state
+     * @param src the macroblock's 256 luma samples
+     * @param mbX the macroblock column
+     * @param mbY the macroblock row
+     * @return the chosen mode, its coding and its {@code lambda_mode} score
+     */
+    private static @NotNull I16Choice pickBestIntra16(
+        @NotNull State s, short @NotNull [] src, int mbX, int mbY
     ) {
-        int[] modes = { IntraPrediction.DC_PRED, IntraPrediction.V_PRED,
-                        IntraPrediction.H_PRED, IntraPrediction.TM_PRED };
-        int bestMode = IntraPrediction.DC_PRED;
-        long bestScore = Long.MAX_VALUE;
-        short[] candidate = new short[256];
-        for (int mode : modes) {
-            IntraPrediction.predict16x16(candidate, above, left, aboveLeft, mode);
-            long sse = sumSquaredError(src, candidate);
-            long score = sse * VP8Costs.RD_DISTO_MULT + (long) VP8Costs.FIXED_COSTS_I16[mode] * 106;
-            if (score < bestScore) {
-                bestScore = score;
+        short[] above = extractAbove(s.reconY, s.lumaStride, mbX * 16, mbY * 16, 16);
+        short[] left = extractLeft(s.reconY, s.lumaStride, mbX * 16, mbY * 16, 16);
+        short aboveLeft = IntraPrediction.aboveLeft(s.reconY, s.lumaStride, mbX * 16, mbY * 16);
+        boolean flat = isFlatSource16(src);
+
+        int bestMode = -1;
+        I16Result best = null;
+        long bestScore = 0;
+        long bestRate = 0;
+        long bestDistortion = 0;
+        short[] pred = new short[256];
+        for (int mode : INTRA_MODE_ORDER) {
+            IntraPrediction.predict16x16(pred, above, left, aboveLeft, mode);
+            I16Result candidate = trellisI16(s, src, pred, mbX);
+            long distortion = sumSquaredError(src, candidate.recon)
+                + weighTexture(DCT.textureDistortion16x16(src, candidate.recon));
+            if (flat) {
+                int ac = 0;
+                for (short[] block : candidate.yAcZigZag)
+                    ac += acLevels(block);
+                flat = ac <= FLATNESS_LIMIT_I16;
+                if (flat)
+                    distortion *= 2;
+            }
+            long rate = VP8Costs.FIXED_COSTS_I16[mode] + candidate.rate;
+            long score = rdScore(s.lambdaI16, rate, distortion);
+            if (bestMode < 0 || score < bestScore) {
                 bestMode = mode;
-                System.arraycopy(candidate, 0, predOut, 0, 256);
+                best = candidate;
+                bestScore = score;
+                bestRate = rate;
+                bestDistortion = distortion;
             }
         }
-        return bestMode;
+        return new I16Choice(bestMode, best, rdScore(s.lambdaMode, bestRate, bestDistortion));
     }
 
     /**
-     * Picks the shared chroma 8x8 mode that minimises
-     * {@code RD_DISTO_MULT * (sseU + sseV) + VP8Costs.FIXED_COSTS_UV[mode] * 120}, where
-     * {@code 120} is libwebp's {@code lambda_d_uv} ({@code src/enc/quant_enc.c}). Fills
-     * {@code predU}/{@code predV} with the winning predictions.
+     * Picks the chroma mode as libwebp's {@code PickBestUV} does. Each of the four modes, in
+     * {@link #INTRA_MODE_ORDER}, predicts both planes, which are trellis-quantized and
+     * reconstructed, and is scored under {@code lambda_uv} on its distortion, mode cost and
+     * residual rate, a mode other than DC paying {@link #FLATNESS_PENALTY} per block when the
+     * eight blocks keep no more than {@link #FLATNESS_LIMIT_UV} AC levels between them; the
+     * first lowest score wins. Chroma takes no texture distortion, which libwebp leaves out
+     * because it tends to flatten chroma, and is trellis-quantized where libwebp quantizes it
+     * plainly.
+     *
+     * @param s the frame state
+     * @param mb the macroblock's samples
+     * @param mbX the macroblock column
+     * @param mbY the macroblock row
+     * @return the chosen mode with both planes' prediction and coding
      */
-    private static int selectBestChromaMode(
-        short @NotNull [] srcU, short[] aboveU, short[] leftU, short aboveLeftU,
-        short @NotNull [] srcV, short[] aboveV, short[] leftV, short aboveLeftV,
-        short @NotNull [] predU, short @NotNull [] predV
-    ) {
-        int[] modes = { IntraPrediction.DC_PRED, IntraPrediction.V_PRED,
-                        IntraPrediction.H_PRED, IntraPrediction.TM_PRED };
-        int bestMode = IntraPrediction.DC_PRED;
-        long bestScore = Long.MAX_VALUE;
-        short[] candU = new short[64];
-        short[] candV = new short[64];
-        for (int mode : modes) {
-            IntraPrediction.predict8x8(candU, aboveU, leftU, aboveLeftU, mode);
-            IntraPrediction.predict8x8(candV, aboveV, leftV, aboveLeftV, mode);
-            long sse = sumSquaredError(srcU, candU) + sumSquaredError(srcV, candV);
-            long score = sse * VP8Costs.RD_DISTO_MULT + (long) VP8Costs.FIXED_COSTS_UV[mode] * 120;
-            if (score < bestScore) {
+    private static @NotNull UvChoice pickBestUv(@NotNull State s, @NotNull Macroblock mb, int mbX, int mbY) {
+        short[] uAbove = extractAbove(s.reconU, s.chromaStride, mbX * 8, mbY * 8, 8);
+        short[] uLeft = extractLeft(s.reconU, s.chromaStride, mbX * 8, mbY * 8, 8);
+        short[] vAbove = extractAbove(s.reconV, s.chromaStride, mbX * 8, mbY * 8, 8);
+        short[] vLeft = extractLeft(s.reconV, s.chromaStride, mbX * 8, mbY * 8, 8);
+        short uAboveLeft = IntraPrediction.aboveLeft(s.reconU, s.chromaStride, mbX * 8, mbY * 8);
+        short vAboveLeft = IntraPrediction.aboveLeft(s.reconV, s.chromaStride, mbX * 8, mbY * 8);
+
+        UvChoice best = null;
+        long bestScore = 0;
+        for (int mode : INTRA_MODE_ORDER) {
+            short[] predU = new short[64];
+            short[] predV = new short[64];
+            IntraPrediction.predict8x8(predU, uAbove, uLeft, uAboveLeft, mode);
+            IntraPrediction.predict8x8(predV, vAbove, vLeft, vAboveLeft, mode);
+            ChromaTrellisResult u = trellisChroma(s, mbX, mb.cb, predU, /*isU=*/ true);
+            ChromaTrellisResult v = trellisChroma(s, mbX, mb.cr, predV, /*isU=*/ false);
+            long sse = sumSquaredError(mb.cb, reconstructChroma8x8(predU, u.dequant))
+                + sumSquaredError(mb.cr, reconstructChroma8x8(predV, v.dequant));
+            long rate = VP8Costs.FIXED_COSTS_UV[mode] + u.rate + v.rate;
+            if (mode != IntraPrediction.DC_PRED) {
+                int ac = 0;
+                for (int i = 0; i < 4; i++)
+                    ac += acLevels(u.zz[i]) + acLevels(v.zz[i]);
+                if (ac <= FLATNESS_LIMIT_UV)
+                    rate += FLATNESS_PENALTY * 8;
+            }
+            long score = rdScore(s.lambdaUv, rate, sse);
+            if (best == null || score < bestScore) {
+                best = new UvChoice(mode, predU, predV, u, v, sse);
                 bestScore = score;
-                bestMode = mode;
-                System.arraycopy(candU, 0, predU, 0, 64);
-                System.arraycopy(candV, 0, predV, 0, 64);
             }
         }
-        return bestMode;
+        return best;
+    }
+
+    /**
+     * Scores a coding choice as libwebp's {@code SetRDScore} does: its rate at {@code lambda}
+     * plus its distortion at {@link VP8Costs#RD_DISTO_MULT}.
+     *
+     * @param lambda the rate's weight
+     * @param rate the rate in {@code 1/256} bits
+     * @param distortion the distortion, any texture distortion included
+     * @return the score, lower being better
+     */
+    private static long rdScore(int lambda, long rate, long distortion) {
+        return rate * lambda + VP8Costs.RD_DISTO_MULT * distortion;
+    }
+
+    /**
+     * Weighs a texture distortion by {@link #TLAMBDA}, rounding as libwebp's {@code MULT_8B} does.
+     *
+     * @param textureDistortion the texture distortion {@link DCT} measures
+     * @return the weighted texture distortion
+     */
+    private static long weighTexture(int textureDistortion) {
+        return (TLAMBDA * textureDistortion + 128) >> 8;
+    }
+
+    /**
+     * Counts a block's non-zero AC levels, the measure libwebp's {@code IsFlat} holds to a limit.
+     *
+     * @param zigZag the block's 16 quantized levels in zig-zag order, the DC level first
+     * @return the number of non-zero levels after the first
+     */
+    private static int acLevels(short @NotNull [] zigZag) {
+        int count = 0;
+        for (int i = 1; i < 16; i++)
+            if (zigZag[i] != 0)
+                count++;
+        return count;
+    }
+
+    /**
+     * Answers whether every sample of a 16x16 block holds the same value, as libwebp's
+     * {@code IsFlatSource16} does.
+     *
+     * @param src the block's 256 samples
+     * @return whether the block is one value
+     */
+    private static boolean isFlatSource16(short @NotNull [] src) {
+        for (short sample : src)
+            if (sample != src[0])
+                return false;
+        return true;
     }
 
     private static long sumSquaredError(short @NotNull [] a, short @NotNull [] b) {

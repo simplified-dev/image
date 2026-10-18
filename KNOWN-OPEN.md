@@ -58,14 +58,6 @@ The ICO arm of `ImageFormat.matches` accepts `00 00 01 00`, which is also the bi
 - Type: **RISK**
 - Status: **OPEN**
 
-## `VP8Encoder` holds libwebp lambdas no scorer reads
-`State.lambdaI16`, `lambdaMode` and `tlambda`, and their per-segment arrays `segLambdaI16`, `segLambdaMode` and `segTlambda`, are assigned and never read. Their comments say so. Deleting them, or wiring them into the scorer as libwebp does, would end the dead state.
-
-- Affected: `src/main/java/dev/simplified/image/codec/webp/vp8/VP8Encoder.java:184-207` (`State`), `:235-237`, `:470`
-- Severity: **LOW**
-- Type: **GAP**
-- Status: **OPEN**
-
 ## The project's own copyright holder is named nowhere
 `LICENSE.md` is the bare Apache-2.0 text with no copyright line, so `NOTICE` opens with the project name and licence only.
 

@@ -328,14 +328,14 @@ class WebPRoundTripTest {
     }
 
     @Test
-    @DisplayName("static lossy with autoSegment differs from baseline on high-variance content and round-trips")
+    @DisplayName("static lossy with autoSegment writes fewer bytes on high-variance content and round-trips")
     void staticLossyAutoSegmentViaWriter() throws IOException {
-        // 64x64 source with a smooth left half + high-variance right half (alternating
-        // 2-row stripes). Variance spread clears the auto-segment heuristic's gate so
-        // the encoder installs per-segment quant deltas via the writer's autoSegment
-        // option. Output bytes must differ from the autoSegment=false baseline, and
-        // the auto-segment output must round-trip through the decoder with healthy
-        // PSNR.
+        // 64x64 source with a smooth left half + high-variance right half (dense
+        // two-level strokes, like small text, whose residual the quantizer cannot zero).
+        // Variance spread clears the auto-segment heuristic's gate so the encoder
+        // installs per-segment quant deltas via the writer's autoSegment option. Output
+        // bytes must drop below the autoSegment=false baseline, and the auto-segment
+        // output must round-trip through the decoder with healthy PSNR.
         int W = 64, H = 64;
         PixelBuffer buf = PixelBuffer.create(W, H);
         for (int y = 0; y < H; y++) {
@@ -345,7 +345,7 @@ class WebPRoundTripTest {
                     int v = (x + y) * 2;
                     argb = 0xFF000000 | (v << 16) | (v << 8) | v;
                 } else {
-                    int v = ((y >> 1) & 1) != 0 ? 200 : 40;
+                    int v = ((x * 7 + y * 13) % 11 < 3 || (x ^ y) % 7 == 0) ? 220 : 50;
                     argb = 0xFF000000 | (v << 16) | (v << 8) | v;
                 }
                 buf.setPixel(x, y, argb);

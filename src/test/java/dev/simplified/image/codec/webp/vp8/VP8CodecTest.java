@@ -13,6 +13,7 @@ import java.util.function.IntBinaryOperator;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.is;
+import static org.hamcrest.Matchers.lessThan;
 
 /**
  * Package-private tests for the VP8 (lossy) codec internals: boolean range coder,
@@ -1474,6 +1475,27 @@ public class VP8CodecTest {
                 }
         }
 
+        @Test @DisplayName("a segment map crowded into one segment costs what its histogram does, as libwebp's SetSegmentProbas codes it")
+        void segmentMapProbabilitiesFollowTheHistogram() {
+            // 256 macroblocks, all in segment 0 but the last, which is in segment 3, under zero
+            // deltas so each codes as the unsegmented encode does: the difference in bytes is
+            // the segment header and map. A tree at 128 on every branch spends two bits on each
+            // segment ID, 64 bytes on the map alone; probabilities taken from the histogram put
+            // 255 of the 256 IDs on near-certain branches.
+            int size = 256;
+            PixelBuffer src = PixelBuffer.create(size, size);
+            for (int y = 0; y < size; y++)
+                for (int x = 0; x < size; x++)
+                    src.setPixel(x, y, 0xFF000000 | (x << 16) | (y << 8) | ((x + y) >> 1));
+            int[] assignment = new int[(size / 16) * (size / 16)];
+            assignment[assignment.length - 1] = 3;
+
+            int plain = VP8Encoder.encode(src, 0.5f).length;
+            int segmented = VP8Encoder.encodeWithSegmentMap(
+                src, 0.5f, assignment, new int[4], new int[4], /*absolute=*/ false).length;
+            assertThat("segment header and map, in bytes", segmented - plain, lessThan(16));
+        }
+
         @Test @DisplayName("conformance: per-segment LF delta produces observable pixel divergence at segment boundary (RFC 6386 section 15)")
         void segmentMapLfDeltaDivergence() {
             // Gradient 32x32 split into two segments by MB row. Segment 0 (top row)
@@ -1624,15 +1646,15 @@ public class VP8CodecTest {
         @Test @DisplayName("conformance: auto-segment keyframe reduces bytes on high-variance content while keeping PSNR healthy")
         void autoSegmentKeyframeImprovesCompression() {
             // 64x64 source: left half is a smooth low-variance gradient, right half
-            // carries structured alternating horizontal stripes that give each right-
-            // half MB large per-MB luma variance while still being a highly-compressible
-            // signal (a DC-plus-basis-function pattern). The auto-segment heuristic
-            // should bucket left-half MBs into low-variance segments (kept at base
-            // quant) and right-half MBs into high-variance segments (bumped to higher
-            // quant where the eye's noise masking absorbs the extra quantization
-            // error). Net byte output must drop vs the single-segment baseline, and
-            // decoded PSNR must stay healthy - this is a realistic-variance source
-            // not a chaotic-noise worst case.
+            // carries dense two-level strokes, like small text, that give each right-half
+            // MB large per-MB luma variance and a residual the quantizer cannot zero. The
+            // auto-segment heuristic should bucket left-half MBs into low-variance
+            // segments (kept at base quant) and right-half MBs into high-variance
+            // segments (bumped to higher quant where the eye's noise masking absorbs the
+            // extra quantization error). Net byte output must drop vs the single-segment
+            // baseline, and decoded PSNR must stay healthy. A texture the predictors
+            // reproduce, such as regular stripes, leaves no residual for the coarser
+            // quantizer to cut, so it pays for the segment map and saves nothing.
             int w = 64, h = 64;
             PixelBuffer src = PixelBuffer.create(w, h);
             for (int y = 0; y < h; y++) {
@@ -1643,9 +1665,8 @@ public class VP8CodecTest {
                         int v = (x + y) * 2;
                         argb = 0xFF000000 | (v << 16) | (v << 8) | v;
                     } else {
-                        // 2-row-tall alternating bright/dark stripes. High per-MB
-                        // variance (~8000) but structured, compresses well.
-                        int v = ((y >> 1) & 1) != 0 ? 200 : 40;
+                        // Bright strokes on dark, high per-MB variance.
+                        int v = ((x * 7 + y * 13) % 11 < 3 || (x ^ y) % 7 == 0) ? 220 : 50;
                         argb = 0xFF000000 | (v << 16) | (v << 8) | v;
                     }
                     src.setPixel(x, y, argb);
