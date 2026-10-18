@@ -311,7 +311,6 @@ src/main/java/dev/simplified/image/
 
 | Dependency | Version | Scope |
 |---|---|---|
-| [Log4j2](https://logging.apache.org/log4j/) | 2.25.3 | API |
 | [JetBrains Annotations](https://github.com/JetBrains/java-annotations) | 26.0.2 | API |
 | [Simplified Annotations](https://github.com/simplified-dev/annotations) | 2.7.0 | Compile-only |
 | [collections](https://github.com/Simplified-Dev/collections) | master-SNAPSHOT | API (Simplified-Dev) |

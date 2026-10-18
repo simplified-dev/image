@@ -145,7 +145,6 @@ RFC 6386 is an Independent Submission published in November 2011, so the Trust's
 | [simplified-dev/utils](https://github.com/simplified-dev/utils) | Apache-2.0 | `ByteArrayDataOutput` the writers write through, and string and number helpers |
 | [simplified-dev/annotations](https://github.com/simplified-dev/annotations) | Apache-2.0 | Annotation processor for accessors, builders and constructors (compile-only) |
 | [JetBrains Annotations](https://github.com/JetBrains/java-annotations) | Apache-2.0 | Nullability and API-status annotations |
-| [Log4j 2 API](https://logging.apache.org/log4j/2.x/) | Apache-2.0 | Logging API on the `api` configuration; no main source calls it |
 | [JUnit 5](https://junit.org/junit5/) | EPL-2.0 | Test framework |
 | [Hamcrest](https://hamcrest.org/JavaHamcrest/) | BSD-3-Clause | Test matchers |
 
