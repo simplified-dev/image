@@ -7,7 +7,6 @@ import dev.simplified.image.ImageFormat;
 import dev.simplified.image.PixelBuffer;
 import dev.simplified.image.StaticImageData;
 import dev.simplified.image.exception.ImageDecodeException;
-import dev.simplified.image.exception.ImageEncodeException;
 import dev.simplified.image.frame.ImageFrame;
 import org.jetbrains.annotations.NotNull;
 import org.junit.jupiter.api.DisplayName;
@@ -28,8 +27,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 /**
  * Pins the canvas {@link GifImageReader} decodes a GIF onto: the logical screen its Logical Screen
  * Descriptor declares, each frame kept at its own size and offset on it, and no longer than 16383
- * on a side - and that the WebP writer refuses such a canvas where its frames do not cover it from
- * the origin, rather than writing a file the WebP reader refuses.
+ * on a side - and that the WebP writer writes such an animation as the screen its frames draw.
  * <p>
  * Every fixture is a {@link HandBuiltGif}, so it declares a screen and frame offsets no writer here
  * produces. A picture is read as rows of characters: {@code R}, {@code B} and {@code G} for opaque
@@ -224,26 +222,42 @@ class GifCanvasTest {
     // ──── written as WebP ────
 
     @Test
-    @DisplayName("an animation whose first frame is smaller than its screen is refused by the WebP writer")
-    void firstFrameSmallerThanTheScreenIsRefusedAsWebP() {
+    @DisplayName("an animation whose first frame is smaller than its screen is written as WebP and reads back as the screen its frames draw")
+    void firstFrameSmallerThanTheScreenIsWrittenAsWebP() {
         ImageData decoded = read(HandBuiltGif.screen(8, 8)
             .frame(0, 0, 4, 4, fill(16, R))
             .frame(4, 4, 4, 4, fill(16, B))
             .bytes());
 
-        ImageEncodeException refused = assertThrows(ImageEncodeException.class, () -> ImageFactory.toByteArray(decoded, ImageFormat.WEBP));
-        assertThat(refused.getMessage(), is("WebP writer takes only frames that cover the canvas from the origin: frame '0' is '4x4' at '(0, 0)' on a '8x8' canvas"));
+        ImageData webp = ImageFactory.fromByteArray(ImageFactory.toByteArray(decoded, ImageFormat.WEBP));
+
+        assertThat(webp.getFrames().stream().map(GifCanvasTest::placement).toList(), contains(
+            "8x8 at (0, 0)",
+            "8x8 at (0, 0)"
+        ));
+        assertThat(picture(webp.getFrames().getFirst().pixels()), contains(
+            "RRRR....", "RRRR....", "RRRR....", "RRRR....",
+            "........", "........", "........", "........"
+        ));
+        assertThat(picture(webp.getFrames().getLast().pixels()), is(picture(drawn(decoded), 8)));
     }
 
     @Test
-    @DisplayName("an animation with a later frame smaller than its screen is refused by the WebP writer")
-    void laterFrameSmallerThanTheScreenIsRefusedAsWebP() {
+    @DisplayName("an animation with a later frame smaller than its screen is written as WebP and reads back as the screen its frames draw")
+    void laterFrameSmallerThanTheScreenIsWrittenAsWebP() {
         ImageData decoded = read(HandBuiltGif.screen(4, 4)
             .frame(0, 0, 4, 4, fill(16, R))
             .frame(1, 1, 2, 2, fill(4, B))
             .bytes());
 
-        assertThrows(ImageEncodeException.class, () -> ImageFactory.toByteArray(decoded, ImageFormat.WEBP));
+        ImageData webp = ImageFactory.fromByteArray(ImageFactory.toByteArray(decoded, ImageFormat.WEBP));
+
+        assertThat(picture(webp.getFrames().getLast().pixels()), contains(
+            "RRRR",
+            "RBBR",
+            "RBBR",
+            "RRRR"
+        ));
     }
 
     @Test

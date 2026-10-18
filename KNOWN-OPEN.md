@@ -2,22 +2,6 @@
 
 Defects present in the current tree and not yet fixed, most severe first. Each entry names the cause, the affected code, what it costs today, and what would raise its severity.
 
-## WebP writer refuses an animation whose frames do not cover its canvas from the origin
-`writeAnimated` encodes every frame as though its pixels spanned the canvas from the origin - frame 0's ANMF is declared canvas-sized and each later frame is diffed pixel for pixel against the one before - so `requireCanvasFrames` refuses with `ImageEncodeException` any animation holding a frame of another size or at an offset. A decoded GIF whose first frame is smaller than its logical screen, or whose later frames are partial, is such an animation, and cannot be written as WebP at all: two 4x4 frames on an 8x8 screen, the second at (4, 4), are refused at frame 0, and a 4x4 frame followed by a 2x2 one at (1, 1) at frame 1. An ANMF chunk carries its own offset, at even coordinates, and its own blend and disposal flags, so the container can hold such frames as they are; GIF's `RESTORE_TO_PREVIOUS` disposal has no WebP flag. `ImageData#toCanvasFrames` composes such an animation into whole-canvas frames the writer accepts, but the writer does not call it, so a caller must. Nothing in the workspace re-encodes a decoded GIF as WebP today. HIGH once a caller converts GIFs to WebP.
-
-- Affected: `src/main/java/dev/simplified/image/codec/webp/WebPImageWriter.java:145` (`writeAnimated`), `:309-320` (`requireCanvasFrames`)
-- Severity: **MEDIUM**
-- Type: **GAP**
-- Status: **OPEN**
-
-## The WebP writer's partial-frame path drops an OVER frame's blend
-When `usePartialFrames` holds - every lossless write, and every lossy write without P-frames - `WebPImageWriter` writes each ANMF chunk as do-not-dispose and do-not-blend over the region that changed. A frame tagged `FrameBlend.OVER` that is transparent where it relies on the frame beneath is therefore written as an overwrite. Measured on an animation whose frame 1 is `OVER`: written as lossless WebP (the default) the relying pixel reads `00000000`, where GIF shows `ffff0000` and lossy WebP with P-frames shows `ffff0005`. A decoded GIF, whose frames read as `OVER`, reaches it when re-encoded as lossless WebP; nothing in the workspace does that today. HIGH once a caller converts GIFs to WebP.
-
-- Affected: `src/main/java/dev/simplified/image/codec/webp/WebPImageWriter.java:169` (`usePartialFrames`), `:286-287`
-- Severity: **MEDIUM**
-- Type: **BUG**
-- Status: **OPEN**
-
 ## No reader bounds the pixels a header asks for
 `GifImageReader` refuses a canvas longer than 16383 on a side, as `WebPImageReader` refuses a VP8X canvas, and the PNM, QOI and TGA readers throw `ArithmeticException` on a pixel count that overflows an `int`, but no reader bounds how many pixels it allocates, so a few header bytes can ask for gigabytes. Measured on a 512 MB heap: a 41-byte still GIF whose logical screen is 16383x16383, over one 1x1 frame, is laid on a canvas of 268,402,689 pixels, 1 GiB of `int`, and throws `OutOfMemoryError`, and so does the 19-byte PNM header `P6 40000 40000 255`. An animated GIF declares such a canvas without allocating it, leaving the allocation to whatever composites it. A pixel budget each reader checks before it allocates, as Pillow's `MAX_IMAGE_PIXELS` is, would bound it. asset-renderer decodes pack textures and skins by format detection, so a crafted file in a pack it is handed reaches a reader. HIGH once a service renders packs or skins it does not vet.
 

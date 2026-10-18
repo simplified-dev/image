@@ -213,9 +213,9 @@ class WebPRoundTripTest {
     }
 
     @Test
-    @DisplayName("animated lossy + alpha self round-trip: alpha preserved per frame")
+    @DisplayName("animated lossy + alpha self round-trip: each frame decodes to the alpha its frames compose to")
     void animatedLossyAlphaSelfRoundTrip() {
-        // 3-frame animation; each frame fills with a different alpha gradient.
+        // 3-frame animation; each frame fills with a different alpha gradient, laid over the one before.
         ConcurrentList<ImageFrame> frames = Concurrent.newList();
         for (int f = 0; f < 3; f++) {
             PixelBuffer fb = PixelBuffer.create(16, 16);
@@ -248,12 +248,15 @@ class WebPRoundTripTest {
         if (outFrames.size() != 3)
             throw new AssertionError("frame count mismatch: " + outFrames.size());
 
+        // Each frame is laid over the one before it, so what it shows - and what it decodes to - is
+        // the canvas the frames compose to, whose alpha the lossless alpha plane keeps exactly.
+        ConcurrentList<ImageFrame> canvases = anim.toCanvasFrames().getFrames();
         for (int f = 0; f < 3; f++) {
             PixelBuffer fb = outFrames.get(f).pixels();
-            int phase = f * 40;
+            PixelBuffer canvas = canvases.get(f).pixels();
             for (int y = 0; y < 16; y++)
                 for (int x = 0; x < 16; x++) {
-                    int expectedAlpha = Math.min(255, phase + (x + y) * 7);
+                    int expectedAlpha = canvas.getPixel(x, y) >>> 24;
                     int gotAlpha = (fb.getPixel(x, y) >>> 24) & 0xFF;
                     if (gotAlpha != expectedAlpha)
                         throw new AssertionError(String.format(

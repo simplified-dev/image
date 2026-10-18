@@ -12,7 +12,6 @@ import dev.simplified.image.codec.webp.vp8.VP8Encoder;
 import dev.simplified.image.codec.webp.vp8.VP8EncoderSession;
 import dev.simplified.image.codec.webp.vp8l.NearLosslessPreprocess;
 import dev.simplified.image.codec.webp.vp8l.VP8LEncoder;
-import dev.simplified.image.exception.ImageEncodeException;
 import dev.simplified.image.frame.FrameBlend;
 import dev.simplified.image.frame.FrameDisposal;
 import dev.simplified.image.frame.ImageFrame;
@@ -31,8 +30,10 @@ import java.util.concurrent.CompletableFuture;
  * Writes WebP images (static and animated) using a pure Java implementation
  * of the VP8L lossless and VP8 lossy codecs.
  * <p>
- * An animation is written only when each of its frames covers its canvas from the origin; any other
- * is refused with {@link ImageEncodeException}.
+ * An animation is written as the canvases its frames compose to, {@link ImageData#toCanvasFrames()},
+ * so a frame may be any size at any offset, blend over the canvas and dispose of itself in any way,
+ * {@link FrameDisposal#RESTORE_TO_PREVIOUS} included: each written frame shows what that frame
+ * leaves on the canvas.
  */
 @ApiStatus.Internal
 public class WebPImageWriter implements ImageWriter {
@@ -73,13 +74,15 @@ public class WebPImageWriter implements ImageWriter {
             nearLossless = webpOptions.getNearLossless();
         }
 
-        // Converted after the dispatch, not before: toAlphaMode answers an AnimatedImageData for any
-        // animated image, so converting first would send an animated ImageData implemented elsewhere
-        // down the animated path. An AnimatedImageData converts to an AnimatedImageData, so the cast holds.
+        // Composed and converted after the dispatch, not before: both answer an AnimatedImageData for any
+        // animated image, so doing either first would send an animated ImageData implemented elsewhere
+        // down the animated path. An AnimatedImageData composes and converts to an AnimatedImageData, so
+        // the cast holds. Composing comes first, so OVER frames are laid down in the convention the
+        // frames are held in.
         if (data instanceof AnimatedImageData animated) {
             LoopCount declared = loopCount.orElse(animated.getLoopCount());
-            AnimatedImageData straight = (AnimatedImageData) animated.toAlphaMode(AlphaMode.STRAIGHT);
-            return writeAnimated(straight, lossless, quality, declared, multithreaded, usePFrames, forceKeyframeEvery, motionSearchThreads, autoSegment, nearLossless);
+            AnimatedImageData canvases = (AnimatedImageData) animated.toCanvasFrames().toAlphaMode(AlphaMode.STRAIGHT);
+            return writeAnimated(canvases, lossless, quality, declared, multithreaded, usePFrames, forceKeyframeEvery, motionSearchThreads, autoSegment, nearLossless);
         }
 
         return writeStatic(data, lossless, quality, alphaCompression, autoSegment, nearLossless);
@@ -142,7 +145,6 @@ public class WebPImageWriter implements ImageWriter {
     ) {
         int animLoopCount = animLoopCount(loopCount);
         ConcurrentList<ImageFrame> frames = data.getFrames();
-        requireCanvasFrames(frames, data.getWidth(), data.getHeight());
         boolean hasAlpha = data.hasAlpha();
         // Per-frame lossy + alpha: emit an ALPH sub-chunk before the VP8 sub-chunk.
         boolean perFrameAlpha = hasAlpha && !lossless;
@@ -278,6 +280,8 @@ public class WebPImageWriter implements ImageWriter {
         // the canvas regions outside each ANMF's rectangle retain the previous
         // frame's pixels and the new frame's pixels overwrite inside the
         // rectangle - the delta-accumulation model that partial frames require.
+        // Every frame is a composed canvas, the whole picture its source frame
+        // leaves, so overwriting the rectangle that changed reproduces it.
         WebPChunk.Type innerType = lossless ? WebPChunk.Type.VP8L : WebPChunk.Type.VP8;
         for (int i = 0; i < frames.size(); i++) {
             ImageFrame frame = frames.get(i);
@@ -292,31 +296,6 @@ public class WebPImageWriter implements ImageWriter {
         }
 
         return RiffContainer.write(chunks);
-    }
-
-    /**
-     * Refuses an animation whose frames do not each cover its canvas from the origin.
-     * <p>
-     * Every frame is encoded as though its pixels spanned the canvas from the origin: frame 0's
-     * {@code ANMF} is declared canvas-sized and each later frame is diffed pixel for pixel against the
-     * one before, so a frame of another size, or one at an offset, cannot be written as it is.
-     *
-     * @param frames the animation's frames
-     * @param canvasWidth the animation's canvas width
-     * @param canvasHeight the animation's canvas height
-     * @throws ImageEncodeException if a frame is not canvas-sized at the origin
-     */
-    private static void requireCanvasFrames(@NotNull ConcurrentList<ImageFrame> frames, int canvasWidth, int canvasHeight) {
-        for (int i = 0; i < frames.size(); i++) {
-            ImageFrame frame = frames.get(i);
-
-            if (frame.offsetX() != 0 || frame.offsetY() != 0 || frame.width() != canvasWidth || frame.height() != canvasHeight) {
-                throw new ImageEncodeException(
-                    "WebP writer takes only frames that cover the canvas from the origin: frame '%d' is '%dx%d' at '(%d, %d)' on a '%dx%d' canvas",
-                    i, frame.width(), frame.height(), frame.offsetX(), frame.offsetY(), canvasWidth, canvasHeight
-                );
-            }
-        }
     }
 
     /**
