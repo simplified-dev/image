@@ -871,8 +871,7 @@ public final class VP8Decoder {
                 copyRefMb16x16(refYPlane, s.session.refLumaStride, s.reconY, s.lumaStride, mbX, mbY);
                 copyRefMb8x8(refUPlane, s.session.refChromaStride, s.reconU, s.chromaStride, mbX, mbY);
                 copyRefMb8x8(refVPlane, s.session.refChromaStride, s.reconV, s.chromaStride, mbX, mbY);
-                int[] top = s.topNz[mbX];
-                for (int i = 0; i < 9; i++) { top[i] = 0; s.leftNz[i] = 0; }
+                clearNzForSkip(s.topNz[mbX], s.leftNz, /*is4x4=*/ false);
                 return;
             }
 
@@ -1022,17 +1021,21 @@ public final class VP8Decoder {
         short[] predV = new short[64];
         buildInterPrediction(s, mbX, mbY, wireRow, wireCol, refFrame, predY, predU, predV);
 
-        decodeInterResidualAndCommit(s, td, mbX, mbY, skip, predY, predU, predV);
+        decodeInterResidualAndCommit(s, td, mbX, mbY, skip, /*splitMv=*/ false, predY, predU, predV);
     }
 
     /**
      * Residual-decode and commit for an inter MB whose MC prediction has already been
      * built into {@code predY} / {@code predU} / {@code predV}. Shared between the
      * whole-MB inter path ({@link #decodeInterWithMv}) and the SPLITMV per-sub-block
-     * path which builds prediction differently but uses the same token layout.
+     * path which builds prediction differently but uses the same token layout. A skipped
+     * MB clears its contexts through {@link #clearNzForSkip}, a SPLITMV one keeping its Y2
+     * context as libvpx's {@code vp8_reset_mb_tokens_context} does.
+     *
+     * @param splitMv whether the MB is SPLITMV
      */
     private static void decodeInterResidualAndCommit(
-        @NotNull State s, @NotNull BooleanDecoder td, int mbX, int mbY, int skip,
+        @NotNull State s, @NotNull BooleanDecoder td, int mbX, int mbY, int skip, boolean splitMv,
         short @NotNull [] predY, short @NotNull [] predU, short @NotNull [] predV
     ) {
         int[] top = s.topNz[mbX];
@@ -1045,7 +1048,7 @@ public final class VP8Decoder {
 
         if (skip != 0) {
             // Skip: no residual, prediction is the final reconstruction.
-            for (int i = 0; i < 9; i++) { top[i] = 0; left[i] = 0; }
+            clearNzForSkip(top, left, splitMv);
         } else {
             // Y2 first (inter MBs that aren't B_PRED always have Y2).
             short[] zz = new short[16];
@@ -1242,7 +1245,7 @@ public final class VP8Decoder {
         short[] predV = new short[64];
         buildSplitMvPrediction(s, mbX, mbY, refFrame, slotRow, slotCol, predY, predU, predV);
 
-        decodeInterResidualAndCommit(s, td, mbX, mbY, skip, predY, predU, predV);
+        decodeInterResidualAndCommit(s, td, mbX, mbY, skip, /*splitMv=*/ true, predY, predU, predV);
     }
 
     /**
@@ -1631,21 +1634,22 @@ public final class VP8Decoder {
     }
 
     /**
-     * Clears the non-zero contexts a skipped intra macroblock leaves, as libwebp's
-     * {@code VP8DecodeMB} does: every luma and chroma slot, and the Y2 slot only when the
-     * macroblock would code a Y2 block, so a skipped B_PRED macroblock leaves the Y2 context
-     * as it found it.
+     * Clears the non-zero contexts a skipped macroblock leaves, as libwebp's
+     * {@code VP8DecodeMB} and libvpx's {@code vp8_reset_mb_tokens_context} do: every luma
+     * and chroma slot, and the Y2 slot only when the macroblock is neither B_PRED nor
+     * SPLITMV, so a skipped B_PRED or SPLITMV macroblock leaves the Y2 context as it found
+     * it.
      *
      * @param top the macroblock column's above contexts
      * @param left the macroblock row's left contexts
-     * @param isI4x4 whether the macroblock is B_PRED
+     * @param is4x4 whether the macroblock is B_PRED or SPLITMV
      */
-    static void clearNzForSkip(int @NotNull [] top, int @NotNull [] left, boolean isI4x4) {
+    static void clearNzForSkip(int @NotNull [] top, int @NotNull [] left, boolean is4x4) {
         for (int i = 0; i < 8; i++) {
             top[i] = 0;
             left[i] = 0;
         }
-        if (!isI4x4) {
+        if (!is4x4) {
             top[8] = 0;
             left[8] = 0;
         }

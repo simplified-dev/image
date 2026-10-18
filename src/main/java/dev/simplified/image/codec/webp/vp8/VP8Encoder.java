@@ -1745,7 +1745,7 @@ public final class VP8Encoder {
             copyRef8x8(s.session.refU, s.session.refChromaStride, s.reconU, s.chromaStride, mbX, mbY);
             copyRef8x8(s.session.refV, s.session.refChromaStride, s.reconV, s.chromaStride, mbX, mbY);
 
-            clearNzAndIntraContextForInterSkip(s, mbX);
+            clearNzAndIntraContextForInterSkip(s, mbX, /*splitMv=*/ false);
         }
     }
 
@@ -1791,7 +1791,7 @@ public final class VP8Encoder {
             commitChromaBufferToRecon(s.reconU, s.chromaStride, mbX, mbY, predU);
             commitChromaBufferToRecon(s.reconV, s.chromaStride, mbX, mbY, predV);
 
-            clearNzAndIntraContextForInterSkip(s, mbX);
+            clearNzAndIntraContextForInterSkip(s, mbX, /*splitMv=*/ false);
         }
     }
 
@@ -2059,7 +2059,7 @@ public final class VP8Encoder {
             commitChromaBufferToRecon(s.reconU, s.chromaStride, mbX, mbY, predU);
             commitChromaBufferToRecon(s.reconV, s.chromaStride, mbX, mbY, predV);
 
-            clearNzAndIntraContextForInterSkip(s, mbX);
+            clearNzAndIntraContextForInterSkip(s, mbX, /*splitMv=*/ true);
         }
     }
 
@@ -2171,11 +2171,22 @@ public final class VP8Encoder {
 
     /**
      * Resets the per-MB nz slots and {@code intraT}/{@code intraL} context for an inter-skip MB.
+     * Every luma and chroma slot clears, and the Y2 slot clears unless the MB is SPLITMV, which
+     * leaves it as it found it, as libvpx's {@code vp8_fix_contexts} does and as its decoder's
+     * {@code vp8_reset_mb_tokens_context} reads it.
+     *
+     * @param s the frame state
+     * @param mbX the macroblock column
+     * @param splitMv whether the skipped MB is SPLITMV
      */
-    private static void clearNzAndIntraContextForInterSkip(@NotNull State s, int mbX) {
-        for (int i = 0; i < 9; i++) {
+    private static void clearNzAndIntraContextForInterSkip(@NotNull State s, int mbX, boolean splitMv) {
+        for (int i = 0; i < 8; i++) {
             s.topNz[mbX][i] = 0;
             s.leftNz[i] = 0;
+        }
+        if (!splitMv) {
+            s.topNz[mbX][8] = 0;
+            s.leftNz[8] = 0;
         }
         java.util.Arrays.fill(s.intraT, mbX * 4, mbX * 4 + 4, IntraPrediction.B_DC_PRED);
         java.util.Arrays.fill(s.intraL, IntraPrediction.B_DC_PRED);
@@ -2398,7 +2409,7 @@ public final class VP8Encoder {
         copyRef8x8 (s.session.refU, s.session.refChromaStride, s.reconU, s.chromaStride, mbX, mbY);
         copyRef8x8 (s.session.refV, s.session.refChromaStride, s.reconV, s.chromaStride, mbX, mbY);
 
-        clearNzAndIntraContextForInterSkip(s, mbX);
+        clearNzAndIntraContextForInterSkip(s, mbX, /*splitMv=*/ true);
     }
 
     /**

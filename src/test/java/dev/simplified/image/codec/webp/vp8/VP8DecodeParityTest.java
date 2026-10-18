@@ -101,6 +101,25 @@ class VP8DecodeParityTest {
         assertThat(left, is(new int[9]));
     }
 
+    @Test
+    @DisplayName("a skipped SPLITMV macroblock leaves the Y2 context for the macroblock that reads it next")
+    void skippedSplitMvKeepsY2Context() {
+        // libvpx's decoder keeps a skipped macroblock's Y2 context when it is SPLITMV, which codes
+        // no Y2 block (vp8_reset_mb_tokens_context), and its encoder keeps it the same way
+        // (vp8_fix_contexts). This shear skips a SPLITMV macroblock beside neighbours that code a
+        // Y2 block by its fourth frame, so an encoder and a decoder that clear the context
+        // differently read a later macroblock's tokens under different probabilities and part.
+        VP8EncoderSession encoder = new VP8EncoderSession();
+        VP8DecoderSession decoder = new VP8DecoderSession();
+        for (int frame = 0; frame < 4; frame++) {
+            decoder.decode(encoder.encode(shear(frame), 0.6f, frame == 0));
+            String at = "shear frame " + frame + " ";
+            assertPlane(at + "Y", encoder.refY, decoder.refY);
+            assertPlane(at + "U", encoder.refU, decoder.refU);
+            assertPlane(at + "V", encoder.refV, decoder.refV);
+        }
+    }
+
     private static void assertPlane(String what, short[] encoder, short[] decoder) {
         if (encoder.length != decoder.length)
             throw new AssertionError(what + ": the encoder holds " + encoder.length + " samples, the decoder " + decoder.length);
@@ -155,6 +174,23 @@ class VP8DecodeParityTest {
                     r = g = b = 240;
                 }
                 pixels.setPixel(x, y, 0xFF000000 | Math.clamp(r, 0, 255) << 16 | Math.clamp(g, 0, 255) << 8 | Math.clamp(b, 0, 255));
+            }
+        }
+        return pixels;
+    }
+
+    /**
+     * A shaded checkerboard the size of {@link #SCENE} whose bands of eight rows each slide right
+     * one pixel further per frame than the band above, so neighbouring macroblocks move apart.
+     */
+    private static PixelBuffer shear(int frame) {
+        PixelBuffer pixels = PixelBuffer.create(SCENE.width(), SCENE.height());
+        for (int y = 0; y < SCENE.height(); y++) {
+            for (int x = 0; x < SCENE.width(); x++) {
+                int sx = x - (y / 8) * frame;
+                double shade = 128 + 60 * Math.sin(sx * 0.21) * Math.cos(y * 0.17) + ((sx / 8 + y / 8) % 2 == 0 ? 25 : -25);
+                int c = Math.clamp((int) shade, 0, 255);
+                pixels.setPixel(x, y, 0xFF000000 | c << 16 | Math.clamp(255 - c, 0, 255) << 8 | Math.clamp(c / 2 + 60, 0, 255));
             }
         }
         return pixels;
