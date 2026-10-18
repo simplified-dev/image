@@ -5,6 +5,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -27,6 +28,18 @@ class VP8LibvpxParityTest {
             VP8Encoder.encodeWithSplitMv(src, 1.0f, encoder)
         );
         assertDecodesAsLibvpx("forced SPLITMV", stream, 64, 48);
+    }
+
+    @Test
+    @DisplayName("NEWMV macroblocks decode in libvpx as they decode here")
+    void newMvFramesDecodeAsLibvpxDoes() throws IOException {
+        // The two halves of the frame slide opposite ways, so most macroblocks code NEWMV beside
+        // neighbours that carry a non-zero best MV, which the MV on the wire is the difference from.
+        VP8EncoderSession encoder = new VP8EncoderSession();
+        List<byte[]> stream = new ArrayList<>();
+        for (int frame = 0; frame < 6; frame++)
+            stream.add(encoder.encode(opposed(128, 96, frame), 0.9f, frame == 0));
+        assertDecodesAsLibvpx("opposed", stream, 128, 96);
     }
 
     /**
@@ -72,6 +85,23 @@ class VP8LibvpxParityTest {
         for (int y = 0; y < height; y++)
             for (int x = 0; x < width; x++)
                 pixels.setPixel(x, y, 0xFF000000 | (x * 4) << 16 | (y * 5) << 8 | (x + y) * 2);
+        return pixels;
+    }
+
+    /**
+     * A shaded checkerboard whose upper half slides left two pixels a frame and whose lower half
+     * slides right three.
+     */
+    private static PixelBuffer opposed(int width, int height, int frame) {
+        PixelBuffer pixels = PixelBuffer.create(width, height);
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                int sx = y < height / 2 + 3 ? x - 2 * frame : x + 3 * frame;
+                double shade = 128 + 60 * Math.sin(sx * 0.21) * Math.cos(y * 0.17) + ((sx / 8 + y / 8) % 2 == 0 ? 25 : -25);
+                int c = Math.clamp((int) shade, 0, 255);
+                pixels.setPixel(x, y, 0xFF000000 | c << 16 | Math.clamp(255 - c, 0, 255) << 8 | Math.clamp(c / 2 + 60, 0, 255));
+            }
+        }
         return pixels;
     }
 

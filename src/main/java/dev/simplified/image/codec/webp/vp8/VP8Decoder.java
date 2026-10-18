@@ -825,7 +825,7 @@ public final class VP8Decoder {
             //   0 = ZEROMV     - MV is (0, 0)
             //   1 = NEARESTMV  - MV = near.nearest_mv (no wire bits)
             //   2 = NEARMV     - MV = near.near_mv (no wire bits)
-            //   3 = NEWMV      - MV read from wire
+            //   3 = NEWMV      - MV read from wire as its difference from near.best_mv
             //   4 = SPLITMV    - per-sub-block MVs, decoded by decodeSplitMv
             int effInternalRow;
             int effInternalCol;
@@ -839,10 +839,11 @@ public final class VP8Decoder {
                 effInternalRow = near.nearRow;
                 effInternalCol = near.nearCol;
             } else if (mvMode == 3) {
+                // libvpx's read_mb_modes adds the wire MV to the clamped best MV.
                 int wireRow = decodeMvComponent(br, s.mvProba[0]);
                 int wireCol = decodeMvComponent(br, s.mvProba[1]);
-                effInternalRow = wireRow << 1;
-                effInternalCol = wireCol << 1;
+                effInternalRow = (wireRow << 1) + near.bestRow;
+                effInternalCol = (wireCol << 1) + near.bestCol;
             } else {
                 // SPLITMV (mvMode == 4): parse scheme + sub-MVs + per-sub-block MC.
                 decodeSplitMv(s, br, td, mbX, mbY, skip, refFrame, near);

@@ -1802,7 +1802,7 @@ public final class VP8Encoder {
      */
     private static final class InterResidualCandidate extends InterCandidate {
         final int mvMode;               // 1 = NEAREST, 2 = NEAR, 3 = NEW
-        final int wireRow, wireCol;
+        final int wireRow, wireCol;     // NEW's MV less the best MV, quarter-pel - what goes on the wire
         final int internalRow, internalCol;
         final short @NotNull [] predU, predV;
         final @NotNull I16Result i16;
@@ -1989,7 +1989,7 @@ public final class VP8Encoder {
         final int @NotNull [] slotRef;         // [slotCount] SUB_MV_REF_LEFT/ABOVE/ZERO/NEW
         final int @NotNull [] slotInternalRow; // [slotCount] chosen internal MV per slot
         final int @NotNull [] slotInternalCol;
-        final int @NotNull [] slotWireRow;     // [slotCount] wire MV (NEW slots only)
+        final int @NotNull [] slotWireRow;     // [slotCount] NEW slot's MV less the best MV, quarter-pel
         final int @NotNull [] slotWireCol;
         final short @NotNull [] predY, predU, predV;
         final int @NotNull [] mvRefProbs;
@@ -2282,7 +2282,7 @@ public final class VP8Encoder {
         if (near.cnt[NearMvs.CNT_NEAREST] > 0) {
             best = chooseBetter(best, buildInterResidualCandidate(
                 s, mb, mbX, mbY, /*mvMode=*/ 1,
-                near.nearestRow, near.nearestCol,
+                near.nearestRow, near.nearestCol, near,
                 mvRefProbs, skipBit0, baseInterHeader, lambda
             ));
         }
@@ -2291,7 +2291,7 @@ public final class VP8Encoder {
         if (near.cnt[NearMvs.CNT_NEAR] > 0) {
             best = chooseBetter(best, buildInterResidualCandidate(
                 s, mb, mbX, mbY, /*mvMode=*/ 2,
-                near.nearRow, near.nearCol,
+                near.nearRow, near.nearCol, near,
                 mvRefProbs, skipBit0, baseInterHeader, lambda
             ));
         }
@@ -2308,7 +2308,7 @@ public final class VP8Encoder {
             if (!matchesNearest && !matchesNear) {
                 best = chooseBetter(best, buildInterResidualCandidate(
                     s, mb, mbX, mbY, /*mvMode=*/ 3,
-                    wireRow << 1, wireCol << 1,   // wire -> 1/8-pel internal
+                    wireRow << 1, wireCol << 1, near,   // wire -> 1/8-pel internal
                     mvRefProbs, skipBit0, baseInterHeader, lambda
                 ));
             }
@@ -2334,7 +2334,7 @@ public final class VP8Encoder {
             if (s.session != null)
                 s.session.splitMvSearches++;
             InterCandidate split = buildBestSplitMvCandidate(
-                s, mb, mbX, mbY, mvRefProbs, skipBit0, skipBit1, baseInterHeader, lambda
+                s, mb, mbX, mbY, near, mvRefProbs, skipBit0, skipBit1, baseInterHeader, lambda
             );
             if (split != null) best = chooseBetter(best, split);
         }
@@ -2697,7 +2697,7 @@ public final class VP8Encoder {
      * prediction (e.g., all NEW searches clipped).
      */
     private static @org.jetbrains.annotations.Nullable InterCandidate buildBestSplitMvCandidate(
-        @NotNull State s, @NotNull Macroblock mb, int mbX, int mbY,
+        @NotNull State s, @NotNull Macroblock mb, int mbX, int mbY, @NotNull NearMvs.Result near,
         int @NotNull [] mvRefProbs, int skipBit0, int skipBit1, int baseInterHeader, int lambda
     ) {
         InterCandidate best = null;
@@ -2795,17 +2795,21 @@ public final class VP8Encoder {
                     int newWireCol = newWire[1];
                     int newInternalRow = newWireRow << 1;
                     int newInternalCol = newWireCol << 1;
+                    // NEW4x4 goes on the wire as its difference from the best MV, as libvpx's
+                    // write_mv codes it.
+                    int deltaRow = (newInternalRow - near.bestRow) >> 1;
+                    int deltaCol = (newInternalCol - near.bestCol) >> 1;
                     long sse = sseSubBlockAtInternalMv(s, mb, mbX, mbY,
                         blockX0, blockY0, blockW, blockH, newInternalRow, newInternalCol);
                     int rate = VP8Costs.treeLeafBitCost(
                         VP8Tables.SUB_MV_REF_TREE, VP8Tables.SUB_MV_REF_NEW, subMvRefProbs)
-                        + VP8Costs.mvWireBitCost(newWireRow, newWireCol, s.mvProba);
+                        + VP8Costs.mvWireBitCost(deltaRow, deltaCol, s.mvProba);
                     long score = sse * VP8Costs.RD_DISTO_MULT + (long) rate * lambda;
                     if (score < bestScore) {
                         bestScore = score; bestRef = VP8Tables.SUB_MV_REF_NEW;
                         bestSse = sse; bestRate = rate;
                         bestInternalRow = newInternalRow; bestInternalCol = newInternalCol;
-                        bestWireRow = newWireRow; bestWireCol = newWireCol;
+                        bestWireRow = deltaRow; bestWireCol = deltaCol;
                     }
                 }
 
@@ -2897,12 +2901,13 @@ public final class VP8Encoder {
 
     /**
      * Builds an {@link InterResidualCandidate} from an MC prediction + trellised residual.
-     * MV is in 1/8-pel internal units. {@code mvMode == 3} (NEW) pays the MV-wire-bit cost;
-     * NEAREST and NEAR (modes 1 and 2) infer the MV from neighbours.
+     * MV is in 1/8-pel internal units. {@code mvMode == 3} (NEW) pays the MV-wire-bit cost
+     * of its difference from {@code near}'s best MV, which is what goes on the wire; NEAREST
+     * and NEAR (modes 1 and 2) infer the MV from neighbours.
      */
     private static @NotNull InterCandidate buildInterResidualCandidate(
         @NotNull State s, @NotNull Macroblock mb, int mbX, int mbY, int mvMode,
-        int internalRow, int internalCol,
+        int internalRow, int internalCol, @NotNull NearMvs.Result near,
         int @NotNull [] mvRefProbs, int skipBit0, int baseInterHeader, int lambda
     ) {
         int wireRow = internalRow >> 1;
@@ -2923,11 +2928,13 @@ public final class VP8Encoder {
                  + sumSquaredError(mb.cr, reconV);
 
         int modeRate = VP8Costs.treeLeafBitCost(VP8Tables.MV_REF_TREE, mvMode, mvRefProbs);
-        int mvRate = (mvMode == 3) ? VP8Costs.mvWireBitCost(wireRow, wireCol, s.mvProba) : 0;
+        int deltaRow = (internalRow - near.bestRow) >> 1;
+        int deltaCol = (internalCol - near.bestCol) >> 1;
+        int mvRate = (mvMode == 3) ? VP8Costs.mvWireBitCost(deltaRow, deltaCol, s.mvProba) : 0;
         int rate = skipBit0 + baseInterHeader + modeRate + mvRate
                  + i16.rate + u.rate + v.rate;
         return new InterResidualCandidate(sse, rate, lambda, mvMode,
-            wireRow, wireCol, internalRow, internalCol,
+            deltaRow, deltaCol, internalRow, internalCol,
             predU, predV, i16, u, v, mvRefProbs);
     }
 

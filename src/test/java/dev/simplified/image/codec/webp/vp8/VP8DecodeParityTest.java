@@ -120,6 +120,23 @@ class VP8DecodeParityTest {
         }
     }
 
+    @Test
+    @DisplayName("the encoder reconstructs NEW4x4 sub-blocks, coded against the best MV, as the decoder does")
+    void newSubBlockMvsReconstructAsDecoded() {
+        // A NEW4x4 sub-block MV goes on the wire as its difference from the macroblock's best MV.
+        // This shear codes SPLITMV macroblocks with NEW4x4 sub-blocks beside moving neighbours from
+        // its first P-frame, so an encoder that writes the MV itself parts from the decoder there.
+        VP8EncoderSession encoder = new VP8EncoderSession();
+        VP8DecoderSession decoder = new VP8DecoderSession();
+        for (int frame = 0; frame < 3; frame++) {
+            decoder.decode(encoder.encode(shear(frame), 0.9f, frame == 0));
+            String at = "shear frame " + frame + " ";
+            assertPlane(at + "Y", encoder.refY, decoder.refY);
+            assertPlane(at + "U", encoder.refU, decoder.refU);
+            assertPlane(at + "V", encoder.refV, decoder.refV);
+        }
+    }
+
     private static void assertPlane(String what, short[] encoder, short[] decoder) {
         if (encoder.length != decoder.length)
             throw new AssertionError(what + ": the encoder holds " + encoder.length + " samples, the decoder " + decoder.length);
