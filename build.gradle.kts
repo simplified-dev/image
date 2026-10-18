@@ -71,4 +71,7 @@ tasks.test {
     // `-Dvp8.pythonBin=<path>` on the Gradle command line names the interpreter
     // tried first. See `LibwebpOracle` in the test sources for how one is chosen.
     System.getProperty("vp8.pythonBin")?.let { systemProperty("vp8.pythonBin", it) }
+    // The same for the libvpx oracle's ffmpeg: `-Dvp8.ffmpegBin=<path>` names the build tried
+    // first. See `LibvpxOracle` in the test sources.
+    System.getProperty("vp8.ffmpegBin")?.let { systemProperty("vp8.ffmpegBin", it) }
 }

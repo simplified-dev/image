@@ -2236,7 +2236,7 @@ public final class VP8Encoder {
 
         NearMvs.Result near = new NearMvs.Result();
         // Our encoder only emits LAST-ref MBs, so currentRefFrame is always REF_LAST here.
-        NearMvs.find(s.mbIsInter, s.mbMvRow, s.mbMvCol, s.mbRefFrame, s.mbCols, mbX, mbY,
+        NearMvs.find(s.mbIsInter, s.mbMvRow, s.mbMvCol, s.mbRefFrame, s.mbSplitScheme, s.mbCols, mbX, mbY,
             LoopFilter.REF_LAST, s.signBiasGolden, s.signBiasAltref, near);
         int[] mvRefProbs = new int[4];
         NearMvs.refProbs(near.cnt, mvRefProbs);
@@ -2364,7 +2364,7 @@ public final class VP8Encoder {
         // is {ref=LAST, mv=(0,0), inter=true}, so neighbour votes in NearMvs are
         // stable across the forced-SPLITMV grid.
         NearMvs.Result near = new NearMvs.Result();
-        NearMvs.find(s.mbIsInter, s.mbMvRow, s.mbMvCol, s.mbRefFrame, s.mbCols, mbX, mbY,
+        NearMvs.find(s.mbIsInter, s.mbMvRow, s.mbMvCol, s.mbRefFrame, s.mbSplitScheme, s.mbCols, mbX, mbY,
             LoopFilter.REF_LAST, s.signBiasGolden, s.signBiasAltref, near);
         int[] mvRefProbs = new int[4];
         NearMvs.refProbs(near.cnt, mvRefProbs);

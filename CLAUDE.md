@@ -47,6 +47,8 @@ Write options live in `.option` and use fluent builders: `WebPWriteOptions.build
 
 The VP8 and WebP tests check this library's output against libwebp through Python's `webp` package (libwebp bindings), always by way of `LibwebpOracle` in the test sources. It takes the first interpreter that starts and imports `webp` and `numpy`, trying `-Dvp8.pythonBin=<path>` (the build forwards it to the test JVM) or else the `VP8_PYTHON_BIN` environment variable, then `python3`, `python` and `py`, and it hands each script its file paths as arguments. When none qualifies, a test that consults libwebp aborts with `TestAbortedException` and so reports skipped, never passed; a check of this library's own output that the test makes first still runs, and still fails on its own. A script that runs and exits non-zero fails its test. Three diagnostics in `WebPRoundTripTest` abort the same way when the local tooltip files they read are absent.
 
+`VP8LibvpxParityTest` holds P-frames to libvpx the same way, through `LibvpxOracle` and an `ffmpeg` build that lists `libvpx` among both its encoders and decoders: `-Dvp8.ffmpegBin=<path>` (forwarded likewise), else the `VP8_FFMPEG_BIN` environment variable, then `ffmpeg`. Streams travel as IVF files, libvpx decodes on four threads, and an ffmpeg run that exits non-zero or prints an error fails its test. Without such a build those tests abort and report skipped.
+
 ## Info
 
 - Java 21 toolchain (`build.gradle.kts`)
@@ -54,4 +56,4 @@ The VP8 and WebP tests check this library's output against libwebp through Pytho
 - External deps: Log4j2, Simplified Annotations, JetBrains annotations
 - Third-party code: `NOTICE` names every class ported from libwebp, libvpx or RFC 6386 and carries their licences; the jar packs it into `META-INF` with `LICENSE.md`, the Apache-2.0 text it points to. Code or tables taken from another codec get a line there too
 - Tests: JUnit 5 + Hamcrest
-- 93 main sources plus a `package-info.java` per package; 38 test sources
+- 93 main sources plus a `package-info.java` per package; 40 test sources

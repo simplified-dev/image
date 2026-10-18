@@ -35,7 +35,8 @@ final class NearMvs {
     static final int CNT_NEAR = 2;
 
     /**
-     * Index for the SPLITMV neighbour count (always 0 in our encoder - we never emit SPLITMV).
+     * Index for the SPLITMV neighbour count: two for each of the above and left neighbours
+     * coded SPLITMV, one for the above-left one.
      */
     static final int CNT_SPLITMV = 3;
 
@@ -97,6 +98,8 @@ final class NearMvs {
      * @param mbMvCol per-MB MV col (1/8-pel internal) - unused when {@code !mbIsInter[i]}
      * @param mbRefFrame per-MB reference-frame index (REF_INTRA / REF_LAST / REF_GOLDEN /
      *                   REF_ALTREF); used to resolve each inter neighbour's sign bias
+     * @param mbSplitScheme per-MB SPLITMV partitioning, negative for a macroblock that is not
+     *                      SPLITMV; counted into {@link #CNT_SPLITMV}
      * @param mbCols macroblock grid width
      * @param mbX current MB column
      * @param mbY current MB row
@@ -107,8 +110,8 @@ final class NearMvs {
      */
     static void find(
         boolean @NotNull [] mbIsInter, int @NotNull [] mbMvRow, int @NotNull [] mbMvCol,
-        int @NotNull [] mbRefFrame, int mbCols, int mbX, int mbY, int currentRefFrame,
-        boolean signBiasGolden, boolean signBiasAltref, @NotNull Result out
+        int @NotNull [] mbRefFrame, int @NotNull [] mbSplitScheme, int mbCols, int mbX, int mbY,
+        int currentRefFrame, boolean signBiasGolden, boolean signBiasAltref, @NotNull Result out
     ) {
         // libvpx stashes best/nearest/near/split MVs in a 4-slot array and walks a "current"
         // pointer forward as new distinct non-zero neighbour MVs arrive. cntx advances in
@@ -190,9 +193,13 @@ final class NearMvs {
             cnt[CNT_NEAREST] += 1;
         }
 
-        // Our encoder never emits SPLITMV, so the "neighbour coded SPLITMV" count
-        // collapses to 0. Libvpx's formula: cnt[SPLITMV] = (above==SPLIT)*2 + (left==SPLIT)*2 + (aboveleft==SPLIT).
-        cnt[CNT_SPLITMV] = 0;
+        // The slot then counts the neighbours coded SPLITMV, which is what the SPLITMV branch of
+        // the MV-reference tree is read under: (above + left) * 2 + above-left. A neighbour
+        // outside the frame is libvpx's zeroed border entry, which is never SPLITMV.
+        int aboveSplit = splitAt(mbSplitScheme, mbCols, mbX, mbY - 1);
+        int leftSplit = splitAt(mbSplitScheme, mbCols, mbX - 1, mbY);
+        int aboveLeftSplit = splitAt(mbSplitScheme, mbCols, mbX - 1, mbY - 1);
+        cnt[CNT_SPLITMV] = (aboveSplit + leftSplit) * 2 + aboveLeftSplit;
 
         // Swap near and nearest if near accumulated more votes.
         if (cnt[CNT_NEAR] > cnt[CNT_NEAREST]) {
@@ -214,6 +221,20 @@ final class NearMvs {
         out.nearestCol = mvCols[CNT_NEAREST];
         out.nearRow = mvRows[CNT_NEAR];
         out.nearCol = mvCols[CNT_NEAR];
+    }
+
+    /**
+     * Answers whether the macroblock at ({@code mbX}, {@code mbY}) is in the frame and coded
+     * SPLITMV.
+     *
+     * @param mbSplitScheme per-MB SPLITMV partitioning, negative for a macroblock that is not SPLITMV
+     * @param mbCols macroblock grid width
+     * @param mbX the macroblock column, negative outside the frame
+     * @param mbY the macroblock row, negative outside the frame
+     * @return 1 when it is, 0 when it is not
+     */
+    private static int splitAt(int @NotNull [] mbSplitScheme, int mbCols, int mbX, int mbY) {
+        return mbX >= 0 && mbY >= 0 && mbSplitScheme[mbY * mbCols + mbX] >= 0 ? 1 : 0;
     }
 
     /**
