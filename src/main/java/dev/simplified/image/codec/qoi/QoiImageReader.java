@@ -6,6 +6,7 @@ import dev.simplified.image.ImageFormat;
 import dev.simplified.image.PixelBuffer;
 import dev.simplified.image.StaticImageData;
 import dev.simplified.image.codec.ImageReader;
+import dev.simplified.image.codec.common.DecodeBudget;
 import dev.simplified.image.exception.ImageDecodeException;
 import dev.simplified.image.option.ImageReadOptions;
 import org.jetbrains.annotations.ApiStatus;
@@ -57,6 +58,7 @@ public class QoiImageReader implements ImageReader {
         if (channels != 3 && channels != 4)
             throw new ImageDecodeException("Invalid QOI channel count: '%d'", channels);
 
+        DecodeBudget.open("QOI").claim(width, height);
         int totalPixels = Math.multiplyExact(width, height);
         int[] pixels = new int[totalPixels];
         int[] table = new int[64];

@@ -8,6 +8,7 @@ import dev.simplified.image.codec.ImageReader;
 import dev.simplified.image.codec.ImageWriter;
 import dev.simplified.image.codec.bmp.BmpImageReader;
 import dev.simplified.image.codec.bmp.BmpImageWriter;
+import dev.simplified.image.codec.common.DecodeBudget;
 import dev.simplified.image.codec.gif.GifImageReader;
 import dev.simplified.image.codec.gif.GifImageWriter;
 import dev.simplified.image.codec.ico.IcoImageReader;
@@ -28,6 +29,7 @@ import dev.simplified.image.codec.webp.WebPImageReader;
 import dev.simplified.image.codec.webp.WebPImageWriter;
 import dev.simplified.image.exception.ImageDecodeException;
 import dev.simplified.image.exception.ImageException;
+import dev.simplified.image.exception.ImageTooLargeException;
 import dev.simplified.image.exception.UnsupportedFormatException;
 import dev.simplified.image.frame.ImageFrame;
 import dev.simplified.image.option.ImageReadOptions;
@@ -56,9 +58,20 @@ import java.util.concurrent.CompletableFuture;
  * <p>
  * All input methods converge to {@link #fromByteArray(byte[], ImageFormat, ImageReadOptions)}.
  * All output methods start from {@link #toByteArray(ImageData, ImageFormat, ImageWriteOptions)}.
+ * <p>
+ * Every read holds to a process-wide pixel budget, {@link #getMaxPixels()}: a reader claims every
+ * frame, page and canvas it builds the image from, counted together, and refuses an image whose
+ * header asks for more with {@link ImageTooLargeException} before allocating it. A canvas the image
+ * declares is held to the budget on its own.
  */
 @UtilityClass
 public class ImageFactory {
+
+    /**
+     * The pixel budget every read holds to until {@link #setMaxPixels(long)} sets another: 8192 by
+     * 8192 pixels, 256 MiB of ARGB.
+     */
+    public static final long DEFAULT_MAX_PIXELS = DecodeBudget.DEFAULT_LIMIT;
 
     /** the built-in readers, in the order {@link #detectFormat} tries them */
     private static final @NotNull List<ImageReader> READERS;
@@ -92,6 +105,30 @@ public class ImageFactory {
             new QoiImageWriter(),
             new PnmImageWriter()
         );
+    }
+
+    // === Pixel Budget ===
+
+    /**
+     * Returns the most pixels one read may hold, across every frame, page and canvas it builds the
+     * image from.
+     *
+     * @return the pixel budget every read opened from now on holds to
+     */
+    public static long getMaxPixels() {
+        return DecodeBudget.limit();
+    }
+
+    /**
+     * Sets the most pixels one read may hold, across every frame, page and canvas it builds the image
+     * from, for every read in the process opened from now on; a read already under way keeps the
+     * budget it opened with. {@link Long#MAX_VALUE} lifts the budget.
+     *
+     * @param maxPixels the pixel budget
+     * @throws IllegalArgumentException if {@code maxPixels} is not positive
+     */
+    public static void setMaxPixels(long maxPixels) {
+        DecodeBudget.setLimit(maxPixels);
     }
 
     // === Input Methods ===

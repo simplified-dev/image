@@ -8,6 +8,7 @@ import dev.simplified.image.ImageFormat;
 import dev.simplified.image.PixelBuffer;
 import dev.simplified.image.StaticImageData;
 import dev.simplified.image.codec.ImageReader;
+import dev.simplified.image.codec.common.DecodeBudget;
 import dev.simplified.image.codec.common.LittleEndian;
 import dev.simplified.image.codec.webp.vp8.VP8Decoder;
 import dev.simplified.image.codec.webp.vp8.VP8DecoderSession;
@@ -88,6 +89,8 @@ public class WebPImageReader implements ImageReader {
         if (canvasWidth > 16383 || canvasHeight > 16383)
             throw new ImageDecodeException("VP8X canvas dimensions exceed spec maximum: %dx%d", canvasWidth, canvasHeight);
 
+        DecodeBudget budget = DecodeBudget.open("WebP").declare(canvasWidth, canvasHeight);
+
         if (!hasAnimation) {
             // Static extended image (may have alpha + VP8 or VP8L)
             WebPChunk vp8l = findChunk(chunks, WebPChunk.Type.VP8L);
@@ -130,7 +133,10 @@ public class WebPImageReader implements ImageReader {
         // chunk's background colour, DO_NOT_DISPOSE leaves it). The resulting
         // full-canvas snapshot is what we hand back as each frame's pixels -
         // matches libwebp's WebPAnimDecoder behaviour and makes
-        // AnimatedImageData callers see each frame as a complete image.
+        // AnimatedImageData callers see each frame as a complete image. The working canvas
+        // and one snapshot per frame are claimed together before any of them is allocated.
+        long frameCount = chunks.stream().filter(chunk -> chunk.type() == WebPChunk.Type.ANMF).count();
+        budget.claim(canvasWidth, canvasHeight, frameCount + 1);
         int[] canvas = new int[canvasWidth * canvasHeight];
         java.util.Arrays.fill(canvas, backgroundColor);
         int priorFrameX = 0, priorFrameY = 0, priorFrameW = 0, priorFrameH = 0;

@@ -6,6 +6,7 @@ import dev.simplified.image.ImageFormat;
 import dev.simplified.image.PixelBuffer;
 import dev.simplified.image.StaticImageData;
 import dev.simplified.image.codec.ImageReader;
+import dev.simplified.image.codec.common.DecodeBudget;
 import dev.simplified.image.codec.common.ImageIOBridge;
 import dev.simplified.image.codec.common.LittleEndian;
 import dev.simplified.image.exception.ImageDecodeException;
@@ -121,6 +122,7 @@ public class IcoImageReader implements ImageReader {
         if (pixelOff + rowStride * height > dib.length)
             throw new ImageDecodeException("ICO DIB pixel data truncated");
 
+        DecodeBudget.open("ICO").claim(width, height);
         int[] pixels = new int[width * height];
 
         for (int y = 0; y < height; y++) {

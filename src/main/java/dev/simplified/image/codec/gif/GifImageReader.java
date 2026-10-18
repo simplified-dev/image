@@ -10,6 +10,7 @@ import dev.simplified.image.ImageFormat;
 import dev.simplified.image.PixelBuffer;
 import dev.simplified.image.StaticImageData;
 import dev.simplified.image.codec.ImageReader;
+import dev.simplified.image.codec.common.DecodeBudget;
 import dev.simplified.image.codec.common.LittleEndian;
 import dev.simplified.image.exception.ImageDecodeException;
 import dev.simplified.image.frame.FrameBlend;
@@ -129,8 +130,11 @@ public class GifImageReader implements ImageReader {
         IIOMetadataNode screen = logicalScreen(reader.getStreamMetadata());
         int canvasWidth = screenDimension(screen, "logicalScreenWidth");
         int canvasHeight = screenDimension(screen, "logicalScreenHeight");
+        requireWithinSide(canvasWidth, canvasHeight);
+        DecodeBudget budget = DecodeBudget.open("GIF").declare(canvasWidth, canvasHeight);
 
         for (int i = 0; i < frameCount; i++) {
+            budget.claim(reader.getWidth(i), reader.getHeight(i));
             BufferedImage image = reader.read(i);
             if (storedOrder.get(i))
                 deinterlace(image);
@@ -188,11 +192,11 @@ public class GifImageReader implements ImageReader {
 
         reader.dispose();
 
-        if (canvasWidth > MAX_CANVAS_SIDE || canvasHeight > MAX_CANVAS_SIDE)
-            throw new ImageDecodeException("GIF canvas '%dx%d' exceeds '%d' on a side", canvasWidth, canvasHeight, MAX_CANVAS_SIDE);
+        requireWithinSide(canvasWidth, canvasHeight);
+        budget.declare(canvasWidth, canvasHeight);
 
         if (frames.size() == 1)
-            return StaticImageData.of(onCanvas(frames.getFirst(), canvasWidth, canvasHeight));
+            return StaticImageData.of(onCanvas(frames.getFirst(), canvasWidth, canvasHeight, budget));
 
         return AnimatedImageData.builder()
             .withFrames(frames)
@@ -200,6 +204,18 @@ public class GifImageReader implements ImageReader {
             .withHeight(canvasHeight)
             .withLoopCount(loopCount)
             .build();
+    }
+
+    /**
+     * Refuses a canvas longer than {@link #MAX_CANVAS_SIDE} on a side, whatever the pixel budget.
+     *
+     * @param width the canvas width
+     * @param height the canvas height
+     * @throws ImageDecodeException if either side is longer than the bound
+     */
+    private static void requireWithinSide(int width, int height) {
+        if (width > MAX_CANVAS_SIDE || height > MAX_CANVAS_SIDE)
+            throw new ImageDecodeException("GIF canvas '%dx%d' exceeds '%d' on a side", width, height, MAX_CANVAS_SIDE);
     }
 
     /**
@@ -240,12 +256,14 @@ public class GifImageReader implements ImageReader {
      * @param frame the one frame
      * @param width the canvas width, which holds the frame at its offset
      * @param height the canvas height, which holds the frame at its offset
+     * @param budget the read's pixel budget, which a canvas laid out for the frame is claimed from
      * @return the picture the still shows
      */
-    private static @NotNull PixelBuffer onCanvas(@NotNull ImageFrame frame, int width, int height) {
+    private static @NotNull PixelBuffer onCanvas(@NotNull ImageFrame frame, int width, int height, @NotNull DecodeBudget budget) {
         if (frame.offsetX() == 0 && frame.offsetY() == 0 && frame.width() == width && frame.height() == height)
             return frame.pixels();
 
+        budget.claim(width, height);
         PixelBuffer canvas = PixelBuffer.create(width, height);
         canvas.setPixels(frame.offsetX(), frame.offsetY(), frame.width(), frame.height(), frame.pixels().data(), 0, frame.width());
         return canvas;

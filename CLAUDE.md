@@ -10,13 +10,13 @@ A caller imports from the first six packages and never from below `codec`. `Imag
 - `.frame` - `ImageFrame`, `FrameBlend`, `FrameDisposal`, `LoopCount` (+ nested `Preset` enum, `Custom` record and `Builder`), `FrameNormalizer`, `FitMode`
 - `.pixel` - `ColorMath`, `BlendMode`, `AlphaMode`, `Background`, `PixelGraphics`, `PixelMask`, `PixelDiff`, `DiffType`, `Resample`, `PixelBufferPool`
 - `.option` - `ImageReadOptions`/`ImageWriteOptions` and every format's write options: `GifWriteOptions`, `JpegWriteOptions`, `PngWriteOptions`, `PnmWriteOptions`, `TgaWriteOptions`, `TiffWriteOptions`, `WebPWriteOptions`. An option enum nests in its type (`GifWriteOptions.DelayFidelity`, `PnmWriteOptions.Variant`)
-- `.exception` - `ImageException` hierarchy (`ImageDecodeException`, `ImageEncodeException`, `UnsupportedFormatException`)
+- `.exception` - `ImageException` hierarchy (`ImageDecodeException` and its `ImageTooLargeException`, `ImageEncodeException`, `UnsupportedFormatException`)
 - `.codec` - the `ImageReader`/`ImageWriter` SPI and nothing else
 
 Internal, every package below `codec`. A type there is public only where another package calls it, and then carries `@ApiStatus.Internal`:
 
 - `.codec.{bmp,gif,ico,jpeg,png,pnm,qoi,tga,tiff}` - `<Format>ImageReader`/`<Format>ImageWriter`, constructed by `ImageFactory`; `IcoImageWriter` encodes its payload through `PngImageWriter`
-- `.codec.common` - helpers two or more codec packages share: `LittleEndian`, `ImageIOBridge`. It names no format
+- `.codec.common` - helpers two or more codec packages share: `LittleEndian`, `ImageIOBridge`, `DecodeBudget`. It names no format
 - `.codec.webp` - `WebPImageReader`, `WebPImageWriter`. Package-private: `RiffContainer`, `WebPChunk` (+ nested `Type` enum for FourCC), `FrameDiffUtil`
 - `.codec.webp.vp8` - the VP8 bitstream: lossy WebP, plus opt-in inter frames. Public: `VP8Encoder`, `VP8Decoder`, `VP8EncoderSession`, `VP8DecoderSession`. Package-private: `BooleanEncoder`/`BooleanDecoder`, `DCT`, `IntraPrediction`, `SubpelPrediction`, `QuantMatrix`, `TrellisQuantizer`, `Macroblock`, `NearMvs`, `VP8Tables`, `VP8Costs`, `VP8TokenEncoder`/`VP8TokenDecoder`, `LoopFilter`, `ChromaUpsampler`
 - `.codec.webp.vp8l` - the VP8L bitstream: lossless WebP, plus a lossy image's alpha plane. Public: `VP8LEncoder` (+ nested `TransformMode`), `VP8LDecoder`, `NearLosslessPreprocess`. Package-private: `BitReader`, `BitWriter`, `HuffmanTree`, `ColorCache`, `LZ77`, `VP8LTransform`
@@ -56,4 +56,4 @@ The VP8 and WebP tests check this library's output against libwebp through Pytho
 - External deps: Simplified Annotations, JetBrains annotations
 - Third-party code: `COPYRIGHT.md` names every class ported from libwebp, libvpx or RFC 6386 and carries their licences, with the upstream libraries and their licences; the jar packs it into `META-INF` with `LICENSE.md`, the Apache-2.0 text it points to. Code or tables taken from another codec get a line there too
 - Tests: JUnit 5 + Hamcrest
-- 93 main sources plus a `package-info.java` per package; 41 test sources
+- 95 main sources plus a `package-info.java` per package; 42 test sources

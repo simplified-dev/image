@@ -6,6 +6,7 @@ import dev.simplified.image.ImageFormat;
 import dev.simplified.image.PixelBuffer;
 import dev.simplified.image.StaticImageData;
 import dev.simplified.image.codec.ImageReader;
+import dev.simplified.image.codec.common.DecodeBudget;
 import dev.simplified.image.codec.common.LittleEndian;
 import dev.simplified.image.exception.ImageDecodeException;
 import dev.simplified.image.option.ImageReadOptions;
@@ -66,6 +67,7 @@ public class TgaImageReader implements ImageReader {
         boolean topDown = (descriptor & 0x20) != 0;
         int bpp = depth / 8;
         int pos = 18 + idLength;
+        DecodeBudget.open("TGA").claim(width, height);
         int[] pixels = new int[Math.multiplyExact(width, height)];
 
         if (imageType == TYPE_TRUE_COLOR) {

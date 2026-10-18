@@ -134,6 +134,12 @@ ImageData detected = ImageFactory.fromByteArray(Files.readAllBytes(path));
 ImageData png = ImageFactory.fromByteArray(Files.readAllBytes(path), ImageFormat.PNG);
 ```
 
+A read holds at most `ImageFactory.getMaxPixels()` pixels, 8192 by 8192 unless set,
+across every frame, page and canvas it builds the image from. An image whose header asks
+for more is refused with `ImageTooLargeException` before anything is allocated.
+`ImageFactory.setMaxPixels(long)` sets the budget for every read opened after it, and
+`Long.MAX_VALUE` lifts it.
+
 ### Writing an Image
 
 Every write option type lives in `dev.simplified.image.option` and uses a fluent
@@ -270,7 +276,7 @@ src/main/java/dev/simplified/image/
 └── codec/
     ├── ImageReader.java        # reader SPI
     ├── ImageWriter.java        # writer SPI
-    ├── common/                 # LittleEndian, ImageIOBridge - helpers two or more formats share
+    ├── common/                 # LittleEndian, ImageIOBridge, DecodeBudget - helpers two or more formats share
     ├── bmp/                    # BmpImageReader, BmpImageWriter
     ├── gif/                    # GifImageReader, GifImageWriter
     ├── ico/                    # IcoImageReader, IcoImageWriter

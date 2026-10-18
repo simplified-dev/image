@@ -1,6 +1,7 @@
 package dev.simplified.image.codec.webp.vp8l;
 
 import dev.simplified.image.PixelBuffer;
+import dev.simplified.image.codec.common.DecodeBudget;
 import dev.simplified.image.exception.ImageDecodeException;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
@@ -65,6 +66,8 @@ public final class VP8LDecoder {
 
         if (version != 0)
             throw new ImageDecodeException("Unsupported VP8L version: %d", version);
+
+        DecodeBudget.open("VP8L").claim(width, height);
 
         // Read transforms
         List<VP8LTransform> transforms = new ArrayList<>();

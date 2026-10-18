@@ -1,6 +1,7 @@
 package dev.simplified.image.codec.webp.vp8;
 
 import dev.simplified.image.PixelBuffer;
+import dev.simplified.image.codec.common.DecodeBudget;
 import dev.simplified.image.codec.common.LittleEndian;
 import dev.simplified.image.exception.ImageDecodeException;
 import org.jetbrains.annotations.ApiStatus;
@@ -353,6 +354,7 @@ public final class VP8Decoder {
             height = LittleEndian.readUint16(data, 8) & 0x3FFF;
             if (width == 0 || height == 0)
                 throw new ImageDecodeException("Invalid VP8 dimensions: %dx%d", width, height);
+            DecodeBudget.open("VP8").claim(width, height);
             headerStart = 10;
         } else {
             if (session == null || !session.hasReference())
