@@ -50,14 +50,6 @@ The ICO arm of `ImageFormat.matches` accepts `00 00 01 00`, which is also the bi
 - Type: **RISK**
 - Status: **OPEN**
 
-## FXAA's absolute thresholds are 0-to-1 luma constants read against a 0-to-255 luma
-`fxaaPixel`, the per-pixel body `applyFxaa` and `blitScaledFxaa` share, skips a neighbourhood whose contrast is under `max(0.0156, lumaMax * 0.0312)` and floors its direction reduction at `1/128`. Those are FXAA's values for luma in `[0, 1]`, but the luma here is in `[0, 255]`, so both floors are effectively inert: the relative threshold decides every case above near-black, and the direction floor never binds there. Not checked against a reference shader; changing either moves every FXAA output.
-
-- Affected: `src/main/java/dev/simplified/image/PixelBuffer.java:1146-1147`, `src/main/java/dev/simplified/image/PixelBuffer.java:1171`, `src/main/java/dev/simplified/image/PixelBuffer.java:1177-1180` (`fxaaPixel`)
-- Severity: **LOW**
-- Type: **RISK**
-- Status: **OPEN**
-
 ## The project's own copyright holder is named nowhere
 `LICENSE.md` is the bare Apache-2.0 text with no copyright line, so `NOTICE` opens with the project name and licence only.
 

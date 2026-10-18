@@ -1123,6 +1123,12 @@ public class PixelBuffer {
      * {@code source}, or answers {@link #UNFILTERED} when the neighbourhood falls under the contrast
      * threshold and the pixel stays as it is.
      * <p>
+     * The edge test is FXAA's local-contrast check, as FXAA 3.11 makes it: a neighbourhood whose luma
+     * range is under the larger of a floor and a share of its brightest luma is left alone. The edge
+     * direction and the two samples along it are the simple FXAA shader's. FXAA writes the floor and
+     * the direction's floor for a luma in [0, 1], and both are scaled to the [0, 255] this luma runs
+     * over.
+     * <p>
      * A neighbourhood whose five edge-test reads hold one value answers {@link #UNFILTERED} before any
      * luma is computed: its contrast is zero, under a threshold that never drops below its positive
      * floor, so the edge test would leave it unfiltered too.
@@ -1143,7 +1149,10 @@ public class PixelBuffer {
      */
     private static long fxaaPixel(int @NotNull [] source, int width, int height, boolean forceAlpha, int x, int y,
                                   @NotNull AlphaMode alphaMode, float @NotNull [] samples) {
-        final float fxaaReduceMin = 1.0f / 128.0f;
+        // FXAA writes its constants for luma in [0, 1]; edgeLuma runs over [0, 255], so the two
+        // absolute ones - the contrast floor and the direction floor - are scaled by 255, and the
+        // relative ones, each a factor on a luma, stand as written.
+        final float fxaaReduceMin = 1.0f / 128.0f * 255.0f;
         final float fxaaReduceMul = 1.0f / 4.0f;
         final float fxaaSpanMax = 8.0f;
         int fill = forceAlpha ? 0xFF000000 : 0;
@@ -1168,7 +1177,7 @@ public class PixelBuffer {
 
         float contrast = lumaMax - lumaMin;
 
-        if (contrast < Math.max(0.0156f, lumaMax * 0.0312f))
+        if (contrast < Math.max(0.0156f * 255.0f, lumaMax * 0.0312f))
             return UNFILTERED;
 
         float dirX = -((lumaNw + lumaNe) - (lumaSw + lumaSe));
