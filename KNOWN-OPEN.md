@@ -10,14 +10,6 @@ Defects present in the current tree and not yet fixed, most severe first. Each e
 - Type: **RISK**
 - Status: **OPEN**
 
-## ICO magic collides with a 256-byte ISOBMFF `ftyp` box
-The ICO arm of `ImageFormat.matches` accepts `00 00 01 00`, which is also the big-endian size field of a 256-byte `ftyp` box, and `ImageFactory` lists the ICO reader ahead of any format added later, so `detectFormat` tries ICO before it. No ISOBMFF-based format ships today; MEDIUM once one (AVIF, HEIF) is added after ICO.
-
-- Affected: `src/main/java/dev/simplified/image/ImageFormat.java:81-85`, `src/main/java/dev/simplified/image/ImageFactory.java:77`
-- Severity: **LOW**
-- Type: **RISK**
-- Status: **OPEN**
-
 ## No ICC / Exif / XMP metadata model; WebP ICC profiles are dropped
 `WebPChunk.Type` names `ICCP`, `EXIF` and `XMP `, but no reader or writer carries them and `ImageData` has no metadata field, so colour profiles and Exif are lost on every WebP round trip. MEDIUM once a wide-gamut or HDR format depends on its colour metadata.
 
