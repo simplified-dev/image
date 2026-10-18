@@ -57,11 +57,11 @@ tasks.withType<Javadoc>().configureEach {
     (options as StandardJavadocDocletOptions).addStringOption("-add-modules", "jdk.incubator.vector")
 }
 
-// NOTICE carries the libwebp, libvpx and RFC 6386 attributions, whose licences require them to
-// travel with a binary as well as with the source. LICENSE.md is the Apache-2.0 text NOTICE points
+// COPYRIGHT.md carries the libwebp, libvpx and RFC 6386 attributions, whose licences require them
+// to travel with a binary as well as with the source. LICENSE.md is the Apache-2.0 text it points
 // to, which the licence asks a redistributor to pass on with the work.
 tasks.jar {
-    metaInf { from("NOTICE", "LICENSE.md") }
+    metaInf { from("COPYRIGHT.md", "LICENSE.md") }
 }
 
 tasks.test {
