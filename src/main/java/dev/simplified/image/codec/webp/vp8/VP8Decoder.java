@@ -815,7 +815,7 @@ public final class VP8Decoder {
 
             // MV-reference tree with context-dependent probabilities (libvpx parity).
             NearMvs.Result near = new NearMvs.Result();
-            NearMvs.find(s.mbIsInter, s.mbMvRow, s.mbMvCol, s.mbRefFrame, s.mbSplitScheme, s.mbCols, mbX, mbY,
+            NearMvs.find(s.mbIsInter, s.mbMvRow, s.mbMvCol, s.mbRefFrame, s.mbSplitScheme, s.mbCols, s.mbRows, mbX, mbY,
                 refFrame, s.signBiasGolden, s.signBiasAltref, near);
             int[] mvRefProbs = new int[4];
             NearMvs.refProbs(near.cnt, mvRefProbs);

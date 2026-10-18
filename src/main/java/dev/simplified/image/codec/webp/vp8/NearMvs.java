@@ -10,7 +10,9 @@ import org.jetbrains.annotations.NotNull;
  * {@code vp8/common/findnearmv.c}. Examines the above, left, and above-left
  * neighbours (weights 2, 2, 1), classifies each as intra, zero-MV, or a distinct
  * non-zero MV, and populates nearest/near/best MV slots plus the 4-slot vote
- * counter used to index into {@link VP8Tables#MODE_CONTEXTS}.
+ * counter used to index into {@link VP8Tables#MODE_CONTEXTS}. The three MVs come
+ * out clamped to the frame as libvpx's decoder clamps each through
+ * {@code vp8_clamp_mv2} before it uses it.
  * <p>
  * Both encoder and decoder must produce bit-identical output for each MB position
  * given the same neighbour state; mismatches break NEAREST / NEAR decoding because
@@ -41,19 +43,26 @@ final class NearMvs {
     static final int CNT_SPLITMV = 3;
 
     /**
+     * How far, in 1/8-pel units, a clamped MV may carry a macroblock past the edge of the frame's
+     * macroblock grid: libvpx's {@code LEFT_TOP_MARGIN} and {@code RIGHT_BOTTOM_MARGIN}, 16 pixels.
+     */
+    private static final int CLAMP_MARGIN = 16 << 3;
+
+    /**
      * Output bundle - nearest / near / best MVs plus the 4-slot vote counter.
      */
     static final class Result {
         /**
-         * Nearest-neighbour MV (1/8-pel internal units).
+         * Nearest-neighbour MV (1/8-pel internal units), clamped to the frame.
          */
         int nearestRow, nearestCol;
         /**
-         * Near-neighbour MV.
+         * Near-neighbour MV, clamped to the frame.
          */
         int nearRow, nearCol;
         /**
-         * Best-guess MV for NEW_MV initial search / ZEROMV fallback.
+         * Best MV, clamped to the frame: the one a NEWMV MV and a NEW4x4 sub-block MV are coded
+         * against.
          */
         int bestRow, bestCol;
         /**
@@ -101,6 +110,7 @@ final class NearMvs {
      * @param mbSplitScheme per-MB SPLITMV partitioning, negative for a macroblock that is not
      *                      SPLITMV; counted into {@link #CNT_SPLITMV}
      * @param mbCols macroblock grid width
+     * @param mbRows macroblock grid height
      * @param mbX current MB column
      * @param mbY current MB row
      * @param currentRefFrame reference frame the current MB is being evaluated against
@@ -110,7 +120,7 @@ final class NearMvs {
      */
     static void find(
         boolean @NotNull [] mbIsInter, int @NotNull [] mbMvRow, int @NotNull [] mbMvCol,
-        int @NotNull [] mbRefFrame, int @NotNull [] mbSplitScheme, int mbCols, int mbX, int mbY,
+        int @NotNull [] mbRefFrame, int @NotNull [] mbSplitScheme, int mbCols, int mbRows, int mbX, int mbY,
         int currentRefFrame, boolean signBiasGolden, boolean signBiasAltref, @NotNull Result out
     ) {
         // libvpx stashes best/nearest/near/split MVs in a 4-slot array and walks a "current"
@@ -215,12 +225,29 @@ final class NearMvs {
             mvCols[CNT_INTRA] = mvCols[CNT_NEAREST];
         }
 
-        out.bestRow = mvRows[CNT_INTRA];
-        out.bestCol = mvCols[CNT_INTRA];
-        out.nearestRow = mvRows[CNT_NEAREST];
-        out.nearestCol = mvCols[CNT_NEAREST];
-        out.nearRow = mvRows[CNT_NEAR];
-        out.nearCol = mvCols[CNT_NEAR];
+        // The votes above compare the MVs as the neighbours hold them; only what comes out is
+        // clamped, each on its own, as libvpx clamps the one its mode reads.
+        out.bestRow = clampToFrame(mvRows[CNT_INTRA], mbY, mbRows);
+        out.bestCol = clampToFrame(mvCols[CNT_INTRA], mbX, mbCols);
+        out.nearestRow = clampToFrame(mvRows[CNT_NEAREST], mbY, mbRows);
+        out.nearestCol = clampToFrame(mvCols[CNT_NEAREST], mbX, mbCols);
+        out.nearRow = clampToFrame(mvRows[CNT_NEAR], mbY, mbRows);
+        out.nearCol = clampToFrame(mvCols[CNT_NEAR], mbX, mbCols);
+    }
+
+    /**
+     * Clamps one component of an MV as libvpx's {@code vp8_clamp_mv2} does, so the macroblock it
+     * moves lies no further than {@link #CLAMP_MARGIN} past the frame's macroblock grid.
+     *
+     * @param component the MV row or column, in 1/8-pel units
+     * @param mbIndex the macroblock's row or column
+     * @param mbCount the grid's rows or columns
+     * @return the clamped component
+     */
+    private static int clampToFrame(int component, int mbIndex, int mbCount) {
+        int toLowEdge = -((mbIndex * 16) << 3);
+        int toHighEdge = ((mbCount - 1 - mbIndex) * 16) << 3;
+        return Math.clamp(component, toLowEdge - CLAMP_MARGIN, toHighEdge + CLAMP_MARGIN);
     }
 
     /**

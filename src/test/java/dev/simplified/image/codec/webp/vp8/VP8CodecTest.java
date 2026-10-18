@@ -1119,7 +1119,7 @@ public class VP8CodecTest {
             // Case 1: sign_bias_golden = 0 - current (REF_LAST bias=0) vs above (REF_GOLDEN bias=0).
             // No flip. Nearest MV = (10, -20).
             NearMvs.Result r0 = new NearMvs.Result();
-            NearMvs.find(mbIsInter, mbMvRow, mbMvCol, mbRefFrame, notSplit, mbCols, 0, 1,
+            NearMvs.find(mbIsInter, mbMvRow, mbMvCol, mbRefFrame, notSplit, mbCols, 2, 0, 1,
                 LoopFilter.REF_LAST, false, false, r0);
             assertThat("no-flip nearest row", r0.nearestRow, is(10));
             assertThat("no-flip nearest col", r0.nearestCol, is(-20));
@@ -1127,7 +1127,7 @@ public class VP8CodecTest {
             // Case 2: sign_bias_golden = 1 - current bias 0, above bias 1. Flip the neighbour.
             // Nearest MV = (-10, 20).
             NearMvs.Result r1 = new NearMvs.Result();
-            NearMvs.find(mbIsInter, mbMvRow, mbMvCol, mbRefFrame, notSplit, mbCols, 0, 1,
+            NearMvs.find(mbIsInter, mbMvRow, mbMvCol, mbRefFrame, notSplit, mbCols, 2, 0, 1,
                 LoopFilter.REF_LAST, true, false, r1);
             assertThat("flipped nearest row", r1.nearestRow, is(-10));
             assertThat("flipped nearest col", r1.nearestCol, is(20));
@@ -1135,7 +1135,7 @@ public class VP8CodecTest {
             // Case 3: current MB is itself REF_GOLDEN (bias 1) against REF_GOLDEN neighbour
             // (bias 1) - biases match, no flip. Nearest = (10, -20).
             NearMvs.Result r2 = new NearMvs.Result();
-            NearMvs.find(mbIsInter, mbMvRow, mbMvCol, mbRefFrame, notSplit, mbCols, 0, 1,
+            NearMvs.find(mbIsInter, mbMvRow, mbMvCol, mbRefFrame, notSplit, mbCols, 2, 0, 1,
                 LoopFilter.REF_GOLDEN, true, false, r2);
             assertThat("same-bias nearest row", r2.nearestRow, is(10));
             assertThat("same-bias nearest col", r2.nearestCol, is(-20));
@@ -1147,7 +1147,7 @@ public class VP8CodecTest {
             boolean[] intraNeighbour = { false, false };
             int[] intraRef = { LoopFilter.REF_INTRA, LoopFilter.REF_INTRA };
             NearMvs.Result r3 = new NearMvs.Result();
-            NearMvs.find(intraNeighbour, mbMvRow, mbMvCol, intraRef, notSplit, mbCols, 0, 1,
+            NearMvs.find(intraNeighbour, mbMvRow, mbMvCol, intraRef, notSplit, mbCols, 2, 0, 1,
                 LoopFilter.REF_LAST, true, true, r3);
             assertThat("intra neighbour contributes zero nearest row", r3.nearestRow, is(0));
             assertThat("intra neighbour contributes zero nearest col", r3.nearestCol, is(0));
@@ -1175,7 +1175,7 @@ public class VP8CodecTest {
             int[] expected = { 0, 1, 2, 2, 5 };
             for (int i = 0; i < schemes.length; i++) {
                 NearMvs.Result r = new NearMvs.Result();
-                NearMvs.find(mbIsInter, zero, zero, refs, schemes[i], mbCols, 1, 1,
+                NearMvs.find(mbIsInter, zero, zero, refs, schemes[i], mbCols, 2, 1, 1,
                     LoopFilter.REF_LAST, false, false, r);
                 assertThat("SPLITMV count with schemes " + Arrays.toString(schemes[i]),
                     r.cnt[NearMvs.CNT_SPLITMV], is(expected[i]));
@@ -1183,9 +1183,34 @@ public class VP8CodecTest {
 
             // The top-left MB has no neighbour in the frame to count.
             NearMvs.Result corner = new NearMvs.Result();
-            NearMvs.find(mbIsInter, zero, zero, refs, new int[] { 0, 0, 0, 0 }, mbCols, 0, 0,
+            NearMvs.find(mbIsInter, zero, zero, refs, new int[] { 0, 0, 0, 0 }, mbCols, 2, 0, 0,
                 LoopFilter.REF_LAST, false, false, corner);
             assertThat("SPLITMV count at the frame corner", corner.cnt[NearMvs.CNT_SPLITMV], is(0));
+        }
+
+        @Test @DisplayName("conformance: NearMvs clamps nearest, near and best to the frame as libvpx's vp8_clamp_mv2 does")
+        void nearMvsClampsToTheFrame() {
+            // 2x2 grid, the current MB at (1, 1), the bottom-right corner. Its above neighbour moves
+            // 50 pixels down and right, its left one 75 pixels up and left, in 1/8-pel units. libvpx
+            // lets an MV carry the MB at most 16 pixels past the grid: here 16 pixels down or right,
+            // and 32 pixels up or left, the MB's own 16 plus the margin.
+            int mbCols = 2;
+            boolean[] mbIsInter = { false, true, true, false };
+            int[] mbMvRow = { 0, 400, -600, 0 };
+            int[] mbMvCol = { 0, 400, -600, 0 };
+            int[] refs = { LoopFilter.REF_INTRA, LoopFilter.REF_LAST, LoopFilter.REF_LAST, LoopFilter.REF_INTRA };
+            NearMvs.Result r = new NearMvs.Result();
+            NearMvs.find(mbIsInter, mbMvRow, mbMvCol, refs, new int[] { -1, -1, -1, -1 }, mbCols, 2, 1, 1,
+                LoopFilter.REF_LAST, false, false, r);
+            assertThat("nearest row", r.nearestRow, is(128));
+            assertThat("nearest col", r.nearestCol, is(128));
+            assertThat("near row", r.nearRow, is(-256));
+            assertThat("near col", r.nearCol, is(-256));
+            assertThat("best row", r.bestRow, is(128));
+            assertThat("best col", r.bestCol, is(128));
+            // The votes compare the MVs as the neighbours hold them, so the two stay distinct.
+            assertThat("nearest votes", r.cnt[NearMvs.CNT_NEAREST], is(2));
+            assertThat("near votes", r.cnt[NearMvs.CNT_NEAR], is(2));
         }
 
         @Test @DisplayName("conformance: SPLITMV self round-trip via forced-encode hook (RFC 6386 section 16.4)")
