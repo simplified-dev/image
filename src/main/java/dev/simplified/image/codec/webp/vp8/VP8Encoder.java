@@ -412,18 +412,10 @@ public final class VP8Encoder {
             for (int i = 0; i < NUM_TOKEN_PARTITIONS; i++)
                 this.tokens[i] = new BooleanEncoder(perPartBytes);
 
-            // Keyframes always reset MV probs to defaults; P-frames inherit the probs
-            // the decoder carried forward from the prior frame via session.mvProba.
-            this.mvProba = new int[2][VP8Tables.NUM_MV_PROBAS];
-            if (isKeyframe || session == null) {
-                for (int c = 0; c < 2; c++)
-                    System.arraycopy(VP8Tables.MV_DEFAULT_PROBA[c], 0, this.mvProba[c], 0,
-                        VP8Tables.NUM_MV_PROBAS);
-            } else {
-                for (int c = 0; c < 2; c++)
-                    System.arraycopy(session.mvProba[c], 0, this.mvProba[c], 0,
-                        VP8Tables.NUM_MV_PROBAS);
-            }
+            // MV probs start at the defaults every frame, as the mode and token probs below
+            // do: the header clears refresh_entropy_probs, so a decoder drops each frame's
+            // updates once the frame is done and starts the next from the keyframe defaults.
+            this.mvProba = VP8DecoderSession.cloneMvProba();
             // Y-mode / UV-mode probs start at the inter-frame defaults every frame.
             // The decoder re-initialises the same way. Writing an update block in the
             // header mutates these for the rest of the frame only.
@@ -1189,10 +1181,8 @@ public final class VP8Encoder {
         }
 
         if (session != null) {
-            // Stash MV proba state + this-frame branch counts for the next frame's
-            // header emit (RFC 6386 section 19.2 one-frame-lag proba updates).
-            for (int c = 0; c < 2; c++)
-                System.arraycopy(s.mvProba[c], 0, session.mvProba[c], 0, VP8Tables.NUM_MV_PROBAS);
+            // Stash this frame's branch counts for the next frame's header emit (RFC 6386
+            // section 19.2 one-frame-lag proba updates).
             session.prevMvBranches = s.mvBranches;
             session.prevYModeBranches = s.yModeBranches;
             session.prevUvModeBranches = s.uvModeBranches;

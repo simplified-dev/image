@@ -93,10 +93,26 @@ public final class VP8DecoderSession {
     boolean signBiasAltref;
 
     /**
-     * MV component probabilities carried across frames (RFC 6386 section 19.2). Layout
-     * {@code [component][slot]} - 2 components x {@link VP8Tables#NUM_MV_PROBAS} slots.
-     * Reset to {@link VP8Tables#MV_DEFAULT_PROBA} on each keyframe; P-frames may update
-     * individual slots via the per-slot update-flag mechanism in the frame header.
+     * Coefficient token probabilities the next frame starts from, part of the probability
+     * context libvpx keeps between frames. A keyframe resets the context to the defaults, and a
+     * frame's updates join it only when the frame sets {@code refresh_entropy_probs}; otherwise
+     * the context the frame started from stands.
+     */
+    int[][][][] tokenProba = VP8Decoder.cloneProba(VP8Tables.COEFFS_PROBA_0);
+
+    /**
+     * Inter-frame Y-mode probabilities the next frame starts from; see {@link #tokenProba}.
+     */
+    int[] yModeProba = VP8Tables.YMODE_PROBA_INTER.clone();
+
+    /**
+     * Inter-frame UV-mode probabilities the next frame starts from; see {@link #tokenProba}.
+     */
+    int[] uvModeProba = VP8Tables.UV_MODE_PROBA_INTER.clone();
+
+    /**
+     * MV component probabilities the next frame starts from, {@code [component][slot]}; see
+     * {@link #tokenProba}.
      */
     int[] @NotNull [] mvProba = cloneMvProba();
 
@@ -104,6 +120,35 @@ public final class VP8DecoderSession {
      * Constructs a new {@code VP8DecoderSession} with no cached references.
      */
     public VP8DecoderSession() { }
+
+    /**
+     * Makes a frame's probabilities the context the next frame starts from, as libvpx keeps them
+     * when the frame sets {@code refresh_entropy_probs}.
+     *
+     * @param tokenProba the frame's coefficient token probabilities
+     * @param yModeProba the frame's Y-mode probabilities
+     * @param uvModeProba the frame's UV-mode probabilities
+     * @param mvProba the frame's MV component probabilities
+     */
+    void keepProbabilities(
+        int @NotNull [] @NotNull [] @NotNull [] @NotNull [] tokenProba, int @NotNull [] yModeProba,
+        int @NotNull [] uvModeProba, int @NotNull [] @NotNull [] mvProba
+    ) {
+        this.tokenProba = VP8Decoder.cloneProba(tokenProba);
+        this.yModeProba = yModeProba.clone();
+        this.uvModeProba = uvModeProba.clone();
+        this.mvProba = new int[][] { mvProba[0].clone(), mvProba[1].clone() };
+    }
+
+    /**
+     * Resets the probability context to the defaults, as a keyframe does.
+     */
+    void resetProbabilities() {
+        tokenProba = VP8Decoder.cloneProba(VP8Tables.COEFFS_PROBA_0);
+        yModeProba = VP8Tables.YMODE_PROBA_INTER.clone();
+        uvModeProba = VP8Tables.UV_MODE_PROBA_INTER.clone();
+        mvProba = cloneMvProba();
+    }
 
     /**
      * Deep-copies {@link VP8Tables#MV_DEFAULT_PROBA} so per-frame updates don't mutate the source.
@@ -159,7 +204,7 @@ public final class VP8DecoderSession {
         refMbCols = refMbRows = 0;
         refWidth = refHeight = 0;
         signBiasGolden = signBiasAltref = false;
-        mvProba = cloneMvProba();
+        resetProbabilities();
     }
 
     /**

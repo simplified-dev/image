@@ -974,13 +974,13 @@ public class VP8CodecTest {
             }
         }
 
-        @Test @DisplayName("conformance: MV component proba updates round-trip across a 3-frame session (RFC 6386 section 19.2)")
+        @Test @DisplayName("conformance: MV component proba updates last only their own frame when it clears refresh_entropy_probs")
         void mvProbaUpdatesRoundTripAcrossChain() {
             // A 3-frame translating sequence (keyframe + 2 P-frames) builds enough NEWMV
             // branch observations that P-frame 2's header is likely to emit at least one
-            // MV proba update. Regardless of whether updates are actually emitted, the
-            // encoder's mvProba and the decoder's mvProba must stay in lock-step - any
-            // divergence breaks NEW_MV wire decoding on subsequent MBs.
+            // MV proba update. The encoder clears refresh_entropy_probs, so libvpx restores
+            // the context a frame started from once the frame is done: whatever a frame
+            // updates, the decoder's session must hold the defaults again after it.
             int w = 32, h = 32;
             PixelBuffer[] frames = new PixelBuffer[3];
             for (int i = 0; i < 3; i++) {
@@ -1003,14 +1003,10 @@ public class VP8CodecTest {
             for (int i = 0; i < 3; i++) {
                 byte[] bytes = enc.encode(frames[i], 1.0f, i == 0);
                 decoded[i] = dec.decode(bytes);
+                for (int c = 0; c < 2; c++)
+                    assertThat("MV probabilities of component " + c + " after frame " + i,
+                        dec.mvProba[c], is(VP8Tables.MV_DEFAULT_PROBA[c]));
             }
-
-            // Encoder and decoder mvProba must match after each frame. If they diverged,
-            // NEW_MV bits would misalign and the last frame wouldn't decode correctly.
-            for (int c = 0; c < 2; c++)
-                for (int p = 0; p < VP8Tables.NUM_MV_PROBAS; p++)
-                    assertThat(String.format("mvProba[%d][%d] enc vs dec", c, p),
-                        enc.mvProba[c][p], is(dec.mvProba[c][p]));
 
             // Final decoded frame must match the source within reasonable PSNR (the
             // reconstruction path is what an update-divergence bug would actually break).
@@ -1031,8 +1027,19 @@ public class VP8CodecTest {
             double psnr = mse == 0 ? Double.POSITIVE_INFINITY : 10.0 * Math.log10(255.0 * 255.0 / mse);
             if (psnr < 30.0)
                 throw new AssertionError(String.format(
-                    "3-frame translation PSNR %.2f dB below 30 dB - likely mvProba enc/dec divergence",
+                    "3-frame translation PSNR %.2f dB below 30 dB - likely MV probabilities read differently than written",
                     psnr));
+
+            // A shear whose bands slide apart sends MV probability updates within its first four
+            // frames, and the session still starts every frame after one from the defaults.
+            VP8EncoderSession shearEnc = new VP8EncoderSession();
+            VP8DecoderSession shearDec = new VP8DecoderSession();
+            for (int i = 0; i < 6; i++) {
+                shearDec.decode(shearEnc.encode(shear(128, 96, i), 1.0f, i == 0));
+                for (int c = 0; c < 2; c++)
+                    assertThat("shear MV probabilities of component " + c + " after frame " + i,
+                        shearDec.mvProba[c], is(VP8Tables.MV_DEFAULT_PROBA[c]));
+            }
         }
 
         @Test @DisplayName("conformance: quarter-pel MV refinement beats half-pel on a 1.25-pel translation")
@@ -2665,6 +2672,23 @@ public class VP8CodecTest {
             .putInt(vp8.length)
             .put(vp8)
             .array();
+    }
+
+    /**
+     * A shaded checkerboard whose bands of eight rows each slide right one pixel further per frame
+     * than the band above.
+     */
+    private static PixelBuffer shear(int width, int height, int frame) {
+        PixelBuffer pixels = PixelBuffer.create(width, height);
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                int sx = x - (y / 8) * frame;
+                double shade = 128 + 60 * Math.sin(sx * 0.21) * Math.cos(y * 0.17) + ((sx / 8 + y / 8) % 2 == 0 ? 25 : -25);
+                int c = Math.clamp((int) shade, 0, 255);
+                pixels.setPixel(x, y, 0xFF000000 | c << 16 | Math.clamp(255 - c, 0, 255) << 8 | Math.clamp(c / 2 + 60, 0, 255));
+            }
+        }
+        return pixels;
     }
 
 }

@@ -42,6 +42,19 @@ class VP8LibvpxParityTest {
         assertDecodesAsLibvpx("opposed", stream, 128, 96);
     }
 
+    @Test
+    @DisplayName("a frame's probability updates last only that frame in libvpx as here")
+    void probabilityUpdatesLastOneFrame() throws IOException {
+        // The encoder clears refresh_entropy_probs, so libvpx restores the probabilities a frame
+        // started from once the frame is done. This shear sends MV probability updates, and the
+        // frame after each reads its MVs under the defaults again.
+        VP8EncoderSession encoder = new VP8EncoderSession();
+        List<byte[]> stream = new ArrayList<>();
+        for (int frame = 0; frame < 6; frame++)
+            stream.add(encoder.encode(shear(128, 96, frame), 1.0f, frame == 0));
+        assertDecodesAsLibvpx("shear", stream, 128, 96);
+    }
+
     /**
      * Decodes a stream through this library and through libvpx, and fails on the first sample where
      * they part.
@@ -85,6 +98,23 @@ class VP8LibvpxParityTest {
         for (int y = 0; y < height; y++)
             for (int x = 0; x < width; x++)
                 pixels.setPixel(x, y, 0xFF000000 | (x * 4) << 16 | (y * 5) << 8 | (x + y) * 2);
+        return pixels;
+    }
+
+    /**
+     * A shaded checkerboard whose bands of eight rows each slide right one pixel further per frame
+     * than the band above.
+     */
+    private static PixelBuffer shear(int width, int height, int frame) {
+        PixelBuffer pixels = PixelBuffer.create(width, height);
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                int sx = x - (y / 8) * frame;
+                double shade = 128 + 60 * Math.sin(sx * 0.21) * Math.cos(y * 0.17) + ((sx / 8 + y / 8) % 2 == 0 ? 25 : -25);
+                int c = Math.clamp((int) shade, 0, 255);
+                pixels.setPixel(x, y, 0xFF000000 | c << 16 | Math.clamp(255 - c, 0, 255) << 8 | Math.clamp(c / 2 + 60, 0, 255));
+            }
+        }
         return pixels;
     }
 

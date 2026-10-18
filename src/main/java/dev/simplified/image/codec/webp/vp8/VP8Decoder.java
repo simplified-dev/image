@@ -216,10 +216,13 @@ public final class VP8Decoder {
         // Coefficient probabilities after parsing the 1056 update bits.
         final int[][][][] proba;
 
-        // MV component probabilities (RFC 6386 section 19.2). Keyframes reset this to
-        // MV_DEFAULT_PROBA; P-frames may update individual slots. Carried across frames
-        // via the decoder session.
+        // MV component probabilities (RFC 6386 section 19.2), started from the session's
+        // probability context and updated by the frame header.
         final int[][] mvProba;
+
+        // Whether this frame's probability updates join the session's context for the frames
+        // after it (refresh_entropy_probs), or the context it started from stands.
+        boolean refreshEntropyProbs;
 
         // Per-MB skip bit state.
         boolean useSkipProba;
@@ -238,8 +241,8 @@ public final class VP8Decoder {
         int probIntra;
         int probLast;
         int probGf;
-        final int[] yModeProba = VP8Tables.YMODE_PROBA_INTER.clone();
-        final int[] uvModeProba = VP8Tables.UV_MODE_PROBA_INTER.clone();
+        final int[] yModeProba;
+        final int[] uvModeProba;
 
         // Reference-buffer management flags from the inter-frame header (RFC 6386 section 9.7).
         boolean refreshLast;
@@ -274,16 +277,18 @@ public final class VP8Decoder {
             this.mbModeLfIdx = new int[mbCols * mbRows];       // defaults to MODE_NON_BPRED_INTRA = 0
             this.mbHasCoeffs = new boolean[mbCols * mbRows];
             this.mbSegmentId = new int[mbCols * mbRows];       // defaults to 0 (single-segment)
-            this.proba = cloneProba(VP8Tables.COEFFS_PROBA_0);
-            // Keyframes always reset MV probs to defaults; P-frames inherit from the
-            // session's carried state, or fall back to defaults when no session / first
-            // frame (should not happen since P-frames need a reference anyway).
+            // A frame starts from the probability context its session carries, which a
+            // keyframe resets to the defaults, as libvpx's init_frame does.
             if (isKeyframe || session == null) {
+                this.proba = cloneProba(VP8Tables.COEFFS_PROBA_0);
+                this.yModeProba = VP8Tables.YMODE_PROBA_INTER.clone();
+                this.uvModeProba = VP8Tables.UV_MODE_PROBA_INTER.clone();
                 this.mvProba = VP8DecoderSession.cloneMvProba();
             } else {
-                this.mvProba = new int[2][VP8Tables.NUM_MV_PROBAS];
-                for (int c = 0; c < 2; c++)
-                    System.arraycopy(session.mvProba[c], 0, this.mvProba[c], 0, VP8Tables.NUM_MV_PROBAS);
+                this.proba = cloneProba(session.tokenProba);
+                this.yModeProba = session.yModeProba.clone();
+                this.uvModeProba = session.uvModeProba.clone();
+                this.mvProba = new int[][] { session.mvProba[0].clone(), session.mvProba[1].clone() };
             }
         }
     }
@@ -460,8 +465,7 @@ public final class VP8Decoder {
             s.refreshLast = true;
         }
 
-        // refresh_entropy_probs (value ignored on keyframes, but the bit is still consumed).
-        br.decodeBool();
+        s.refreshEntropyProbs = br.decodeBool() != 0;
 
         // Inter-only: refresh_last.
         if (!keyFrame)
@@ -579,8 +583,13 @@ public final class VP8Decoder {
             updateReferenceBuffers(session, s, width, height);
             session.signBiasGolden = s.signBiasGolden;
             session.signBiasAltref = s.signBiasAltref;
-            for (int c = 0; c < 2; c++)
-                System.arraycopy(s.mvProba[c], 0, session.mvProba[c], 0, VP8Tables.NUM_MV_PROBAS);
+            // libvpx keeps a frame's probability updates only when it sets
+            // refresh_entropy_probs, and otherwise restores the context the frame started
+            // from - for a keyframe, the defaults it reset to.
+            if (s.refreshEntropyProbs)
+                session.keepProbabilities(s.proba, s.yModeProba, s.uvModeProba, s.mvProba);
+            else if (keyFrame)
+                session.resetProbabilities();
         }
 
         // ── YCbCr -> ARGB (fancy bilinear chroma upsampling, matching libwebp) ──
@@ -1712,9 +1721,9 @@ public final class VP8Decoder {
     }
 
     /**
-     * Deep-copies the static default proba table so per-frame updates do not mutate the source.
+     * Deep-copies a coefficient proba table so per-frame updates do not mutate the source.
      */
-    private static int[][][][] cloneProba(int[][][][] src) {
+    static int[][][][] cloneProba(int[][][][] src) {
         int[][][][] out = new int[src.length][][][];
         for (int t = 0; t < src.length; t++) {
             out[t] = new int[src[t].length][][];
