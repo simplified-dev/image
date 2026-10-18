@@ -300,8 +300,8 @@ public class VP8LCodecTest {
         @Test @DisplayName("size gate: 16-color content compresses tighter than literal path")
         void paletteShrinksOutputOn16ColorContent() {
             // 64x64 with 16 repeating colors. Under palette+4bpp packing the pixel body
-            // encodes ~16 pixels per 32-bit green literal; under the old literal-only path
-            // every pixel cost ~4 Huffman codes (ARGB). File must land well under 2KB if
+            // encodes ~16 pixels per 32-bit green literal; coded as literals without the
+            // palette, every pixel costs ~4 Huffman codes (ARGB). File must land well under 2KB if
             // the palette path is actually firing.
             PixelBuffer buf = PixelBuffer.create(64, 64);
             int[] colors = new int[16];
@@ -421,10 +421,8 @@ public class VP8LCodecTest {
             PixelBuffer buf = PixelBuffer.create(256, 256);
             for (int y = 0; y < 256; y++)
                 for (int x = 0; x < 256; x++) {
-                    int r = x;
-                    int g = y;
                     int b = (x + y) / 2;
-                    buf.setPixel(x, y, 0xFF000000 | (r << 16) | (g << 8) | b);
+                    buf.setPixel(x, y, 0xFF000000 | (x << 16) | (y << 8) | b);
                 }
             byte[] literalOnly = VP8LEncoder.encode(buf, VP8LEncoder.TransformMode.NONE, 0);
             byte[] predictor = VP8LEncoder.encode(buf, VP8LEncoder.TransformMode.PREDICTOR, 0);
@@ -629,9 +627,9 @@ public class VP8LCodecTest {
 
         @Test @DisplayName("cross-color: saturated RGB values (>= 128 triggers sign edge cases)")
         void crossColorSaturatedChannels() {
-            // Half the pixels have channel values >= 128 so the signed-vs-unsigned sign
-            // bug that used to lurk in ColorXform would surface here as a round-trip
-            // mismatch. Regression gate for the sign-semantics fix.
+            // Every channel value here is >= 128, and the cross-color transform reads
+            // green and red as signed int8, so both are negative to it; a transform that
+            // read them as unsigned would surface here as a round-trip mismatch.
             PixelBuffer buf = PixelBuffer.create(32, 32);
             for (int y = 0; y < 32; y++)
                 for (int x = 0; x < 32; x++) {
@@ -717,7 +715,7 @@ public class VP8LCodecTest {
             // for red then has only one used length, which the decoder treats as a
             // degenerate zero-bit-per-read tree; if the encoder forgets the matching
             // zero-bit emission it writes 256 stray bits and desyncs the rest of the
-            // stream. Regression gate for the fix introduced alongside color-cache.
+            // stream.
             PixelBuffer buf = PixelBuffer.create(16, 16);
             for (int i = 0; i < 256; i++)
                 buf.data()[i] = 0xFF000000 | (i << 16) | ((i * 7 & 0xFF) << 8) | (i * 11 & 0xFF);

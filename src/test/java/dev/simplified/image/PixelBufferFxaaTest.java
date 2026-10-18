@@ -233,6 +233,35 @@ class PixelBufferFxaaTest {
     }
 
     @Test
+    @DisplayName("a dark edge under FXAA's contrast floor keeps its bytes, though the relative threshold alone would smooth it")
+    void aDarkEdgeUnderTheFloorKeepsItsBytes() {
+        // FXAA's floor is 0.0156 of a luma in [0, 1], about 4 of this filter's [0, 255]. Shapes at
+        // luma 5 on a field at 2 have a contrast of 3: past the relative threshold, 0.0312 of their
+        // luma, but under the floor. A bright edge of the same contrast is held by the relative
+        // threshold instead, and a dark edge past the floor is smoothed.
+        int darkField = ColorMath.pack(255, 2, 2, 2);
+        int[][] unfiltered = {
+            { ColorMath.pack(255, 5, 5, 5), darkField },
+            { ColorMath.pack(255, 205, 205, 205), ColorMath.pack(255, 202, 202, 202) }
+        };
+
+        for (AlphaMode alphaMode : AlphaMode.values()) {
+            for (int[] pair : unfiltered) {
+                PixelBuffer drawn = shapes(40, pair[0], pair[1]);
+                PixelBuffer buffer = drawn.copy();
+                buffer.applyFxaa(alphaMode);
+                assertArrayEquals(drawn.data(), buffer.data(), "%s, %08X on %08X".formatted(alphaMode, pair[0], pair[1]));
+            }
+
+            PixelBuffer drawn = shapes(40, ColorMath.pack(255, 12, 12, 12), darkField);
+            PixelBuffer buffer = drawn.copy();
+            buffer.applyFxaa(alphaMode);
+            assertThat("%s, a dark edge past the floor is smoothed".formatted(alphaMode),
+                Arrays.equals(drawn.data(), buffer.data()), is(false));
+        }
+    }
+
+    @Test
     @DisplayName("the scaled composite that filters as it samples lays down what FXAA and then the scaled blit lay down")
     void theFilteringCompositeMatchesFxaaThenTheScaledBlit() {
         int seed = 0;
@@ -449,7 +478,9 @@ class PixelBufferFxaaTest {
      * composite, and before a neighbourhood of one value was skipped ahead of its lumas: the whole
      * source cloned and forced opaque up front when its alpha carries no data, the edge test run on
      * every interior pixel, the float operations in their order, the bilinear taps clamped and strided
-     * by the buffer's own size, and the luma the edge test reads.
+     * by the buffer's own size, and the luma the edge test reads, with FXAA's two absolute constants -
+     * the contrast floor and the direction floor, written for a luma in [0, 1] - scaled to that
+     * luma's [0, 255].
      */
     private static final class FrozenFxaa {
 
@@ -473,7 +504,7 @@ class PixelBufferFxaaTest {
             if (!hasAlpha)
                 Arrays.setAll(temp, i -> temp[i] | 0xFF000000);
 
-            final float fxaaReduceMin = 1.0f / 128.0f;
+            final float fxaaReduceMin = 1.0f / 128.0f * 255.0f;
             final float fxaaReduceMul = 1.0f / 4.0f;
             final float fxaaSpanMax = 8.0f;
 
@@ -498,7 +529,7 @@ class PixelBufferFxaaTest {
 
                     float contrast = lumaMax - lumaMin;
 
-                    if (contrast < Math.max(0.0156f, lumaMax * 0.0312f))
+                    if (contrast < Math.max(0.0156f * 255.0f, lumaMax * 0.0312f))
                         continue;
 
                     float dirX = -((lumaNw + lumaNe) - (lumaSw + lumaSe));

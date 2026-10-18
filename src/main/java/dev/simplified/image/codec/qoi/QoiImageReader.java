@@ -1,11 +1,11 @@
 package dev.simplified.image.codec.qoi;
 
-import dev.simplified.annotations.SilentThrows;
 import dev.simplified.image.ImageData;
 import dev.simplified.image.ImageFormat;
 import dev.simplified.image.PixelBuffer;
 import dev.simplified.image.StaticImageData;
 import dev.simplified.image.codec.ImageReader;
+import dev.simplified.image.codec.common.DecodeBudget;
 import dev.simplified.image.exception.ImageDecodeException;
 import dev.simplified.image.option.ImageReadOptions;
 import org.jetbrains.annotations.ApiStatus;
@@ -39,7 +39,6 @@ public class QoiImageReader implements ImageReader {
     }
 
     @Override
-    @SilentThrows
     public @NotNull ImageData read(byte @NotNull [] data, @Nullable ImageReadOptions options) {
         if (data.length < 14 + 8)
             throw new ImageDecodeException("QOI data too short: '%d' bytes", data.length);
@@ -57,6 +56,7 @@ public class QoiImageReader implements ImageReader {
         if (channels != 3 && channels != 4)
             throw new ImageDecodeException("Invalid QOI channel count: '%d'", channels);
 
+        DecodeBudget.open("QOI").claim(width, height);
         int totalPixels = Math.multiplyExact(width, height);
         int[] pixels = new int[totalPixels];
         int[] table = new int[64];

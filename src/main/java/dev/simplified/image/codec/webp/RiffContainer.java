@@ -1,5 +1,6 @@
 package dev.simplified.image.codec.webp;
 
+import dev.simplified.annotations.UtilityClass;
 import dev.simplified.collection.Concurrent;
 import dev.simplified.collection.ConcurrentList;
 import dev.simplified.image.codec.common.LittleEndian;
@@ -14,9 +15,8 @@ import org.jetbrains.annotations.NotNull;
  * Each chunk is {@code [4-byte FourCC] [4-byte LE size] [payload] [padding]}.
  * Chunks are word-aligned (padded to even byte boundaries).
  */
+@UtilityClass
 final class RiffContainer {
-
-    private RiffContainer() { }
 
     /**
      * Parses a WebP byte array into its constituent RIFF chunks.
@@ -84,7 +84,7 @@ final class RiffContainer {
 
         // RIFF header
         output[0] = 'R'; output[1] = 'I'; output[2] = 'F'; output[3] = 'F';
-        writeLE32(output, 4, dataSize);
+        LittleEndian.writeUint32(output, 4, dataSize);
         output[8] = 'W'; output[9] = 'E'; output[10] = 'B'; output[11] = 'P';
 
         int offset = 12;
@@ -96,7 +96,7 @@ final class RiffContainer {
             offset += 4;
 
             // Size
-            writeLE32(output, offset, chunk.payloadLength());
+            LittleEndian.writeUint32(output, offset, chunk.payloadLength());
             offset += 4;
 
             // Payload
@@ -120,13 +120,6 @@ final class RiffContainer {
      */
     public static @NotNull WebPChunk createChunk(@NotNull WebPChunk.Type type, byte @NotNull [] payload) {
         return new WebPChunk(type, type.getFourCC(), payload, 0, payload.length);
-    }
-
-    private static void writeLE32(byte[] data, int offset, int value) {
-        data[offset] = (byte) (value & 0xFF);
-        data[offset + 1] = (byte) ((value >> 8) & 0xFF);
-        data[offset + 2] = (byte) ((value >> 16) & 0xFF);
-        data[offset + 3] = (byte) ((value >> 24) & 0xFF);
     }
 
 }

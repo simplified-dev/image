@@ -86,7 +86,7 @@ public class PixelBuffer {
     private @NotNull Optional<PixelMask> mask = Optional.empty();
 
     private PixelBuffer(int @NotNull [] data, int width, int height, boolean hasAlpha) {
-        if (data.length != width * height)
+        if (data.length != (long) width * height)
             throw new IllegalArgumentException("Pixel array length %d does not match dimensions %dx%d".formatted(data.length, width, height));
 
         this.data = data;
@@ -102,9 +102,10 @@ public class PixelBuffer {
      * @param width the buffer width in pixels
      * @param height the buffer height in pixels
      * @return a new pixel buffer
+     * @throws ArithmeticException if {@code width * height} overflows an int
      */
     public static @NotNull PixelBuffer create(int width, int height) {
-        return new PixelBuffer(new int[width * height], width, height, true);
+        return new PixelBuffer(new int[Math.multiplyExact(width, height)], width, height, true);
     }
 
     /**
@@ -365,43 +366,52 @@ public class PixelBuffer {
     }
 
     /**
-     * Resamples this buffer to the given dimensions using the specified filter.
-     * <p>
-     * {@link Resample#NEAREST} and {@link Resample#BILINEAR} sample directly from the pixel array;
-     * {@link Resample#BICUBIC} delegates to {@link Graphics2D} with high-quality hints.
-     * <p>
-     * {@link Resample#BILINEAR} mixes every channel as it is held and rounds each once, which is
-     * correct for {@link AlphaMode#PREMULTIPLIED} pixels; a {@link AlphaMode#STRAIGHT} pixel beside
-     * a transparent one takes on part of the transparent pixel's colour.
+     * Resamples this buffer, holding {@link AlphaMode#STRAIGHT} colour, to the given dimensions using
+     * the specified filter.
      *
      * @param w the target width
      * @param h the target height
      * @param filter the resampling filter
      * @return a new pixel buffer of size {@code w x h}
      * @throws IllegalArgumentException if {@code w} or {@code h} is not positive
+     * @see #resize(int, int, Resample, AlphaMode)
      */
     public @NotNull PixelBuffer resize(int w, int h, @NotNull Resample filter) {
+        return resize(w, h, filter, AlphaMode.STRAIGHT);
+    }
+
+    /**
+     * Resamples this buffer to the given dimensions using the specified filter, mixing its pixels in
+     * the convention they are held in.
+     * <p>
+     * {@link Resample#NEAREST} copies pixels and reads no convention. {@link Resample#BILINEAR}
+     * samples the pixel array directly: {@link AlphaMode#STRAIGHT} colour is weighted by its alpha
+     * for the mix and divided back after, so a transparent neighbour adds no colour, and
+     * {@link AlphaMode#PREMULTIPLIED} colour mixes as it is held, each channel at or under its alpha.
+     * {@link Resample#BICUBIC} draws through {@link Graphics2D} with high-quality hints, declaring the
+     * raster in the same convention. The result holds the convention this buffer holds and carries
+     * alpha only when this buffer does. A buffer whose alpha carries no data mixes every channel as it
+     * is held under either convention, which hold the same colour there.
+     *
+     * @param w the target width
+     * @param h the target height
+     * @param filter the resampling filter
+     * @param alphaMode the convention this buffer's pixels are held in
+     * @return a new pixel buffer of size {@code w x h}
+     * @throws IllegalArgumentException if {@code w} or {@code h} is not positive
+     */
+    public @NotNull PixelBuffer resize(int w, int h, @NotNull Resample filter, @NotNull AlphaMode alphaMode) {
         if (w <= 0 || h <= 0)
             throw new IllegalArgumentException("Resize dimensions must be positive, got %dx%d".formatted(w, h));
 
-        if (filter == Resample.BICUBIC) {
-            BufferedImage src = this.toBufferedImage();
-            BufferedImage dst = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
-            Graphics2D g = dst.createGraphics();
-            try {
-                g.setComposite(AlphaComposite.Src);
-                g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
-                g.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
-                g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                g.drawImage(src, 0, 0, w, h, null);
-            } finally {
-                g.dispose();
-            }
-            return wrap(dst);
-        }
+        if (filter == Resample.BICUBIC)
+            return resizeBicubic(w, h, alphaMode);
+        if (filter == Resample.AREA)
+            return resizeArea(w, h, alphaMode);
 
         int[] result = new int[w * h];
         boolean nearest = filter == Resample.NEAREST;
+        boolean weighByAlpha = this.hasAlpha && alphaMode == AlphaMode.STRAIGHT;
         forEachRow(0, h, y -> {
             int outRow = y * w;
             if (nearest) {
@@ -415,15 +425,134 @@ public class PixelBuffer {
                 float srcY = ((y + 0.5f) * this.height) / h - 0.5f;
                 for (int x = 0; x < w; x++) {
                     float srcX = ((x + 0.5f) * this.width) / w - 0.5f;
-                    sampleBilinear(this.data, this.width, this.height, false, srcX, srcY, false, sample, 0);
-                    result[outRow + x] = ColorMath.pack(
-                        channel(sample[0], 255), channel(sample[1], 255), channel(sample[2], 255), channel(sample[3], 255)
-                    );
+                    sampleBilinear(this.data, this.width, this.height, false, srcX, srcY, weighByAlpha, sample, 0);
+                    result[outRow + x] = this.hasAlpha
+                        ? packSample(sample[0], sample[1], sample[2], sample[3], alphaMode)
+                        : ColorMath.pack(channel(sample[0], 255), channel(sample[1], 255), channel(sample[2], 255), channel(sample[3], 255));
                 }
             }
         });
 
         return new PixelBuffer(result, w, h, this.hasAlpha);
+    }
+
+    /**
+     * Resamples this buffer by area averaging. Each output pixel sums the source pixels its footprint
+     * covers, each weighted by the share of it covered along each axis - the footprint narrowed to the
+     * one pixel {@link Resample#NEAREST} reads along an axis that does not shrink. Straight colour is
+     * weighted by its alpha and divided back after; premultiplied colour, and every channel of a buffer
+     * whose alpha carries no data, sums as it is held.
+     *
+     * @param w the target width
+     * @param h the target height
+     * @param alphaMode the convention this buffer's pixels are held in
+     * @return a new pixel buffer of size {@code w x h}, carrying alpha only when this buffer does
+     */
+    private @NotNull PixelBuffer resizeArea(int w, int h, @NotNull AlphaMode alphaMode) {
+        AreaAxis columns = AreaAxis.of(this.width, w);
+        AreaAxis rows = AreaAxis.of(this.height, h);
+        boolean weighByAlpha = this.hasAlpha && alphaMode == AlphaMode.STRAIGHT;
+        int[] result = new int[w * h];
+
+        forEachRow(0, h, y -> {
+            float[] sum = new float[4];
+            for (int x = 0; x < w; x++) {
+                Arrays.fill(sum, 0f);
+                for (int j = 0; j < rows.count[y]; j++) {
+                    int sourceRow = (rows.first[y] + j) * this.width;
+                    float rowWeight = rows.weights[y][j];
+                    for (int i = 0; i < columns.count[x]; i++)
+                        accumulateTap(this.data[sourceRow + columns.first[x] + i], rowWeight * columns.weights[x][i], weighByAlpha, sum, 0);
+                }
+                result[y * w + x] = this.hasAlpha
+                    ? packSample(sum[0], sum[1], sum[2], sum[3], alphaMode)
+                    : ColorMath.pack(channel(sum[0], 255), channel(sum[1], 255), channel(sum[2], 255), channel(sum[3], 255));
+            }
+        });
+
+        return new PixelBuffer(result, w, h, this.hasAlpha);
+    }
+
+    /**
+     * The source pixels each output pixel of one axis averages, and the weight of each, summing to one.
+     *
+     * @param first each output pixel's first source pixel
+     * @param count how many source pixels each output pixel averages
+     * @param weights each output pixel's weights, one per source pixel it averages
+     */
+    private record AreaAxis(int @NotNull [] first, int @NotNull [] count, float @NotNull [] @NotNull [] weights) {
+
+        /**
+         * Maps an axis of {@code source} pixels onto {@code target} output pixels. A shrinking axis gives
+         * each output pixel the source span {@code [x * source / target, (x + 1) * source / target)},
+         * every pixel in it weighted by the share of it inside; an axis that does not shrink gives each
+         * the one pixel {@code x * source / target}, rounded down.
+         *
+         * @param source the source length
+         * @param target the output length
+         * @return the mapping
+         */
+        static @NotNull AreaAxis of(int source, int target) {
+            int[] first = new int[target];
+            int[] count = new int[target];
+            float[][] weights = new float[target][];
+
+            for (int x = 0; x < target; x++) {
+                if (source <= target) {
+                    first[x] = (int) ((long) x * source / target);
+                    count[x] = 1;
+                    weights[x] = new float[]{ 1f };
+                    continue;
+                }
+
+                double start = (double) x * source / target;
+                double end = (double) (x + 1) * source / target;
+                int from = (int) Math.floor(start);
+                int to = Math.min(source, (int) Math.ceil(end));
+                first[x] = from;
+                count[x] = to - from;
+                weights[x] = new float[to - from];
+                double span = end - start;
+                for (int i = from; i < to; i++)
+                    weights[x][i - from] = (float) ((Math.min(end, i + 1) - Math.max(start, i)) / span);
+            }
+
+            return new AreaAxis(first, count, weights);
+        }
+
+    }
+
+    /**
+     * Resamples this buffer bicubically through {@link Graphics2D}, declaring the source and target
+     * rasters in {@code alphaMode} so the interpolation weights colour by alpha exactly once. A buffer
+     * whose alpha carries no data is drawn as straight colour whatever {@code alphaMode} says, the two
+     * conventions holding the same colour there.
+     *
+     * @param w the target width
+     * @param h the target height
+     * @param alphaMode the convention this buffer's pixels are held in
+     * @return a new pixel buffer of size {@code w x h}, carrying alpha only when this buffer does
+     */
+    private @NotNull PixelBuffer resizeBicubic(int w, int h, @NotNull AlphaMode alphaMode) {
+        int type = this.hasAlpha && alphaMode == AlphaMode.PREMULTIPLIED
+            ? BufferedImage.TYPE_INT_ARGB_PRE
+            : BufferedImage.TYPE_INT_ARGB;
+        BufferedImage src = new BufferedImage(this.width, this.height, type);
+        System.arraycopy(this.data, 0, ((DataBufferInt) src.getRaster().getDataBuffer()).getData(), 0, this.data.length);
+
+        BufferedImage dst = new BufferedImage(w, h, type);
+        Graphics2D g = dst.createGraphics();
+        try {
+            g.setComposite(AlphaComposite.Src);
+            g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
+            g.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
+            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            g.drawImage(src, 0, 0, w, h, null);
+        } finally {
+            g.dispose();
+        }
+
+        return new PixelBuffer(((DataBufferInt) dst.getRaster().getDataBuffer()).getData(), w, h, this.hasAlpha);
     }
 
     /**
@@ -642,9 +771,9 @@ public class PixelBuffer {
      * Composites the source buffer onto this buffer at the given origin using the specified blend
      * mode. Out-of-bounds pixels are silently clipped.
      * <p>
-     * Fast paths are taken when {@code mode} is {@link BlendMode#NORMAL} or
-     * {@link BlendMode#PREMULTIPLIED}: opaque sources use a per-row {@link System#arraycopy}; alpha
-     * sources inline the fully-opaque and fully-transparent short-circuits.
+     * Fast paths are taken when {@code mode} {@linkplain BlendMode#isSourceOver() is source-over}:
+     * opaque sources use a per-row {@link System#arraycopy}; alpha sources inline the fully-opaque and
+     * fully-transparent short-circuits.
      *
      * @param source the source buffer
      * @param dx the destination x origin
@@ -659,7 +788,7 @@ public class PixelBuffer {
 
         if (srcX0 >= srcX1 || srcY0 >= srcY1) return;
 
-        boolean sourceOver = mode == BlendMode.NORMAL || mode == BlendMode.PREMULTIPLIED;
+        boolean sourceOver = mode.isSourceOver();
         if (sourceOver && !source.hasAlpha) {
             int rowWidth = srcX1 - srcX0;
             forEachRow(srcY0, srcY1, y -> {
@@ -719,6 +848,10 @@ public class PixelBuffer {
      * Composites the source buffer onto this buffer at the given origin, rescaling to the specified
      * width and height using nearest-neighbor sampling and the specified blend mode. Out-of-bounds
      * pixels are silently clipped.
+     * <p>
+     * A downscale keeps one source pixel per output pixel and skips the rest. To average them instead,
+     * as scaling a supersampled render down needs, pass {@link Resample#AREA} to
+     * {@link #blitScaled(PixelBuffer, int, int, int, int, BlendMode, Resample, AlphaMode)}.
      *
      * @param source the source buffer
      * @param dx the destination x origin
@@ -771,7 +904,7 @@ public class PixelBuffer {
                 int sa = ColorMath.alpha(src);
                 if (sa == 0) continue;
 
-                if (mode == BlendMode.REPLACE || sa == 0xFF && (mode == BlendMode.NORMAL || mode == BlendMode.PREMULTIPLIED)) {
+                if (mode == BlendMode.REPLACE || sa == 0xFF && mode.isSourceOver()) {
                     Arrays.fill(this.data, dstRow + dx + x, dstRow + dx + end, src);
                     continue;
                 }
@@ -784,6 +917,37 @@ public class PixelBuffer {
                 }
             }
         });
+    }
+
+    /**
+     * Composites the source buffer onto this buffer at the given origin, rescaling it to the specified
+     * width and height with the given filter and the specified blend mode. Out-of-bounds pixels are
+     * silently clipped.
+     * <p>
+     * {@link Resample#NEAREST} lays down what
+     * {@link #blitScaled(PixelBuffer, int, int, int, int, BlendMode)} lays down; any other filter
+     * resamples the source with {@link #resize(int, int, Resample, AlphaMode)} and lays the result down
+     * with {@link #blit(PixelBuffer, int, int, BlendMode)}. {@link Resample#AREA} is the filter for
+     * scaling a supersampled render down: every source pixel counts toward the output.
+     *
+     * @param source the source buffer
+     * @param dx the destination x origin
+     * @param dy the destination y origin
+     * @param dw the destination width
+     * @param dh the destination height
+     * @param mode the blend mode to use for compositing
+     * @param filter the resampling filter
+     * @param alphaMode the convention the source's pixels are held in
+     */
+    public void blitScaled(@NotNull PixelBuffer source, int dx, int dy, int dw, int dh, @NotNull BlendMode mode,
+                           @NotNull Resample filter, @NotNull AlphaMode alphaMode) {
+        if (filter == Resample.NEAREST) {
+            blitScaled(source, dx, dy, dw, dh, mode);
+            return;
+        }
+
+        if (dw <= 0 || dh <= 0) return;
+        blit(source.resize(dw, dh, filter, alphaMode), dx, dy, mode);
     }
 
     /**
@@ -959,6 +1123,12 @@ public class PixelBuffer {
      * {@code source}, or answers {@link #UNFILTERED} when the neighbourhood falls under the contrast
      * threshold and the pixel stays as it is.
      * <p>
+     * The edge test is FXAA's local-contrast check, as FXAA 3.11 makes it: a neighbourhood whose luma
+     * range is under the larger of a floor and a share of its brightest luma is left alone. The edge
+     * direction and the two samples along it are the simple FXAA shader's. FXAA writes the floor and
+     * the direction's floor for a luma in [0, 1], and both are scaled to the [0, 255] this luma runs
+     * over.
+     * <p>
      * A neighbourhood whose five edge-test reads hold one value answers {@link #UNFILTERED} before any
      * luma is computed: its contrast is zero, under a threshold that never drops below its positive
      * floor, so the edge test would leave it unfiltered too.
@@ -979,7 +1149,10 @@ public class PixelBuffer {
      */
     private static long fxaaPixel(int @NotNull [] source, int width, int height, boolean forceAlpha, int x, int y,
                                   @NotNull AlphaMode alphaMode, float @NotNull [] samples) {
-        final float fxaaReduceMin = 1.0f / 128.0f;
+        // FXAA writes its constants for luma in [0, 1]; edgeLuma runs over [0, 255], so the two
+        // absolute ones - the contrast floor and the direction floor - are scaled by 255, and the
+        // relative ones, each a factor on a luma, stand as written.
+        final float fxaaReduceMin = 1.0f / 128.0f * 255.0f;
         final float fxaaReduceMul = 1.0f / 4.0f;
         final float fxaaSpanMax = 8.0f;
         int fill = forceAlpha ? 0xFF000000 : 0;
@@ -1004,7 +1177,7 @@ public class PixelBuffer {
 
         float contrast = lumaMax - lumaMin;
 
-        if (contrast < Math.max(0.0156f, lumaMax * 0.0312f))
+        if (contrast < Math.max(0.0156f * 255.0f, lumaMax * 0.0312f))
             return UNFILTERED;
 
         float dirX = -((lumaNw + lumaNe) - (lumaSw + lumaSe));

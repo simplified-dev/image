@@ -61,6 +61,20 @@ class PixelBufferTest {
     }
 
     @Test
+    @DisplayName("create refuses dimensions whose pixel count overflows an int")
+    void createRefusesAnOverflowingPixelCount() {
+        // 65535 * 65535 wraps to a negative count, 65536 * 65537 to the positive 65536.
+        assertThrows(ArithmeticException.class, () -> PixelBuffer.create(65535, 65535));
+        assertThrows(ArithmeticException.class, () -> PixelBuffer.create(65536, 65537));
+    }
+
+    @Test
+    @DisplayName("of refuses an array whose length matches the dimensions only once their product wraps")
+    void ofRefusesALengthMatchingAWrappedPixelCount() {
+        assertThrows(IllegalArgumentException.class, () -> PixelBuffer.of(new int[65536], 65536, 65537));
+    }
+
+    @Test
     @DisplayName("getRow / setRow roundtrip")
     void rowRoundtrip() {
         PixelBuffer buffer = PixelBuffer.create(3, 2);
@@ -345,6 +359,95 @@ class PixelBufferTest {
                 for (int pixel : white.resize(target, target, Resample.BILINEAR).data())
                     assertThat("%d to %d".formatted(size, target), pixel, equalTo(0xFFFFFFFF));
         }
+    }
+
+    @Test
+    @DisplayName("resize BILINEAR keeps a straight pixel's colour beside a transparent one, and mixes premultiplied pixels as held")
+    void resizeBilinearHonoursTheConvention() {
+        PixelBuffer pair = PixelBuffer.create(2, 1);
+        pair.setPixel(0, 0, 0xFFFF0000);
+
+        assertThat(pair.resize(1, 1, Resample.BILINEAR).getPixel(0, 0), equalTo(0x80FF0000));
+        assertThat(pair.resize(1, 1, Resample.BILINEAR, AlphaMode.STRAIGHT).getPixel(0, 0), equalTo(0x80FF0000));
+        assertThat(pair.resize(1, 1, Resample.BILINEAR, AlphaMode.PREMULTIPLIED).getPixel(0, 0), equalTo(0x80800000));
+    }
+
+    @Test
+    @DisplayName("resize BICUBIC of premultiplied pixels holds every colour at or under its alpha")
+    void resizeBicubicPremultipliedStaysPremultiplied() {
+        PixelBuffer halves = PixelBuffer.create(8, 4);
+        for (int y = 0; y < 4; y++)
+            for (int x = 0; x < 4; x++)
+                halves.setPixel(x, y, 0xFFFF0000);
+
+        for (int pixel : halves.resize(3, 2, Resample.BICUBIC, AlphaMode.PREMULTIPLIED).data())
+            assertThat(Integer.toHexString(pixel), ColorMath.red(pixel) <= ColorMath.alpha(pixel), equalTo(true));
+    }
+
+    @Test
+    @DisplayName("resize BICUBIC keeps an opaque buffer opaque")
+    void resizeBicubicKeepsOpaque() {
+        PixelBuffer opaque = PixelBuffer.of(gradient(8, 8).data(), 8, 8, false);
+
+        for (AlphaMode mode : AlphaMode.values()) {
+            PixelBuffer resized = opaque.resize(5, 3, Resample.BICUBIC, mode);
+            assertThat(resized.hasAlpha(), equalTo(false));
+            for (int pixel : resized.data())
+                assertThat(ColorMath.alpha(pixel), equalTo(0xFF));
+        }
+    }
+
+    @Test
+    @DisplayName("resize AREA averages every source pixel a destination pixel covers")
+    void resizeAreaAveragesTheFootprint() {
+        PixelBuffer quad = PixelBuffer.of(new int[]{ 0xFFFF0000, 0xFF00FF00, 0xFF0000FF, 0xFFFFFFFF }, 2, 2, false);
+        assertThat(quad.resize(1, 1, Resample.AREA).getPixel(0, 0), equalTo(0xFF808080));
+
+        PixelBuffer lone = PixelBuffer.create(2, 2);
+        lone.setPixel(0, 0, 0xFFFF0000);
+        assertThat(lone.resize(1, 1, Resample.AREA, AlphaMode.STRAIGHT).getPixel(0, 0), equalTo(0x40FF0000));
+        assertThat(lone.resize(1, 1, Resample.AREA, AlphaMode.PREMULTIPLIED).getPixel(0, 0), equalTo(0x40400000));
+    }
+
+    @Test
+    @DisplayName("resize AREA weights a pixel a destination pixel only partly covers by the share it covers")
+    void resizeAreaWeightsPartialCoverage() {
+        PixelBuffer row = PixelBuffer.of(new int[]{ 0xFF000000, 0xFF780000, 0xFFF00000 }, 3, 1, false);
+        PixelBuffer shrunk = row.resize(2, 1, Resample.AREA);
+
+        assertThat(ColorMath.red(shrunk.getPixel(0, 0)), equalTo(40));
+        assertThat(ColorMath.red(shrunk.getPixel(1, 0)), equalTo(200));
+    }
+
+    @Test
+    @DisplayName("resize AREA reads a growing axis as NEAREST does")
+    void resizeAreaMagnifiesAsNearest() {
+        PixelBuffer source = gradient(5, 3);
+        assertArrayEquals(source.resize(12, 7, Resample.NEAREST).data(), source.resize(12, 7, Resample.AREA).data());
+    }
+
+    @Test
+    @DisplayName("blitScaled with a filter lays down what resizing with it and then blitting lays down")
+    void blitScaledWithAFilter() {
+        PixelBuffer hiRes = PixelBuffer.create(16, 16);
+        for (int i = 0; i < 256; i++)
+            hiRes.data()[i] = ((i * 37) & 0xFF) << 24 | (i * 0x010203 & 0xFFFFFF);
+        hiRes.premultiplyAlpha();
+
+        PixelBuffer viaBlit = PixelBuffer.create(6, 6);
+        viaBlit.fill(0x80204060);
+        viaBlit.blitScaled(hiRes, 1, 1, 4, 4, BlendMode.PREMULTIPLIED, Resample.AREA, AlphaMode.PREMULTIPLIED);
+
+        PixelBuffer viaResize = PixelBuffer.create(6, 6);
+        viaResize.fill(0x80204060);
+        viaResize.blit(hiRes.resize(4, 4, Resample.AREA, AlphaMode.PREMULTIPLIED), 1, 1, BlendMode.PREMULTIPLIED);
+        assertArrayEquals(viaResize.data(), viaBlit.data());
+
+        PixelBuffer nearest = PixelBuffer.create(6, 6);
+        nearest.blitScaled(hiRes, 1, 1, 4, 4, BlendMode.PREMULTIPLIED, Resample.NEAREST, AlphaMode.PREMULTIPLIED);
+        PixelBuffer unfiltered = PixelBuffer.create(6, 6);
+        unfiltered.blitScaled(hiRes, 1, 1, 4, 4, BlendMode.PREMULTIPLIED);
+        assertArrayEquals(unfiltered.data(), nearest.data());
     }
 
     @Test

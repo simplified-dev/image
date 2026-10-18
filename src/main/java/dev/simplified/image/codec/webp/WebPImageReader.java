@@ -8,6 +8,7 @@ import dev.simplified.image.ImageFormat;
 import dev.simplified.image.PixelBuffer;
 import dev.simplified.image.StaticImageData;
 import dev.simplified.image.codec.ImageReader;
+import dev.simplified.image.codec.common.DecodeBudget;
 import dev.simplified.image.codec.common.LittleEndian;
 import dev.simplified.image.codec.webp.vp8.VP8Decoder;
 import dev.simplified.image.codec.webp.vp8.VP8DecoderSession;
@@ -25,6 +26,11 @@ import org.jetbrains.annotations.Nullable;
 /**
  * Reads WebP images (static and animated, lossless and lossy) using a pure Java
  * implementation of the VP8L and VP8 codecs.
+ * <p>
+ * An animated image's frames are read composed: each is the whole canvas as it stands once its
+ * frame has been drawn, at the origin, blended {@link FrameBlend#SOURCE} and disposed
+ * {@link FrameDisposal#RESTORE_TO_BACKGROUND}, so it replaces the frame before it whatever blend
+ * and disposal the file declares for its frame.
  */
 @ApiStatus.Internal
 public class WebPImageReader implements ImageReader {
@@ -77,11 +83,13 @@ public class WebPImageReader implements ImageReader {
         boolean hasAnimation = (flags & 0x02) != 0;
         boolean hasAlpha = (flags & 0x10) != 0;
 
-        int canvasWidth = 1 + ((payload[4] & 0xFF) | ((payload[5] & 0xFF) << 8) | ((payload[6] & 0xFF) << 16));
-        int canvasHeight = 1 + ((payload[7] & 0xFF) | ((payload[8] & 0xFF) << 8) | ((payload[9] & 0xFF) << 16));
+        int canvasWidth = 1 + LittleEndian.readUint24(payload, 4);
+        int canvasHeight = 1 + LittleEndian.readUint24(payload, 7);
 
         if (canvasWidth > 16383 || canvasHeight > 16383)
             throw new ImageDecodeException("VP8X canvas dimensions exceed spec maximum: %dx%d", canvasWidth, canvasHeight);
+
+        DecodeBudget budget = DecodeBudget.open("WebP").declare(canvasWidth, canvasHeight);
 
         if (!hasAnimation) {
             // Static extended image (may have alpha + VP8 or VP8L)
@@ -125,7 +133,10 @@ public class WebPImageReader implements ImageReader {
         // chunk's background colour, DO_NOT_DISPOSE leaves it). The resulting
         // full-canvas snapshot is what we hand back as each frame's pixels -
         // matches libwebp's WebPAnimDecoder behaviour and makes
-        // AnimatedImageData callers see each frame as a complete image.
+        // AnimatedImageData callers see each frame as a complete image. The working canvas
+        // and one snapshot per frame are claimed together before any of them is allocated.
+        long frameCount = chunks.stream().filter(chunk -> chunk.type() == WebPChunk.Type.ANMF).count();
+        budget.claim(canvasWidth, canvasHeight, frameCount + 1);
         int[] canvas = new int[canvasWidth * canvasHeight];
         java.util.Arrays.fill(canvas, backgroundColor);
         int priorFrameX = 0, priorFrameY = 0, priorFrameW = 0, priorFrameH = 0;
@@ -139,11 +150,11 @@ public class WebPImageReader implements ImageReader {
             if (anmf.length < 16)
                 throw new ImageDecodeException("ANMF chunk too short");
 
-            int frameX = 2 * ((anmf[0] & 0xFF) | ((anmf[1] & 0xFF) << 8) | ((anmf[2] & 0xFF) << 16));
-            int frameY = 2 * ((anmf[3] & 0xFF) | ((anmf[4] & 0xFF) << 8) | ((anmf[5] & 0xFF) << 16));
-            int frameW = 1 + ((anmf[6] & 0xFF) | ((anmf[7] & 0xFF) << 8) | ((anmf[8] & 0xFF) << 16));
-            int frameH = 1 + ((anmf[9] & 0xFF) | ((anmf[10] & 0xFF) << 8) | ((anmf[11] & 0xFF) << 16));
-            int durationMs = (anmf[12] & 0xFF) | ((anmf[13] & 0xFF) << 8) | ((anmf[14] & 0xFF) << 16);
+            int frameX = 2 * LittleEndian.readUint24(anmf, 0);
+            int frameY = 2 * LittleEndian.readUint24(anmf, 3);
+            int frameW = 1 + LittleEndian.readUint24(anmf, 6);
+            int frameH = 1 + LittleEndian.readUint24(anmf, 9);
+            int durationMs = LittleEndian.readUint24(anmf, 12);
             int flagsByte = anmf[15] & 0xFF;
 
             FrameDisposal disposal = (flagsByte & 0x01) != 0
@@ -247,9 +258,12 @@ public class WebPImageReader implements ImageReader {
 
             // Snapshot the full canvas as this frame's pixels so callers see
             // composed full-image data (matching libwebp's WebPAnimDecoder).
+            // The snapshot has already taken this frame's blend and the prior
+            // frame's disposal, so it carries neither: it is a whole canvas
+            // that replaces the one before it.
             int[] snapshot = canvas.clone();
             PixelBuffer composed = PixelBuffer.of(snapshot, canvasWidth, canvasHeight);
-            frames.add(ImageFrame.of(composed, durationMs, 0, 0, disposal, blend));
+            frames.add(ImageFrame.of(composed, durationMs));
 
             priorFrameX = frameX;
             priorFrameY = frameY;
@@ -336,14 +350,6 @@ public class WebPImageReader implements ImageReader {
         result[4] = (byte) ((hM1 >> 10) & 0x0F);
         System.arraycopy(alphPayload, payloadStart, result, 5, bodyLen);
         return result;
-    }
-
-    private @NotNull PixelBuffer decodeFrameBitstream(byte @NotNull [] bitstream) {
-        // Detect if frame is VP8L or VP8 based on signature
-        if (bitstream.length > 0 && bitstream[0] == 0x2F)
-            return VP8LDecoder.decode(bitstream);
-
-        return VP8Decoder.decode(bitstream);
     }
 
     private static @Nullable WebPChunk findChunk(@NotNull ConcurrentList<WebPChunk> chunks, @NotNull WebPChunk.Type type) {

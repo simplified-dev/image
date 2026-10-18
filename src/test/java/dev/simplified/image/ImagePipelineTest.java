@@ -20,6 +20,7 @@ import dev.simplified.image.codec.tga.TgaImageReader;
 import dev.simplified.image.codec.tga.TgaImageWriter;
 import dev.simplified.image.codec.tiff.TiffImageReader;
 import dev.simplified.image.codec.tiff.TiffImageWriter;
+import dev.simplified.image.exception.ImageDecodeException;
 import dev.simplified.image.exception.UnsupportedFormatException;
 import dev.simplified.image.frame.FrameNormalizer;
 import dev.simplified.image.frame.ImageFrame;
@@ -35,6 +36,7 @@ import org.junit.jupiter.api.Test;
 
 import java.awt.*;
 import java.awt.image.BufferedImage;
+import java.nio.charset.StandardCharsets;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.*;
@@ -108,6 +110,58 @@ public class ImagePipelineTest {
             byte[] pngMagic = {(byte) 0x89, 0x50, 0x4E, 0x47};
             assertThat(ImageFormat.JPEG.matches(pngMagic), is(false));
             assertThat(ImageFormat.BMP.matches(pngMagic), is(false));
+        }
+
+        @Test
+        void icoNeedsAWalkableDirectory() {
+            // 00 00 01 00 opens an ICO and is also the size of a 256-byte ISOBMFF ftyp box. The ftyp
+            // letters land on the ICO entry count, asking for a 476,774-byte directory, and the brand
+            // letters on the first entry's image size and offset, so neither a short nor a long
+            // AVIF or HEIF file passes for an ICO.
+            for (String brand : new String[] {"avif", "heic"}) {
+                assertThat(brand + " in 256 bytes", ImageFormat.ICO.matches(ftypBox(brand, 256)), is(false));
+                byte[] large = ftypBox(brand, 600_000);
+                assertThat(brand + " in 600,000 bytes", ImageFormat.ICO.matches(large), is(false));
+                assertThrows(UnsupportedFormatException.class, () -> ImageFactory.detectFormat(large));
+            }
+
+            assertThat("an entry past the directory", ImageFormat.ICO.matches(icoDirectory(22, 40, 62)), is(true));
+            assertThat("an entry inside the directory", ImageFormat.ICO.matches(icoDirectory(10, 40, 62)), is(false));
+            assertThat("an entry past the data", ImageFormat.ICO.matches(icoDirectory(22, 41, 62)), is(false));
+            assertThat("the magic alone", ImageFormat.ICO.matches(new byte[] {0, 0, 1, 0}), is(false));
+        }
+
+        /**
+         * Lays out the opening of an ISOBMFF file whose first box is a 256-byte {@code ftyp} box naming
+         * a major brand and two compatible ones, followed by zeros.
+         */
+        private static byte[] ftypBox(String brand, int length) {
+            byte[] data = new byte[length];
+            data[2] = 0x01;
+            System.arraycopy("ftyp".getBytes(StandardCharsets.US_ASCII), 0, data, 4, 4);
+            System.arraycopy(brand.getBytes(StandardCharsets.US_ASCII), 0, data, 8, 4);
+            System.arraycopy(brand.getBytes(StandardCharsets.US_ASCII), 0, data, 16, 4);
+            System.arraycopy("mif1".getBytes(StandardCharsets.US_ASCII), 0, data, 20, 4);
+            return data;
+        }
+
+        /**
+         * Lays out an ICO directory of one 16x16 32-bit entry whose image has the given offset and
+         * size, in data of the given length.
+         */
+        private static byte[] icoDirectory(int imageOffset, int imageSize, int length) {
+            byte[] data = new byte[length];
+            data[2] = 1;
+            data[4] = 1;
+            data[6] = 16;
+            data[7] = 16;
+            data[10] = 1;
+            data[12] = 32;
+            for (int i = 0; i < 4; i++) {
+                data[14 + i] = (byte) (imageSize >>> (8 * i));
+                data[18 + i] = (byte) (imageOffset >>> (8 * i));
+            }
+            return data;
         }
 
         @Test
@@ -540,7 +594,7 @@ public class ImagePipelineTest {
 
             assertThat(data.isAnimated(), is(true));
             assertThat(data.getFrames(), hasSize(2));
-            assertThat(data.getFrames().get(0).delayMs(), is(100));
+            assertThat(data.getFrames().getFirst().delayMs(), is(100));
         }
 
         @Test
@@ -574,6 +628,26 @@ public class ImagePipelineTest {
 
             assertThat(decoded.getWidth(), is(4));
             assertThat(decoded.getHeight(), is(4));
+        }
+
+        @Test
+        void fromByteArraysDecodesInInputOrder() {
+            ConcurrentList<byte[]> arrays = Concurrent.newList();
+            for (int side : new int[] { 3, 5, 7 })
+                arrays.add(ImageFactory.toByteArray(StaticImageData.of(createRgbTestImage(side, side, Color.RED)), ImageFormat.PNG));
+
+            ConcurrentList<ImageData> decoded = ImageFactory.fromByteArrays(arrays);
+
+            assertThat(decoded.stream().map(ImageData::getWidth).toList(), contains(3, 5, 7));
+        }
+
+        @Test
+        void fromByteArraysThrowsWhatTheFailingReadThrows() {
+            ConcurrentList<byte[]> arrays = Concurrent.newList();
+            arrays.add(ImageFactory.toByteArray(StaticImageData.of(createRgbTestImage(4, 4, Color.RED)), ImageFormat.PNG));
+            arrays.add("not an image".getBytes(StandardCharsets.US_ASCII));
+
+            assertThrows(UnsupportedFormatException.class, () -> ImageFactory.fromByteArrays(arrays));
         }
 
     }
@@ -698,7 +772,7 @@ public class ImagePipelineTest {
         @Test
         void parsesHeaderComments() {
             String source = "P3\n# this is a comment\n2 1\n255\n0 0 0 255 255 255\n";
-            ImageData decoded = new PnmImageReader().read(source.getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+            ImageData decoded = new PnmImageReader().read(source.getBytes(StandardCharsets.US_ASCII));
             PixelBuffer got = decoded.getFrames().getFirst().pixels();
             assertThat(got.getPixel(0, 0), is(0xFF000000));
             assertThat(got.getPixel(1, 0), is(0xFFFFFFFF));
@@ -872,6 +946,26 @@ public class ImagePipelineTest {
             ImageData decoded = new IcoImageReader().read(encoded);
             PixelBuffer got = decoded.getFrames().getFirst().pixels();
             assertThat(got.getPixel(0, 0), is(0xFFABCDEF));
+        }
+
+        @Test
+        void subimagePastIntRangeIsRefused() {
+            // The second entry is the larger, so the one read, and its offset and size add up past
+            // Integer.MAX_VALUE: only a sum taken in long sees the subimage run past the data.
+            byte[] ico = new byte[42];
+            ico[2] = 1;
+            ico[4] = 2;
+            int[][] entries = {{1, 4, 38}, {32, 0x20, 0x7FFFFFF0}};
+            for (int e = 0; e < entries.length; e++) {
+                int at = 6 + 16 * e;
+                ico[at] = (byte) entries[e][0];
+                ico[at + 1] = (byte) entries[e][0];
+                for (int i = 0; i < 4; i++) {
+                    ico[at + 8 + i] = (byte) (entries[e][1] >>> (8 * i));
+                    ico[at + 12 + i] = (byte) (entries[e][2] >>> (8 * i));
+                }
+            }
+            assertThrows(ImageDecodeException.class, () -> new IcoImageReader().read(ico));
         }
 
         @Test

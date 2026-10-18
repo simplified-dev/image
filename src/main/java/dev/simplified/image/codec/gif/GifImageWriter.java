@@ -1,12 +1,15 @@
 package dev.simplified.image.codec.gif;
 
+import dev.simplified.annotations.AccessLevel;
 import dev.simplified.annotations.Cleanup;
+import dev.simplified.annotations.RequiredArgsConstructor;
 import dev.simplified.annotations.SilentThrows;
 import dev.simplified.collection.ConcurrentList;
 import dev.simplified.image.AnimatedImageData;
 import dev.simplified.image.ImageData;
 import dev.simplified.image.ImageFormat;
 import dev.simplified.image.codec.ImageWriter;
+import dev.simplified.image.codec.common.LittleEndian;
 import dev.simplified.image.exception.ImageEncodeException;
 import dev.simplified.image.frame.FrameBlend;
 import dev.simplified.image.frame.FrameDisposal;
@@ -62,6 +65,11 @@ public class GifImageWriter implements ImageWriter {
      */
     private static final int MAX_NETSCAPE_COUNT = 0xFFFF;
 
+    /**
+     * The largest offset an image descriptor's 16-bit position fields declare.
+     */
+    private static final int MAX_FRAME_OFFSET = 0xFFFF;
+
     @Override
     public @NotNull ImageFormat getFormat() {
         return ImageFormat.GIF;
@@ -114,18 +122,18 @@ public class GifImageWriter implements ImageWriter {
         ImageTypeSpecifier specifier = new ImageTypeSpecifier(palette,
             palette.createCompatibleSampleModel(1, 1));
 
+        IIOMetadata streamMetadata = configureStreamMetadata(writer.getDefaultStreamMetadata(param), data.getWidth(), data.getHeight());
+
         if (data.isAnimated()) {
             OptionalInt netscapeCount = netscapeCount(loopCount);
-            writer.prepareWriteSequence(null);
+            writer.prepareWriteSequence(streamMetadata);
             boolean firstFrame = true;
             int frameIdx = 0;
-            int frameStride = 0;
-            for (ImageFrame frame : data.getFrames())
-                frameStride = Math.max(frameStride, frame.pixels().width() * frame.pixels().height());
+            int frameStart = 0;
 
             for (ImageFrame frame : data.getFrames()) {
                 IIOMetadata metadata = writer.getDefaultImageMetadata(specifier, param);
-                configureFrameMetadata(metadata, writtenDisposal(data.getFrames(), frameIdx, netscapeCount.isPresent()), delaysCs[frameIdx], transparent, transparentColorIndex);
+                configureFrameMetadata(metadata, frame, writtenDisposal(data.getFrames(), frameIdx, netscapeCount.isPresent()), delaysCs[frameIdx], transparent, transparentColorIndex);
 
                 if (firstFrame) {
                     if (netscapeCount.isPresent())
@@ -135,10 +143,11 @@ public class GifImageWriter implements ImageWriter {
                 }
 
                 BufferedImage indexedFrame = buildIndexedFrame(
-                    flattenedPixels, frameIdx * frameStride,
+                    flattenedPixels, frameStart,
                     frame.pixels().width(), frame.pixels().height(),
                     palette, transparent, transparentColorIndex);
                 writer.writeToSequence(new IIOImage(indexedFrame, null, metadata), param);
+                frameStart += frame.pixels().data().length;
                 frameIdx++;
             }
 
@@ -146,11 +155,11 @@ public class GifImageWriter implements ImageWriter {
         } else {
             ImageFrame frame = data.getFrames().getFirst();
             IIOMetadata metadata = writer.getDefaultImageMetadata(specifier, param);
-            configureFrameMetadata(metadata, frame.disposal(), delaysCs[0], transparent, transparentColorIndex);
+            configureFrameMetadata(metadata, frame, frame.disposal(), delaysCs[0], transparent, transparentColorIndex);
             BufferedImage indexedFrame = buildIndexedFrame(
                 flattenedPixels, 0, frame.pixels().width(), frame.pixels().height(),
                 palette, transparent, transparentColorIndex);
-            writer.write(new IIOImage(indexedFrame, null, metadata));
+            writer.write(streamMetadata, new IIOImage(indexedFrame, null, metadata), param);
         }
 
         writer.dispose();
@@ -167,8 +176,8 @@ public class GifImageWriter implements ImageWriter {
      * <p>
      * A partly transparent pixel is blended by the convention {@link ImageData#getAlphaMode()}
      * reports: premultiplied colour is laid over the background with
-     * {@link BlendMode#PREMULTIPLIED}, rounded once, and straight colour is weighted by its alpha
-     * against the background.
+     * {@link BlendMode#PREMULTIPLIED} and straight colour with {@link BlendMode#STRAIGHT}, each
+     * rounded once.
      *
      * @param data the image whose frames are flattened
      * @param backgroundRgb the RGB a pixel below full alpha is laid over
@@ -182,11 +191,8 @@ public class GifImageWriter implements ImageWriter {
         boolean transparent,
         int alphaThreshold
     ) {
-        boolean premultiplied = data.getAlphaMode() == AlphaMode.PREMULTIPLIED;
+        BlendMode over = data.getAlphaMode() == AlphaMode.PREMULTIPLIED ? BlendMode.PREMULTIPLIED : BlendMode.STRAIGHT;
         int opaqueBackground = 0xFF000000 | backgroundRgb;
-        int bgR = (backgroundRgb >> 16) & 0xFF;
-        int bgG = (backgroundRgb >> 8) & 0xFF;
-        int bgB = backgroundRgb & 0xFF;
         int totalPixels = 0;
         for (ImageFrame frame : data.getFrames())
             totalPixels += frame.pixels().data().length;
@@ -205,17 +211,7 @@ public class GifImageWriter implements ImageWriter {
                     out[offset + i] = 0xFF000000 | (argb & 0xFFFFFF);
                     continue;
                 }
-                if (premultiplied) {
-                    out[offset + i] = 0xFF000000 | ColorMath.blend(argb, opaqueBackground, BlendMode.PREMULTIPLIED);
-                    continue;
-                }
-                int r = (argb >> 16) & 0xFF;
-                int g = (argb >> 8) & 0xFF;
-                int b = argb & 0xFF;
-                int outR = (r * a + bgR * (255 - a)) / 255;
-                int outG = (g * a + bgG * (255 - a)) / 255;
-                int outB = (b * a + bgB * (255 - a)) / 255;
-                out[offset + i] = 0xFF000000 | (outR << 16) | (outG << 8) | outB;
+                out[offset + i] = 0xFF000000 | ColorMath.blend(argb, opaqueBackground, over);
             }
             offset += src.length;
         }
@@ -232,7 +228,7 @@ public class GifImageWriter implements ImageWriter {
      * are too many unique colors a frequency-weighted median-cut quantizer picks 256 image
      * -adaptive colors; this produces far better results than the default Java GIF writer's
      * hardcoded web-safe cube, which snaps every non-web-safe pixel to one of 216 coarse
-     * colors and destroys smooth gradients (the old "lost border gradient" bug).
+     * colors and destroys smooth gradients.
      */
     @NotNull
     private static IndexColorModel buildSharedPalette(
@@ -363,13 +359,10 @@ public class GifImageWriter implements ImageWriter {
      * at the frequency-weighted median so large flat regions collapse into single palette
      * slots instead of being merged with nearby detail.
      */
+    @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
     private static final class Bucket {
 
         private final @NotNull List<int @NotNull []> rows;
-
-        Bucket(@NotNull List<int @NotNull []> rows) {
-            this.rows = rows;
-        }
 
         int maxChannelSpread() {
             if (this.rows.size() <= 1) return 0;
@@ -418,7 +411,7 @@ public class GifImageWriter implements ImageWriter {
             for (int i = 0; i < this.rows.size(); i++) {
                 cumulative += this.rows.get(i)[3];
                 if (cumulative >= midpoint) {
-                    splitIndex = Math.max(1, Math.min(this.rows.size() - 1, i + 1));
+                    splitIndex = Math.clamp(i + 1, 1, this.rows.size() - 1);
                     break;
                 }
             }
@@ -585,16 +578,58 @@ public class GifImageWriter implements ImageWriter {
         return next.blend() == FrameBlend.SOURCE ? FrameDisposal.RESTORE_TO_BACKGROUND : frame.disposal();
     }
 
+    /**
+     * Declares the image's canvas as the GIF's logical screen, so a player sizes its canvas to the
+     * image rather than to the first frame.
+     *
+     * @param metadata the writer's default stream metadata
+     * @param width the canvas width
+     * @param height the canvas height
+     * @return {@code metadata}, now declaring the canvas
+     */
+    @SilentThrows
+    private static @NotNull IIOMetadata configureStreamMetadata(@NotNull IIOMetadata metadata, int width, int height) {
+        String formatName = metadata.getNativeMetadataFormatName();
+        IIOMetadataNode root = (IIOMetadataNode) metadata.getAsTree(formatName);
+
+        IIOMetadataNode screen = getOrCreateNode(root, "LogicalScreenDescriptor");
+        screen.setAttribute("logicalScreenWidth", Integer.toString(width));
+        screen.setAttribute("logicalScreenHeight", Integer.toString(height));
+
+        metadata.setFromTree(formatName, root);
+        return metadata;
+    }
+
+    /**
+     * Declares one frame's position, disposal, delay and transparent slot.
+     *
+     * @param metadata the frame's image metadata
+     * @param frame the frame, whose offset the image descriptor declares
+     * @param disposal the disposal to declare
+     * @param delayCs the delay to declare, in hundredths of a second
+     * @param transparent whether the frame declares a transparent slot
+     * @param transparentColorIndex the palette index of the transparent slot
+     * @throws ImageEncodeException when the frame sits at a negative offset, or past the 65535 a
+     *     GIF's 16-bit position fields declare
+     */
     @SilentThrows
     private static void configureFrameMetadata(
         @NotNull IIOMetadata metadata,
+        @NotNull ImageFrame frame,
         @NotNull FrameDisposal disposal,
         int delayCs,
         boolean transparent,
         int transparentColorIndex
     ) {
+        if (frame.offsetX() < 0 || frame.offsetY() < 0 || frame.offsetX() > MAX_FRAME_OFFSET || frame.offsetY() > MAX_FRAME_OFFSET)
+            throw new ImageEncodeException("Frame offset '%s, %s' is outside the 0 to %s a GIF declares", frame.offsetX(), frame.offsetY(), MAX_FRAME_OFFSET);
+
         String formatName = metadata.getNativeMetadataFormatName();
         IIOMetadataNode root = (IIOMetadataNode) metadata.getAsTree(formatName);
+
+        IIOMetadataNode descriptor = getOrCreateNode(root, "ImageDescriptor");
+        descriptor.setAttribute("imageLeftPosition", Integer.toString(frame.offsetX()));
+        descriptor.setAttribute("imageTopPosition", Integer.toString(frame.offsetY()));
 
         IIOMetadataNode gce = getOrCreateNode(root, "GraphicControlExtension");
         gce.setAttribute("disposalMethod", disposal.getMethod());
@@ -640,11 +675,9 @@ public class GifImageWriter implements ImageWriter {
         IIOMetadataNode netscape = new IIOMetadataNode("ApplicationExtension");
         netscape.setAttribute("applicationID", "NETSCAPE");
         netscape.setAttribute("authenticationCode", "2.0");
-        netscape.setUserObject(new byte[] {
-            0x1,
-            (byte) (netscapeCount & 0xFF),
-            (byte) ((netscapeCount >> 8) & 0xFF)
-        });
+        byte[] loop = { 0x1, 0, 0 };
+        LittleEndian.writeUint16(loop, 1, netscapeCount);
+        netscape.setUserObject(loop);
         appExts.appendChild(netscape);
 
         metadata.setFromTree(formatName, root);

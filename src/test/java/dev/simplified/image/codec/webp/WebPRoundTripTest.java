@@ -185,7 +185,7 @@ class WebPRoundTripTest {
 
     @Test
     @DisplayName("lossy + alpha decodes through libwebp with bit-exact alpha")
-    void lossyAlphaLibwebpRoundTrip() throws Exception {
+    void lossyAlphaLibwebpRoundTrip() {
         PixelBuffer buf = PixelBuffer.create(16, 16);
         for (int y = 0; y < 16; y++)
             for (int x = 0; x < 16; x++) {
@@ -213,9 +213,9 @@ class WebPRoundTripTest {
     }
 
     @Test
-    @DisplayName("animated lossy + alpha self round-trip: alpha preserved per frame")
+    @DisplayName("animated lossy + alpha self round-trip: each frame decodes to the alpha its frames compose to")
     void animatedLossyAlphaSelfRoundTrip() {
-        // 3-frame animation; each frame fills with a different alpha gradient.
+        // 3-frame animation; each frame fills with a different alpha gradient, laid over the one before.
         ConcurrentList<ImageFrame> frames = Concurrent.newList();
         for (int f = 0; f < 3; f++) {
             PixelBuffer fb = PixelBuffer.create(16, 16);
@@ -248,12 +248,15 @@ class WebPRoundTripTest {
         if (outFrames.size() != 3)
             throw new AssertionError("frame count mismatch: " + outFrames.size());
 
+        // Each frame is laid over the one before it, so what it shows - and what it decodes to - is
+        // the canvas the frames compose to, whose alpha the lossless alpha plane keeps exactly.
+        ConcurrentList<ImageFrame> canvases = anim.toCanvasFrames().getFrames();
         for (int f = 0; f < 3; f++) {
             PixelBuffer fb = outFrames.get(f).pixels();
-            int phase = f * 40;
+            PixelBuffer canvas = canvases.get(f).pixels();
             for (int y = 0; y < 16; y++)
                 for (int x = 0; x < 16; x++) {
-                    int expectedAlpha = Math.min(255, phase + (x + y) * 7);
+                    int expectedAlpha = canvas.getPixel(x, y) >>> 24;
                     int gotAlpha = (fb.getPixel(x, y) >>> 24) & 0xFF;
                     if (gotAlpha != expectedAlpha)
                         throw new AssertionError(String.format(
@@ -291,15 +294,12 @@ class WebPRoundTripTest {
         ImageFactory.toFile(anim, ImageFormat.WEBP, keyOnlyOut,
             WebPWriteOptions.builder().isLossless(false).withQuality(1.0f).build());
 
-        // Both outputs must be small on stationary content. Prior to
-        // partial-frame ANMF (the 7684318 / FrameDiffUtil commit) the
-        // keyframe-only path emitted a full VP8 keyframe per ANMF and was
-        // much larger than the P-frame path; with partial frames, unchanged
-        // frames collapse to 1x1 placeholder ANMFs on BOTH paths (except
-        // the P-frame path still re-emits full inter-prediction VP8 per
-        // frame, so it's now slightly larger than keyframe-only on
-        // fully-stationary content). The size-ordering between the two
-        // options is content-dependent and no longer gates correctness.
+        // Both outputs must be small on stationary content. The keyframe-only
+        // path writes partial frames, so each unchanged frame collapses to a
+        // 1x1 placeholder ANMF; the P-frame path writes a full-canvas inter
+        // frame every time, so on fully stationary content it is slightly the
+        // larger. Which of the two is smaller depends on the content, so the
+        // test bounds each rather than ordering them.
         long maxExpected = 10_000;
         if (pFrameOut.length() > maxExpected || keyOnlyOut.length() > maxExpected)
             throw new AssertionError(String.format(
@@ -315,7 +315,7 @@ class WebPRoundTripTest {
             throw new AssertionError("frame count mismatch: " + decAnim.getFrames().size());
 
         // All frames should match frame 0's reconstruction (since content is identical).
-        PixelBuffer frame0 = decAnim.getFrames().get(0).pixels();
+        PixelBuffer frame0 = decAnim.getFrames().getFirst().pixels();
         for (int f = 1; f < 4; f++) {
             PixelBuffer fb = decAnim.getFrames().get(f).pixels();
             for (int y = 0; y < 32; y++)
@@ -331,14 +331,14 @@ class WebPRoundTripTest {
     }
 
     @Test
-    @DisplayName("static lossy with autoSegment differs from baseline on high-variance content and round-trips")
-    void staticLossyAutoSegmentViaWriter() throws IOException {
-        // 64x64 source with a smooth left half + high-variance right half (alternating
-        // 2-row stripes). Variance spread clears the auto-segment heuristic's gate so
-        // the encoder installs per-segment quant deltas via the writer's autoSegment
-        // option. Output bytes must differ from the autoSegment=false baseline, and
-        // the auto-segment output must round-trip through the decoder with healthy
-        // PSNR.
+    @DisplayName("static lossy with autoSegment writes fewer bytes on high-variance content and round-trips")
+    void staticLossyAutoSegmentViaWriter() {
+        // 64x64 source with a smooth left half + high-variance right half (dense
+        // two-level strokes, like small text, whose residual the quantizer cannot zero).
+        // Variance spread clears the auto-segment heuristic's gate so the encoder
+        // installs per-segment quant deltas via the writer's autoSegment option. Output
+        // bytes must drop below the autoSegment=false baseline, and the auto-segment
+        // output must round-trip through the decoder with healthy PSNR.
         int W = 64, H = 64;
         PixelBuffer buf = PixelBuffer.create(W, H);
         for (int y = 0; y < H; y++) {
@@ -348,7 +348,7 @@ class WebPRoundTripTest {
                     int v = (x + y) * 2;
                     argb = 0xFF000000 | (v << 16) | (v << 8) | v;
                 } else {
-                    int v = ((y >> 1) & 1) != 0 ? 200 : 40;
+                    int v = ((x * 7 + y * 13) % 11 < 3 || (x ^ y) % 7 == 0) ? 220 : 50;
                     argb = 0xFF000000 | (v << 16) | (v << 8) | v;
                 }
                 buf.setPixel(x, y, argb);
@@ -473,8 +473,8 @@ class WebPRoundTripTest {
 
         // Sanity-check PSNR on frame 0 - any wire-format defect in the autoSegment
         // P-frame path would either fail decode or land PSNR well below 20 dB.
-        PixelBuffer src0 = frames.get(0).pixels();
-        PixelBuffer dec0 = decAnim.getFrames().get(0).pixels();
+        PixelBuffer src0 = frames.getFirst().pixels();
+        PixelBuffer dec0 = decAnim.getFrames().getFirst().pixels();
         long sse = 0;
         long pixelCount = (long) W * H * 3;
         for (int y = 0; y < H; y++)
@@ -496,11 +496,12 @@ class WebPRoundTripTest {
     @Test
     @DisplayName("diagnostic: decode testLore P-frame output via our own reader + dump PNGs for visual check")
     void diagnosticDecodeTestLorePFrameOutput() throws Exception {
-        // Self-skip when testLore cache file not present. Produces
-        // W:/tmp/pframe_decoded_fN.png for each selected frame + PSNR vs lossless
-        // reference. Determines whether the user's "corrupt" report means
-        // "visually wrong pixels" (real bug) vs "libwebp rejects the container"
-        // (known Task 13 limitation - our own reader decodes P-frames fine).
+        // Aborts when the testLore cache files are absent. Decodes the P-frame
+        // file through this library's reader and writes W:/tmp/pframe_decoded_fN.png
+        // for each selected frame with its PSNR against the lossless reference, so
+        // a file that will not open elsewhere can be told apart from one that
+        // decodes to wrong pixels: libwebp rejects every P-frame, which this
+        // reader decodes.
         java.nio.file.Path pframeIn = java.nio.file.Path.of(
             "W:/Workspace/Java/SkyBlock-Simplified/asset-renderer/cache/test-lore/weapon_ss4_lossy.webp");
         java.nio.file.Path losslessIn = java.nio.file.Path.of(
@@ -590,9 +591,7 @@ class WebPRoundTripTest {
         File out = outputDir.resolve("tooltip_reencode_partial.webp").toFile();
         ImageFactory.toFile(anim, ImageFormat.WEBP, out,
             WebPWriteOptions.builder().isLossless().build());
-        System.err.println("[partial-reencode] ours animated lossless: "
-            + out.length() + " bytes (prior full-frame encode was 1,699,930 B; "
-            + "libwebp WebPAnimEncoder is 11,688 B)");
+        System.err.println("[partial-reencode] ours animated lossless: " + out.length() + " bytes");
     }
 
     @Test
@@ -752,7 +751,7 @@ class WebPRoundTripTest {
 
     @Test
     @DisplayName("near-lossless: lower levels shrink file + decode to valid pixels")
-    void nearLosslessLowerLevelsShrinkFile() throws IOException {
+    void nearLosslessLowerLevelsShrinkFile() {
         // Gradient-with-edges source: the non-smooth diagonal stripe gets snapped,
         // the smooth background passes through. Non-trivially compressible.
         PixelBuffer buf = buildGradientWithEdges(128, 128);
@@ -781,7 +780,7 @@ class WebPRoundTripTest {
 
     @Test
     @DisplayName("near-lossless: small-image bypass (< 64x64) leaves bits unchanged")
-    void nearLosslessSmallImageBypass() throws IOException {
+    void nearLosslessSmallImageBypass() {
         // 32x32 triggers libwebp's small-image bypass (width < 64 && height < 64).
         // The preprocessing is skipped; output bytes must match baseline lossless.
         PixelBuffer buf = buildGradientWithEdges(32, 32);
@@ -917,13 +916,12 @@ class WebPRoundTripTest {
     }
 
     @Test
-    @DisplayName("default animated-lossy output is libwebp-decodable (Task 13 regression gate)")
-    void defaultAnimatedLossyIsLibwebpDecodable() throws Exception {
-        // Regression gate tied to the Task 13 closure: libwebp's VP8GetHeaders
-        // unconditionally rejects non-keyframe VP8 bitstreams, so anything wrapped
-        // in ANMF that carries a P-frame VP8 payload will fail to decode in
-        // libwebp-based tools (Chrome, Firefox, Windows Photos, Pillow-via-libwebp,
-        // ffmpeg-built-against-libwebp).
+    @DisplayName("default animated-lossy output is libwebp-decodable")
+    void defaultAnimatedLossyIsLibwebpDecodable() {
+        // libwebp's VP8GetHeaders unconditionally rejects non-keyframe VP8
+        // bitstreams, so anything wrapped in ANMF that carries a P-frame VP8
+        // payload fails to decode in libwebp-based tools (Chrome, Firefox,
+        // Windows Photos, Pillow-via-libwebp, ffmpeg-built-against-libwebp).
         //
         // Default WebPWriteOptions (no usePFrames(true), no explicit multithreaded)
         // MUST produce a file with all-keyframe VP8 payloads so the output opens
@@ -1011,7 +1009,7 @@ class WebPRoundTripTest {
             throw new AssertionError("expected AnimatedImageData, got " + decoded.getClass());
         if (decAnim.getFrames().size() != 6)
             throw new AssertionError("frame count mismatch: " + decAnim.getFrames().size());
-        PixelBuffer frame0 = decAnim.getFrames().get(0).pixels();
+        PixelBuffer frame0 = decAnim.getFrames().getFirst().pixels();
         for (int f = 1; f < 6; f++) {
             PixelBuffer fb = decAnim.getFrames().get(f).pixels();
             for (int y = 0; y < 32; y++)
@@ -1067,7 +1065,7 @@ class WebPRoundTripTest {
 
     @Test
     @DisplayName("animated lossy + alpha decodes through libwebp with bit-exact alpha per frame")
-    void animatedLossyAlphaLibwebpRoundTrip() throws Exception {
+    void animatedLossyAlphaLibwebpRoundTrip() {
         // 3 frames with SOURCE blending so libwebp's animated decoder emits each frame's
         // alpha uncomposited against prior frames; alpha comes through VP8L (lossless) so
         // it must reconstruct bit-exactly.
@@ -1175,7 +1173,7 @@ class WebPRoundTripTest {
         // frame whose partial rect is tiny will both (a) have very few unique colors
         // and (b) see palette transform overhead exceed the savings.
         int paletteTotal = 0, literalTotal = 0;
-        PixelBuffer prev = anim.getFrames().get(0).pixels();
+        PixelBuffer prev = anim.getFrames().getFirst().pixels();
         for (int f = 0; f < frameCount; f++) {
             PixelBuffer curr = anim.getFrames().get(f).pixels();
             int[] partial;
@@ -1242,7 +1240,7 @@ class WebPRoundTripTest {
 
     @Test
     @DisplayName("diagnostic: tooltip-like 454x260 palette-path output size")
-    void diagnosticTooltipPalettePathSize() throws IOException {
+    void diagnosticTooltipPalettePathSize() {
         // Realistic tooltip: dark background, gold text pixels, grey mid-tones, border.
         // Has about 4 unique colors - well inside the 1bpp palette envelope (paletteSize=2),
         // so the output body should be tiny (a packed-index stream + 15-code palette
@@ -1259,8 +1257,7 @@ class WebPRoundTripTest {
                 buf.setPixel(x, y, argb);
             }
         byte[] payload = VP8LEncoder.encode(buf);
-        System.err.println("[palette-diag] 454x260 tooltip-like palette VP8L: "
-            + payload.length + " bytes (pre-palette literal-path baseline was ~60 KB)");
+        System.err.println("[palette-diag] 454x260 tooltip-like palette VP8L: " + payload.length + " bytes");
         if (payload.length > 5_000)
             throw new AssertionError("tooltip-like 4-color palette-path output = "
                 + payload.length + " B, expected <= 5000 B (palette may not be firing)");
@@ -1268,7 +1265,7 @@ class WebPRoundTripTest {
 
     @Test
     @DisplayName("palette VP8L cross-decodes through libwebp (alpha-varying content exercises palette deltas)")
-    void paletteLosslessLibwebpRoundTrip() throws Exception {
+    void paletteLosslessLibwebpRoundTrip() {
         // 4-color palette (2 bpp) with three different alphas forces the palette sub-image
         // to carry non-zero deltas on every channel, so a broken delta-encode or sub-image
         // emit would surface as libwebp rejecting the file or decoding wrong pixels.

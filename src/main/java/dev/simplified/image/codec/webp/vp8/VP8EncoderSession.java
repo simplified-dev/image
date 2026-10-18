@@ -1,8 +1,11 @@
 package dev.simplified.image.codec.webp.vp8;
 
+import dev.simplified.annotations.Getter;
+import dev.simplified.annotations.NoArgsConstructor;
 import dev.simplified.image.PixelBuffer;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 import java.util.concurrent.ForkJoinPool;
 
@@ -27,6 +30,7 @@ import java.util.concurrent.ForkJoinPool;
  * @see <a href="https://datatracker.ietf.org/doc/html/rfc6386#section-9.7">RFC 6386 section 9.7</a>
  */
 @ApiStatus.Internal
+@NoArgsConstructor
 public final class VP8EncoderSession {
 
     // ── LAST reference ──
@@ -73,22 +77,12 @@ public final class VP8EncoderSession {
     int refHeight;
 
     /**
-     * MV component probabilities carried across frames (RFC 6386 section 19.2). Layout
-     * {@code [component][slot]} - 2 components x {@link VP8Tables#NUM_MV_PROBAS} slots.
-     * Tracks the probabilities the decoder believes are currently active: keyframes
-     * reset to {@link VP8Tables#MV_DEFAULT_PROBA}; P-frames may emit per-slot updates,
-     * and this array is updated to match whatever was emitted so subsequent MVs use
-     * the same probs as the decoder will.
-     */
-    int[] @NotNull [] mvProba = VP8DecoderSession.cloneMvProba();
-
-    /**
      * Previous frame's observed MV branch counts, used by the header emit to compute
      * optimal MV probabilities via one-frame-lag: stats from frame N inform probs for
      * frame N+1. Layout {@code [component][slot][outcome]} where outcome is 0 or 1.
      * {@code null} until the first inter-frame is encoded.
      */
-    int[][] @org.jetbrains.annotations.Nullable [] prevMvBranches;
+    int @Nullable [][][] prevMvBranches;
 
     /**
      * Previous frame's Y-mode tree branch counts. Layout {@code [slot][outcome]} with
@@ -97,12 +91,12 @@ public final class VP8EncoderSession {
      * optionally replace the per-frame Y-mode probabilities (all-or-nothing update,
      * RFC 6386 section 19.2).
      */
-    int @org.jetbrains.annotations.Nullable [][] prevYModeBranches;
+    int @Nullable [][] prevYModeBranches;
 
     /**
      * Previous frame's UV-mode tree branch counts. 3 slots. See {@link #prevYModeBranches}.
      */
-    int @org.jetbrains.annotations.Nullable [][] prevUvModeBranches;
+    int @Nullable [][] prevUvModeBranches;
 
     /**
      * Previous frame's coefficient token tree branch observations (RFC 6386 section
@@ -112,7 +106,7 @@ public final class VP8EncoderSession {
      * the header emit to decide whether each of 1056 per-slot coefficient probs is
      * worth updating vs keeping at the current default.
      */
-    int[][] @org.jetbrains.annotations.Nullable [][][] prevTokenBranches;
+    int @Nullable [][][][][] prevTokenBranches;
 
     /**
      * Parallelism for the per-MB motion-search prepass on P-frame encodes. {@code 1}
@@ -121,6 +115,7 @@ public final class VP8EncoderSession {
      * {@code N}. Motion-searched MVs are a hint - R-D still picks the final MV per
      * MB - so parallelism does not affect bit output.
      */
+    @Getter
     private int motionSearchThreads = 1;
 
     /**
@@ -130,19 +125,14 @@ public final class VP8EncoderSession {
      * quantizer. Frames with too little variance spread fall through to single-
      * segment encode (no wasted segment-tree bits). Off by default.
      */
+    @Getter
     private boolean autoSegment = false;
 
     /**
-     * Constructs a new {@code VP8EncoderSession} with no cached references.
+     * Macroblocks of the last encoded frame whose best whole-macroblock prediction missed by more than
+     * the SPLITMV gate's error, so the SPLITMV search ran on them - zero after a keyframe.
      */
-    public VP8EncoderSession() { }
-
-    /**
-     * Returns the current motion-search parallelism. Defaults to {@code 1}.
-     */
-    public int getMotionSearchThreads() {
-        return motionSearchThreads;
-    }
+    int splitMvSearches;
 
     /**
      * Sets the parallelism used by the P-frame motion-search prepass. Use {@code 1}
@@ -183,13 +173,6 @@ public final class VP8EncoderSession {
     }
 
     /**
-     * Returns {@code true} when auto-segmentation is enabled on this session.
-     */
-    public boolean isAutoSegment() {
-        return autoSegment;
-    }
-
-    /**
      * Encodes {@code pixels} as a VP8 frame. Emits a keyframe when no LAST reference is
      * cached; otherwise emits a P-frame against the cached LAST reference.
      *
@@ -211,6 +194,7 @@ public final class VP8EncoderSession {
      * @return encoded VP8 payload bytes
      */
     public byte @NotNull [] encode(@NotNull PixelBuffer pixels, float quality, boolean forceKeyframe) {
+        this.splitMvSearches = 0;
         boolean needsKeyframe = forceKeyframe
             || !hasReference()
             || pixels.width() != refWidth
@@ -255,7 +239,6 @@ public final class VP8EncoderSession {
         refLumaStride = refChromaStride = 0;
         refMbCols = refMbRows = 0;
         refWidth = refHeight = 0;
-        mvProba = VP8DecoderSession.cloneMvProba();
         prevMvBranches = null;
         prevYModeBranches = null;
         prevUvModeBranches = null;
@@ -331,58 +314,6 @@ public final class VP8EncoderSession {
         this.refMbRows = mbRows;
         this.refWidth = width;
         this.refHeight = height;
-    }
-
-    /**
-     * Implements {@code copy_buffer_to_golden = 1} (copy LAST -> GOLDEN).
-     */
-    void copyLastToGolden() {
-        goldenY = ensureLen(goldenY, refY.length);
-        goldenU = ensureLen(goldenU, refU.length);
-        goldenV = ensureLen(goldenV, refV.length);
-        System.arraycopy(refY, 0, goldenY, 0, refY.length);
-        System.arraycopy(refU, 0, goldenU, 0, refU.length);
-        System.arraycopy(refV, 0, goldenV, 0, refV.length);
-    }
-
-    /**
-     * Implements {@code copy_buffer_to_golden = 2} (copy ALTREF -> GOLDEN).
-     */
-    void copyAltrefToGolden() {
-        goldenY = ensureLen(goldenY, altrefY.length);
-        goldenU = ensureLen(goldenU, altrefU.length);
-        goldenV = ensureLen(goldenV, altrefV.length);
-        System.arraycopy(altrefY, 0, goldenY, 0, altrefY.length);
-        System.arraycopy(altrefU, 0, goldenU, 0, altrefU.length);
-        System.arraycopy(altrefV, 0, goldenV, 0, altrefV.length);
-    }
-
-    /**
-     * Implements {@code copy_buffer_to_alt = 1} (copy LAST -> ALTREF).
-     */
-    void copyLastToAltref() {
-        altrefY = ensureLen(altrefY, refY.length);
-        altrefU = ensureLen(altrefU, refU.length);
-        altrefV = ensureLen(altrefV, refV.length);
-        System.arraycopy(refY, 0, altrefY, 0, refY.length);
-        System.arraycopy(refU, 0, altrefU, 0, refU.length);
-        System.arraycopy(refV, 0, altrefV, 0, refV.length);
-    }
-
-    /**
-     * Implements {@code copy_buffer_to_alt = 2} (copy GOLDEN -> ALTREF).
-     */
-    void copyGoldenToAltref() {
-        altrefY = ensureLen(altrefY, goldenY.length);
-        altrefU = ensureLen(altrefU, goldenU.length);
-        altrefV = ensureLen(altrefV, goldenV.length);
-        System.arraycopy(goldenY, 0, altrefY, 0, goldenY.length);
-        System.arraycopy(goldenU, 0, altrefU, 0, goldenU.length);
-        System.arraycopy(goldenV, 0, altrefV, 0, goldenV.length);
-    }
-
-    private static short[] ensureLen(short[] arr, int len) {
-        return (arr == null || arr.length != len) ? new short[len] : arr;
     }
 
 }

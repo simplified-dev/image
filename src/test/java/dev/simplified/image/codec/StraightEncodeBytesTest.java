@@ -99,15 +99,15 @@ class StraightEncodeBytesTest {
         Map.entry("TGA", "032e9598dd4d763b0cf7d9d3a2e775b693a550e0004f2fa59f95fab54112251b"),
         Map.entry("PNM", "aea6a6773f6f34bfa2d13b1ce3324defb5216d68e9cc8f39e698ae839174ebbe"),
         Map.entry("BMP", "9d0a50e5b26701b54f04122401c77c8066e61eca97bbb14462cd01eed9a3aa04"),
-        Map.entry("GIF_STILL", "bb7e353daa238171fa46bf1f9e4cd6233a9f82c4441030ec3152caf7be35c206"),
-        Map.entry("GIF_ANIMATED", "ab4b17741f43325ae07433d2ae7cdf0698e670f1e09f0b3e90908a6874dc84ce"),
+        Map.entry("GIF_STILL", "57846febab5c8a86dd3dbdb6ccb372ed9672f6ae1c30c9f951bd1a637f6cf4b0"),
+        Map.entry("GIF_ANIMATED", "b1c4a1445a246a1666ca61ccb319687833d026e9c91f00cd8c5b33e1c4ac2a1b"),
         Map.entry("TIFF_NONE_STILL", "8dc6591655bd62af99881727fb9e64f5809dbec0cdf4838f4be5e1fce4d6f09e"),
         Map.entry("TIFF_NONE_ANIMATED", "ea02eaab2c1328f3b8756cc8c195613439ee61cee8028f546793ca4d13656155"),
         Map.entry("WEBP_LOSSLESS_STILL", "642ce11754e544861cfe26efc47cd952fc33e4c8fd38139fed9d87977722dc5d"),
-        Map.entry("WEBP_LOSSY_STILL", "957cabbb37b4474f15bdb55a05658f42498cf91c4fc21df6ede4d36643edbf94"),
+        Map.entry("WEBP_LOSSY_STILL", "6a321a66154fb8849d336970c11b7ebbf5ff86abe81a68967b02d5d228f8cda1"),
         Map.entry("WEBP_LOSSLESS_ANIMATED", "0b137cc105d6423c9378f3720288c9021e887e67f71893213025020ae81b90f0"),
-        Map.entry("WEBP_LOSSY_ANIMATED", "4a817ee2674fe2fc6438d70365ba6a25928095c56e8a2cebd1c58702f8517112"),
-        Map.entry("WEBP_LOSSY_ANIMATED_P_FRAMES", "87a3207aee2bf1d291e965f4a961700fcfd5afc2982e88ced35196fa3b25b114")
+        Map.entry("WEBP_LOSSY_ANIMATED", "602f84c019b36174cd4d1f2c7b38daefa1a2398c10dcd3ab3d8c6ba29ff017a2"),
+        Map.entry("WEBP_LOSSY_ANIMATED_P_FRAMES", "60d495154c76a28226d64933c481588e4a89f21609dbe19d0464ef00ca028e59")
     );
 
     @TestFactory

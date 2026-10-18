@@ -1,5 +1,7 @@
 package dev.simplified.image.codec.webp.vp8;
 
+import dev.simplified.annotations.UtilityClass;
+
 /**
  * Constant tables of the VP8 bitstream, shared by the encoder and the decoder, for
  * keyframes and inter frames alike: coefficient bands, zig-zag order and token
@@ -13,6 +15,7 @@ package dev.simplified.image.codec.webp.vp8;
  *
  * @see <a href="https://datatracker.ietf.org/doc/html/rfc6386#section-13">RFC 6386 section 13</a>
  */
+@UtilityClass
 final class VP8Tables {
 
     /**
@@ -389,14 +392,14 @@ final class VP8Tables {
     };
 
     // ──────────────────────────────────────────────────────────────────────
-    // Inter-frame tables (RFC 6386 section 16 + libwebp src/dec/tree_dec.c)
+    // Inter-frame tables (RFC 6386 sections 16 and 17, libvpx)
     // ──────────────────────────────────────────────────────────────────────
 
     /**
      * Inter-frame intra Y-mode tree (5 leaves: DC, V, H, TM, B_PRED). Each pair of
      * entries is a tree node; positive entries index into the array and negative
      * entries encode the leaf as the corresponding {@link IntraPrediction} constant.
-     * Matches libwebp's {@code kYModeTree} in {@code src/dec/tree_dec.c}.
+     * Matches libvpx's {@code vp8_ymode_tree} in {@code vp8/common/entropymode.c}.
      */
     static final int[] YMODE_TREE = {
         -IntraPrediction.DC_PRED,  2,
@@ -418,13 +421,13 @@ final class VP8Tables {
 
     /**
      * Default probabilities for the inter-frame Y-mode tree (one per internal node
-     * of {@link #YMODE_TREE}). RFC 6386 section 16.2 {@code ymode_prob}.
+     * of {@link #YMODE_TREE}). RFC 6386 section 16.1 {@code ymode_prob}.
      */
     static final int[] YMODE_PROBA_INTER = { 112, 86, 140, 37 };
 
     /**
      * Default probabilities for the inter-frame UV-mode tree (one per internal node
-     * of {@link #UV_MODE_TREE}). RFC 6386 section 16.2 {@code uv_mode_prob}.
+     * of {@link #UV_MODE_TREE}). RFC 6386 section 16.1 {@code uv_mode_prob}.
      */
     static final int[] UV_MODE_PROBA_INTER = { 162, 101, 204 };
 
@@ -433,7 +436,7 @@ final class VP8Tables {
      * per internal node of {@link #BMODE_TREE}). Unlike the keyframe path which uses
      * {@link #KF_BMODE_PROB} indexed by the {@code (above, left)} neighbour modes, inter
      * frames code each sub-block's B-mode with these fixed, context-free probabilities
-     * per RFC 6386 section 16.2 / libvpx {@code vp8_bmode_prob}.
+     * per RFC 6386 section 16.1 / libvpx {@code vp8_bmode_prob}.
      */
     static final int[] BMODE_PROBA_INTER = { 120, 90, 79, 133, 87, 85, 80, 111, 151 };
 
@@ -537,7 +540,7 @@ final class VP8Tables {
           128, 130, 130,  74, 148, 180, 203, 236, 254, 254 }
     };
 
-    // ── SPLITMV tables (RFC 6386 section 17.3) ──────────────────────────────
+    // ── SPLITMV tables (RFC 6386 section 16.4) ──────────────────────────────
 
     /**
      * SPLITMV partitioning scheme: 16x8 horizontal halves.
@@ -651,9 +654,11 @@ final class VP8Tables {
 
     /**
      * Probabilities used for the "update this MV probability?" flag per MV-probability
-     * slot in the inter-frame header. Matches libwebp's {@code kMVUpdateProba} in
-     * {@code src/dec/tree_dec.c}. Dimensions: {@code [component][slot]} with 2 components
-     * (horizontal + vertical) and {@link #NUM_MV_PROBAS} slots per component.
+     * slot in the inter-frame header. Matches libvpx's {@code vp8_mv_update_probs} in
+     * {@code vp8/common/entropymv.c}, which RFC 6386 section 17.2 also lists. Dimensions:
+     * {@code [component][slot]} with 2 components (row=0, col=1) and
+     * {@link #NUM_MV_PROBAS} slots per component, in the slot layout of
+     * {@link #MV_DEFAULT_PROBA}.
      */
     static final int[][] MV_UPDATE_PROBA = {
         { 237, 246, 253, 253, 254, 254, 254, 254, 254,
@@ -765,7 +770,5 @@ final class VP8Tables {
           {255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255}}}
     };
     // @formatter:on
-
-    private VP8Tables() { }
 
 }

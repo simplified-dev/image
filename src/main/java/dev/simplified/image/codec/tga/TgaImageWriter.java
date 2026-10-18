@@ -46,8 +46,8 @@ public class TgaImageWriter implements ImageWriter {
     public byte @NotNull [] write(@NotNull ImageData data, @Nullable ImageWriteOptions options) {
         boolean rle = true;
 
-        if (options instanceof TgaWriteOptions tga)
-            rle = tga.rle();
+        if (options instanceof TgaWriteOptions(boolean declaredRle))
+            rle = declaredRle;
 
         PixelBuffer buffer = data.toPixelBuffer(AlphaMode.STRAIGHT);
         int width = buffer.width();
@@ -75,7 +75,7 @@ public class TgaImageWriter implements ImageWriter {
         out.writeByte(descriptor);
 
         if (rle) {
-            writeRle(out, buffer, width, height, hasAlpha, bpp);
+            writeRle(out, buffer, width, height, hasAlpha);
         } else {
             writeRaw(out, buffer, width, height, hasAlpha);
         }
@@ -93,7 +93,7 @@ public class TgaImageWriter implements ImageWriter {
                 writePixel(out, buffer.getPixel(x, y), hasAlpha);
     }
 
-    private static void writeRle(@NotNull ByteArrayDataOutput out, @NotNull PixelBuffer buffer, int width, int height, boolean hasAlpha, int bpp) throws IOException {
+    private static void writeRle(@NotNull ByteArrayDataOutput out, @NotNull PixelBuffer buffer, int width, int height, boolean hasAlpha) throws IOException {
         int[] row = new int[width];
 
         for (int y = 0; y < height; y++) {

@@ -6,6 +6,7 @@ import dev.simplified.image.ImageFormat;
 import dev.simplified.image.PixelBuffer;
 import dev.simplified.image.StaticImageData;
 import dev.simplified.image.codec.ImageReader;
+import dev.simplified.image.codec.common.DecodeBudget;
 import dev.simplified.image.codec.common.ImageIOBridge;
 import dev.simplified.image.codec.common.LittleEndian;
 import dev.simplified.image.exception.ImageDecodeException;
@@ -77,7 +78,7 @@ public class IcoImageReader implements ImageReader {
         int blobSize = LittleEndian.readUint32(data, entryOff + 8);
         int blobOff = LittleEndian.readUint32(data, entryOff + 12);
 
-        if (blobOff < 0 || blobSize <= 0 || blobOff + blobSize > data.length)
+        if (blobOff < 0 || blobSize <= 0 || (long) blobOff + blobSize > data.length)
             throw new ImageDecodeException("ICO subimage data out of bounds");
 
         byte[] blob = Arrays.copyOfRange(data, blobOff, blobOff + blobSize);
@@ -115,16 +116,16 @@ public class IcoImageReader implements ImageReader {
         if (bpp != 32)
             throw new ImageDecodeException("ICO DIB with '%d' bpp is not supported", bpp);
 
-        int pixelOff = headerSize;
         int rowStride = width * 4;
 
-        if (pixelOff + rowStride * height > dib.length)
+        if (headerSize + rowStride * height > dib.length)
             throw new ImageDecodeException("ICO DIB pixel data truncated");
 
+        DecodeBudget.open("ICO").claim(width, height);
         int[] pixels = new int[width * height];
 
         for (int y = 0; y < height; y++) {
-            int rowStart = pixelOff + (height - 1 - y) * rowStride;
+            int rowStart = headerSize + (height - 1 - y) * rowStride;
 
             for (int x = 0; x < width; x++) {
                 int p = rowStart + x * 4;

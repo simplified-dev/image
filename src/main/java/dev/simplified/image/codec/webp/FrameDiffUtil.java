@@ -1,5 +1,6 @@
 package dev.simplified.image.codec.webp;
 
+import dev.simplified.annotations.UtilityClass;
 import dev.simplified.image.PixelBuffer;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -20,9 +21,8 @@ import org.jetbrains.annotations.Nullable;
  *
  * @see <a href="https://developers.google.com/speed/webp/docs/riff_container#animation">WebP Animation container</a>
  */
+@UtilityClass
 final class FrameDiffUtil {
-
-    private FrameDiffUtil() { }
 
     /**
      * Bounding box of pixels that differ between {@code prev} and {@code curr},

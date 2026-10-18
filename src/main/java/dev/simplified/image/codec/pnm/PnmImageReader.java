@@ -1,11 +1,11 @@
 package dev.simplified.image.codec.pnm;
 
-import dev.simplified.annotations.SilentThrows;
 import dev.simplified.image.ImageData;
 import dev.simplified.image.ImageFormat;
 import dev.simplified.image.PixelBuffer;
 import dev.simplified.image.StaticImageData;
 import dev.simplified.image.codec.ImageReader;
+import dev.simplified.image.codec.common.DecodeBudget;
 import dev.simplified.image.exception.ImageDecodeException;
 import dev.simplified.image.option.ImageReadOptions;
 import org.jetbrains.annotations.ApiStatus;
@@ -36,7 +36,6 @@ public class PnmImageReader implements ImageReader {
     }
 
     @Override
-    @SilentThrows
     public @NotNull ImageData read(byte @NotNull [] data, @Nullable ImageReadOptions options) {
         if (data.length < 2 || data[0] != 'P')
             throw new ImageDecodeException("Not a PNM file");
@@ -61,6 +60,7 @@ public class PnmImageReader implements ImageReader {
         if (cursor[0] < data.length)
             cursor[0]++;
 
+        DecodeBudget.open("PNM").claim(width, height);
         int total = Math.multiplyExact(width, height);
         int[] pixels = new int[total];
         int bps = maxval < 256 ? 1 : 2;

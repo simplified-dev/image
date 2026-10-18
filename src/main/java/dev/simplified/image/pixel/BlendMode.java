@@ -1,18 +1,24 @@
 package dev.simplified.image.pixel;
 
+import dev.simplified.annotations.Getter;
+import dev.simplified.annotations.RequiredArgsConstructor;
+
 /**
  * Per-pixel alpha compositing modes for ARGB pixel blending.
  * <p>
  * Mode semantics operate on ARGB pixel pairs where {@code src} is the incoming pixel and
- * {@code dst} is the pixel already on the surface. Alpha is always premultiplied into the output.
+ * {@code dst} is the pixel already on the surface. Each mode states which convention its colour is
+ * read and answered in.
  */
+@Getter
+@RequiredArgsConstructor
 public enum BlendMode {
 
     /**
      * Standard source-over alpha compositing. The result equals
      * {@code src * src.a + dst * (1 - src.a)} per channel.
      */
-    NORMAL,
+    NORMAL(true),
 
     /**
      * Porter-Duff <i>source</i>: the source replaces the destination verbatim, alpha included. The
@@ -26,7 +32,7 @@ public enum BlendMode {
      * discarded before it reaches a composite - so the two can differ only where the source carries
      * partial alpha.
      */
-    REPLACE,
+    REPLACE(false),
 
     /**
      * Source-over for a source whose colour already carries its alpha. The result equals
@@ -43,24 +49,38 @@ public enum BlendMode {
      * It agrees with {@link #NORMAL} on every source whose alpha is {@code 0} or {@code 255}, so the
      * two can differ only where the source carries partial alpha.
      */
-    PREMULTIPLIED,
+    PREMULTIPLIED(true),
+
+    /**
+     * Source-over with both pixels held in straight colour, answered in straight colour. The result
+     * alpha equals {@code src.a + dst.a * (1 - src.a)}, and each colour channel equals
+     * {@code (src * src.a + dst * dst.a * (1 - src.a)) / alpha}, rounded to nearest.
+     * <p>
+     * This is how one straight image is laid over another - a decoded image over a fill, or a frame
+     * over the canvas an animation has drawn so far. A fully transparent destination takes the source
+     * unchanged, so a translucent pixel keeps its own colour rather than darkening.
+     * <p>
+     * It agrees with {@link #NORMAL} on every source whose alpha is {@code 0} or {@code 255}, and over
+     * an opaque destination the two differ only by rounding.
+     */
+    STRAIGHT(true),
 
     /**
      * Additive blend, clamped to byte range. The result equals
      * {@code min(255, src + dst)} per channel.
      */
-    ADD,
+    ADD(false),
 
     /**
      * Multiplicative blend. The result equals {@code src * dst / 255} per channel, preserving
      * the destination alpha.
      */
-    MULTIPLY,
+    MULTIPLY(false),
 
     /**
      * Photoshop-style overlay: {@code dst < 128 ? 2*src*dst/255 : 255 - 2*(255-src)*(255-dst)/255}.
      */
-    OVERLAY,
+    OVERLAY(false),
 
     /**
      * Quadratic additive blend: the source is squared (in normalized space) before adding the
@@ -73,6 +93,13 @@ public enum BlendMode {
      * {@code ONE} ({@code out = src * src_color + dst}). Any per-source intensity scaling should be
      * pre-multiplied into the source RGB by the caller, since the square applies to the source as-is.
      */
-    QUADRATIC_ADD
+    QUADRATIC_ADD(false);
+
+    /**
+     * Whether this mode is source-over: it answers a fully opaque source unchanged and leaves the
+     * destination untouched under a fully transparent one, so a compositor may copy the one and skip
+     * the other without blending.
+     */
+    private final boolean sourceOver;
 
 }

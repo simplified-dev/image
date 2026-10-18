@@ -1,6 +1,9 @@
 package dev.simplified.image.codec.webp.vp8;
 
+import dev.simplified.annotations.UtilityClass;
 import dev.simplified.image.PixelBuffer;
+import dev.simplified.image.codec.common.DecodeBudget;
+import dev.simplified.image.codec.common.LittleEndian;
 import dev.simplified.image.exception.ImageDecodeException;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
@@ -28,10 +31,9 @@ import org.jetbrains.annotations.Nullable;
  *
  * @see <a href="https://datatracker.ietf.org/doc/html/rfc6386">RFC 6386</a>
  */
+@UtilityClass
 @ApiStatus.Internal
 public final class VP8Decoder {
-
-    private VP8Decoder() { }
 
     /**
      * Per-MB metadata captured from a completed decode pass. Exposes the per-MB
@@ -160,7 +162,7 @@ public final class VP8Decoder {
         final int[] mbMvRow;
         final int[] mbMvCol;
 
-        // Per-4x4-sub-block MV grid for SPLITMV MBs (RFC 6386 section 17.3). Layout:
+        // Per-4x4-sub-block MV grid for SPLITMV MBs (RFC 6386 section 16.4). Layout:
         //   bmiRow[mbIdx * 16 + k] where k is the 4x4 sub-block index (0..15 raster).
         // Used by neighbouring SPLITMV MBs at the boundary to look up the right-column
         // sub-MV (left neighbour) or bottom-row sub-MV (above neighbour) via
@@ -178,8 +180,11 @@ public final class VP8Decoder {
         //   mbRefFrame[i]   = LoopFilter.REF_INTRA / REF_LAST / REF_GOLDEN / REF_ALTREF
         //   mbModeLfIdx[i]  = LoopFilter.MODE_{NON_BPRED_INTRA, BPRED, ZEROMV, OTHER_INTER, SPLITMV}
         // Consumed by the end-of-frame loop filter to apply RFC 6386 section 15 deltas.
+        //   mbHasCoeffs[i]  = the MB carries a non-zero coefficient, which has the loop
+        //                     filter take its inner edges whatever its mode
         final int[] mbRefFrame;
         final int[] mbModeLfIdx;
+        final boolean[] mbHasCoeffs;
 
         // Filter-delta header state populated by the filter-header parse:
         //   useLfDelta    - the use_lf_delta bit
@@ -213,10 +218,13 @@ public final class VP8Decoder {
         // Coefficient probabilities after parsing the 1056 update bits.
         final int[][][][] proba;
 
-        // MV component probabilities (RFC 6386 section 19.2). Keyframes reset this to
-        // MV_DEFAULT_PROBA; P-frames may update individual slots. Carried across frames
-        // via the decoder session.
+        // MV component probabilities (RFC 6386 section 19.2), started from the session's
+        // probability context and updated by the frame header.
         final int[][] mvProba;
+
+        // Whether this frame's probability updates join the session's context for the frames
+        // after it (refresh_entropy_probs), or the context it started from stands.
+        boolean refreshEntropyProbs;
 
         // Per-MB skip bit state.
         boolean useSkipProba;
@@ -235,8 +243,8 @@ public final class VP8Decoder {
         int probIntra;
         int probLast;
         int probGf;
-        final int[] yModeProba = VP8Tables.YMODE_PROBA_INTER.clone();
-        final int[] uvModeProba = VP8Tables.UV_MODE_PROBA_INTER.clone();
+        final int[] yModeProba;
+        final int[] uvModeProba;
 
         // Reference-buffer management flags from the inter-frame header (RFC 6386 section 9.7).
         boolean refreshLast;
@@ -269,17 +277,20 @@ public final class VP8Decoder {
             java.util.Arrays.fill(this.mbSplitScheme, -1);
             this.mbRefFrame = new int[mbCols * mbRows];       // defaults to REF_INTRA = 0
             this.mbModeLfIdx = new int[mbCols * mbRows];       // defaults to MODE_NON_BPRED_INTRA = 0
+            this.mbHasCoeffs = new boolean[mbCols * mbRows];
             this.mbSegmentId = new int[mbCols * mbRows];       // defaults to 0 (single-segment)
-            this.proba = cloneProba(VP8Tables.COEFFS_PROBA_0);
-            // Keyframes always reset MV probs to defaults; P-frames inherit from the
-            // session's carried state, or fall back to defaults when no session / first
-            // frame (should not happen since P-frames need a reference anyway).
+            // A frame starts from the probability context its session carries, which a
+            // keyframe resets to the defaults, as libvpx's init_frame does.
             if (isKeyframe || session == null) {
+                this.proba = cloneProba(VP8Tables.COEFFS_PROBA_0);
+                this.yModeProba = VP8Tables.YMODE_PROBA_INTER.clone();
+                this.uvModeProba = VP8Tables.UV_MODE_PROBA_INTER.clone();
                 this.mvProba = VP8DecoderSession.cloneMvProba();
             } else {
-                this.mvProba = new int[2][VP8Tables.NUM_MV_PROBAS];
-                for (int c = 0; c < 2; c++)
-                    System.arraycopy(session.mvProba[c], 0, this.mvProba[c], 0, VP8Tables.NUM_MV_PROBAS);
+                this.proba = cloneProba(session.tokenProba);
+                this.yModeProba = session.yModeProba.clone();
+                this.uvModeProba = session.uvModeProba.clone();
+                this.mvProba = new int[][] { session.mvProba[0].clone(), session.mvProba[1].clone() };
             }
         }
     }
@@ -326,7 +337,7 @@ public final class VP8Decoder {
         if (data.length < 3)
             throw new ImageDecodeException("VP8 data too short");
 
-        int frameTag = (data[0] & 0xFF) | ((data[1] & 0xFF) << 8) | ((data[2] & 0xFF) << 16);
+        int frameTag = LittleEndian.readUint24(data, 0);
         boolean keyFrame = (frameTag & 0x01) == 0;
         int firstPartSize = (frameTag >>> 5) & 0x7FFFF;
 
@@ -339,10 +350,11 @@ public final class VP8Decoder {
                 throw new ImageDecodeException("VP8 keyframe data too short");
             if (data[3] != (byte) 0x9D || data[4] != (byte) 0x01 || data[5] != (byte) 0x2A)
                 throw new ImageDecodeException("Invalid VP8 sync code");
-            width = ((data[6] & 0xFF) | ((data[7] & 0xFF) << 8)) & 0x3FFF;
-            height = ((data[8] & 0xFF) | ((data[9] & 0xFF) << 8)) & 0x3FFF;
+            width = LittleEndian.readUint16(data, 6) & 0x3FFF;
+            height = LittleEndian.readUint16(data, 8) & 0x3FFF;
             if (width == 0 || height == 0)
                 throw new ImageDecodeException("Invalid VP8 dimensions: %dx%d", width, height);
+            DecodeBudget.open("VP8").claim(width, height);
             headerStart = 10;
         } else {
             if (session == null || !session.hasReference())
@@ -456,8 +468,7 @@ public final class VP8Decoder {
             s.refreshLast = true;
         }
 
-        // refresh_entropy_probs (value ignored on keyframes, but the bit is still consumed).
-        br.decodeBool();
+        s.refreshEntropyProbs = br.decodeBool() != 0;
 
         // Inter-only: refresh_last.
         if (!keyFrame)
@@ -475,7 +486,7 @@ public final class VP8Decoder {
         if (s.useSkipProba)
             s.skipP = br.decodeUint(8);
 
-        // ── Inter-frame mode / MV probabilities (RFC 6386 sections 16.2, 17.2) ──
+        // ── Inter-frame mode / MV probabilities (RFC 6386 sections 16.1, 16.2, 17.2) ──
         if (!keyFrame) {
             s.probIntra = br.decodeUint(8);
             s.probLast = br.decodeUint(8);
@@ -505,8 +516,7 @@ public final class VP8Decoder {
         // The layout following the first partition is:
         //   (numParts - 1) * 3 bytes of little-endian uint24 size prefixes for partitions 0..N-2;
         //   concatenated partition bodies, with the last partition's size implied by file length.
-        int partSizesOffset = partitionEnd;
-        int partBodiesOffset = partSizesOffset + (numTokenPartitions - 1) * 3;
+        int partBodiesOffset = partitionEnd + (numTokenPartitions - 1) * 3;
         if (partBodiesOffset > data.length)
             throw new ImageDecodeException("VP8 token partition size prefixes truncated");
         BooleanDecoder[] tokenDecoders = new BooleanDecoder[numTokenPartitions];
@@ -514,10 +524,8 @@ public final class VP8Decoder {
         for (int p = 0; p < numTokenPartitions; p++) {
             int partSize;
             if (p < numTokenPartitions - 1) {
-                int o = partSizesOffset + p * 3;
-                partSize = (data[o] & 0xFF)
-                    | ((data[o + 1] & 0xFF) << 8)
-                    | ((data[o + 2] & 0xFF) << 16);
+                int o = partitionEnd + p * 3;
+                partSize = LittleEndian.readUint24(data, o);
             } else {
                 partSize = data.length - cursor;
             }
@@ -532,7 +540,7 @@ public final class VP8Decoder {
 
         // ── Macroblock loop ──
         // MB row y reads tokens from partition (y & (numTokenPartitions - 1)), matching the
-        // encoder's interleave. Mode bits come from the first partition (br) as before.
+        // encoder's interleave. Mode bits come from the first partition (br).
         for (int mbY = 0; mbY < s.mbRows; mbY++) {
             java.util.Arrays.fill(s.leftNz, 0);
             java.util.Arrays.fill(s.intraL, IntraPrediction.B_DC_PRED);
@@ -549,10 +557,10 @@ public final class VP8Decoder {
         // Loop filter. Normal + simple modes are both driven by the same per-MB
         // classification tables; ref_lf_delta / mode_lf_delta are applied when the
         // frame header set use_lf_delta = 1.
-        // Guard against a trivial all-segments-off configuration at call time. For
-        // single-segment streams this matches the pre-segment behaviour exactly; for
-        // multi-segment streams the LoopFilter's own early-exit handles the
-        // zero-filter-level case per segment.
+        // The pass is skipped when every segment's level is zero. A single-segment
+        // stream holds the frame's level in all four entries, so the pass runs exactly
+        // when that level is non-zero; in a multi-segment stream LoopFilter also skips
+        // each MB whose own level comes out zero.
         boolean anySegmentFilters = false;
         for (int lvl : s.segFilterLevel) if (lvl > 0) { anySegmentFilters = true; break; }
         if (anySegmentFilters) {
@@ -561,7 +569,7 @@ public final class VP8Decoder {
                 s.lumaStride, s.chromaStride,
                 s.mbCols, s.mbRows,
                 simpleFilter, filterLevel, sharpness,
-                s.mbRefFrame, s.mbModeLfIdx,
+                s.mbRefFrame, s.mbModeLfIdx, s.mbHasCoeffs,
                 s.useLfDelta, s.refLfDelta, s.modeLfDelta,
                 s.mbSegmentId, s.segFilterLevel
             );
@@ -575,8 +583,13 @@ public final class VP8Decoder {
             updateReferenceBuffers(session, s, width, height);
             session.signBiasGolden = s.signBiasGolden;
             session.signBiasAltref = s.signBiasAltref;
-            for (int c = 0; c < 2; c++)
-                System.arraycopy(s.mvProba[c], 0, session.mvProba[c], 0, VP8Tables.NUM_MV_PROBAS);
+            // libvpx keeps a frame's probability updates only when it sets
+            // refresh_entropy_probs, and otherwise restores the context the frame started
+            // from - for a keyframe, the defaults it reset to.
+            if (s.refreshEntropyProbs)
+                session.keepProbabilities(s.proba, s.yModeProba, s.uvModeProba, s.mvProba);
+            else if (keyFrame)
+                session.resetProbabilities();
         }
 
         // ── YCbCr -> ARGB (fancy bilinear chroma upsampling, matching libwebp) ──
@@ -659,7 +672,7 @@ public final class VP8Decoder {
                     subModes[by][bx] = br.decodeTree(VP8Tables.BMODE_TREE, VP8Tables.KF_BMODE_PROB[above][leftM]);
                 }
             }
-            for (int bx = 0; bx < 4; bx++) s.intraT[mbX * 4 + bx] = subModes[3][bx];
+            System.arraycopy(subModes[3], 0, s.intraT, mbX * 4, 4);
             for (int by = 0; by < 4; by++) s.intraL[by] = subModes[by][3];
         }
 
@@ -683,16 +696,18 @@ public final class VP8Decoder {
 
         if (skip != 0) {
             // All residuals are zero; clear nz contexts and fall through to reconstruction.
-            for (int i = 0; i < 9; i++) { top[i] = 0; left[i] = 0; }
+            clearNzForSkip(top, left, isI4x4);
         } else {
             int first;
             int acType;
+            int anyNz = 0;
 
             if (!isI4x4) {
                 short[] zz = new short[16];
                 int ctx = top[8] + left[8];
                 int nz = VP8TokenDecoder.decode(td, zz, 0, ctx, VP8Tables.TYPE_I16_DC, s.proba);
                 top[8] = left[8] = nz;
+                anyNz |= nz;
 
                 short[] y2Raster = zigzagToRaster(zz);
                 y2Raster[0] = (short) (y2Raster[0] * s.y2Dc);
@@ -713,6 +728,7 @@ public final class VP8Decoder {
                     int ctx = top[x] + left[y];
                     int nz = VP8TokenDecoder.decode(td, zz, first, ctx, acType, s.proba);
                     top[x] = left[y] = nz;
+                    anyNz |= nz;
 
                     short[] raster = zigzagToRaster(zz);
                     if (!isI4x4) {
@@ -733,6 +749,7 @@ public final class VP8Decoder {
                     int ctx = top[4 + x] + left[4 + y];
                     int nz = VP8TokenDecoder.decode(td, zz, 0, ctx, VP8Tables.TYPE_CHROMA_A, s.proba);
                     top[4 + x] = left[4 + y] = nz;
+                    anyNz |= nz;
 
                     short[] raster = zigzagToRaster(zz);
                     raster[0] = (short) (raster[0] * s.uvDc);
@@ -747,6 +764,7 @@ public final class VP8Decoder {
                     int ctx = top[6 + x] + left[6 + y];
                     int nz = VP8TokenDecoder.decode(td, zz, 0, ctx, VP8Tables.TYPE_CHROMA_A, s.proba);
                     top[6 + x] = left[6 + y] = nz;
+                    anyNz |= nz;
 
                     short[] raster = zigzagToRaster(zz);
                     raster[0] = (short) (raster[0] * s.uvDc);
@@ -754,6 +772,7 @@ public final class VP8Decoder {
                     vCoefs[y * 2 + x] = raster;
                 }
             }
+            s.mbHasCoeffs[mbIdxKf] = anyNz != 0;
         }
 
         // ── Reconstruct ──
@@ -801,11 +820,12 @@ public final class VP8Decoder {
                 int gfBit = br.decodeBit(s.probGf);
                 refFrame = (gfBit == 0) ? LoopFilter.REF_GOLDEN : LoopFilter.REF_ALTREF;
             }
+            assert s.session != null;
             assertReferenceAvailable(s.session, refFrame);
 
             // MV-reference tree with context-dependent probabilities (libvpx parity).
             NearMvs.Result near = new NearMvs.Result();
-            NearMvs.find(s.mbIsInter, s.mbMvRow, s.mbMvCol, s.mbRefFrame, s.mbCols, mbX, mbY,
+            NearMvs.find(s.mbIsInter, s.mbMvRow, s.mbMvCol, s.mbRefFrame, s.mbSplitScheme, s.mbCols, s.mbRows, mbX, mbY,
                 refFrame, s.signBiasGolden, s.signBiasAltref, near);
             int[] mvRefProbs = new int[4];
             NearMvs.refProbs(near.cnt, mvRefProbs);
@@ -815,7 +835,7 @@ public final class VP8Decoder {
             //   0 = ZEROMV     - MV is (0, 0)
             //   1 = NEARESTMV  - MV = near.nearest_mv (no wire bits)
             //   2 = NEARMV     - MV = near.near_mv (no wire bits)
-            //   3 = NEWMV      - MV read from wire
+            //   3 = NEWMV      - MV read from wire as its difference from near.best_mv
             //   4 = SPLITMV    - per-sub-block MVs, decoded by decodeSplitMv
             int effInternalRow;
             int effInternalCol;
@@ -829,10 +849,11 @@ public final class VP8Decoder {
                 effInternalRow = near.nearRow;
                 effInternalCol = near.nearCol;
             } else if (mvMode == 3) {
+                // libvpx's read_mb_modes adds the wire MV to the clamped best MV.
                 int wireRow = decodeMvComponent(br, s.mvProba[0]);
                 int wireCol = decodeMvComponent(br, s.mvProba[1]);
-                effInternalRow = wireRow << 1;
-                effInternalCol = wireCol << 1;
+                effInternalRow = (wireRow << 1) + near.bestRow;
+                effInternalCol = (wireCol << 1) + near.bestCol;
             } else {
                 // SPLITMV (mvMode == 4): parse scheme + sub-MVs + per-sub-block MC.
                 decodeSplitMv(s, br, td, mbX, mbY, skip, refFrame, near);
@@ -861,12 +882,11 @@ public final class VP8Decoder {
                 copyRefMb16x16(refYPlane, s.session.refLumaStride, s.reconY, s.lumaStride, mbX, mbY);
                 copyRefMb8x8(refUPlane, s.session.refChromaStride, s.reconU, s.chromaStride, mbX, mbY);
                 copyRefMb8x8(refVPlane, s.session.refChromaStride, s.reconV, s.chromaStride, mbX, mbY);
-                int[] top = s.topNz[mbX];
-                for (int i = 0; i < 9; i++) { top[i] = 0; s.leftNz[i] = 0; }
+                clearNzForSkip(s.topNz[mbX], s.leftNz, /*is4x4=*/ false);
                 return;
             }
 
-            decodeInterWithMv(s, br, td, mbX, mbY, skip, effInternalRow, effInternalCol, refFrame);
+            decodeInterWithMv(s, td, mbX, mbY, skip, effInternalRow, effInternalCol, refFrame);
             return;
         }
 
@@ -881,7 +901,7 @@ public final class VP8Decoder {
         int[][] subModes = null;
         if (isI4x4) {
             subModes = new int[4][4];
-            // RFC 6386 section 16.2: inter-frame B_PRED sub-block modes use the fixed
+            // RFC 6386 section 16.1: inter-frame B_PRED sub-block modes use the fixed
             // context-free {@link VP8Tables#BMODE_PROBA_INTER}, not the keyframe
             // context-dependent {@link VP8Tables#KF_BMODE_PROB[above][left]}.
             for (int by = 0; by < 4; by++) {
@@ -891,7 +911,7 @@ public final class VP8Decoder {
                     );
                 }
             }
-            for (int bx = 0; bx < 4; bx++) s.intraT[mbX * 4 + bx] = subModes[3][bx];
+            System.arraycopy(subModes[3], 0, s.intraT, mbX * 4, 4);
             for (int by = 0; by < 4; by++) s.intraL[by] = subModes[by][3];
         } else {
             int ctxMode = mb16ToSubMode(yMode);
@@ -913,15 +933,17 @@ public final class VP8Decoder {
         short[][] vCoefs = new short[4][16];
 
         if (skip != 0) {
-            for (int i = 0; i < 9; i++) { top[i] = 0; left[i] = 0; }
+            clearNzForSkip(top, left, isI4x4);
         } else {
             int first;
             int acType;
+            int anyNz = 0;
             if (!isI4x4) {
                 short[] zz = new short[16];
                 int ctx = top[8] + left[8];
                 int nz = VP8TokenDecoder.decode(td, zz, 0, ctx, VP8Tables.TYPE_I16_DC, s.proba);
                 top[8] = left[8] = nz;
+                anyNz |= nz;
                 short[] y2Raster = zigzagToRaster(zz);
                 y2Raster[0] = (short) (y2Raster[0] * s.y2Dc);
                 for (int i = 1; i < 16; i++) y2Raster[i] = (short) (y2Raster[i] * s.y2Ac);
@@ -938,6 +960,7 @@ public final class VP8Decoder {
                     int ctx = top[x] + left[y];
                     int nz = VP8TokenDecoder.decode(td, zz, first, ctx, acType, s.proba);
                     top[x] = left[y] = nz;
+                    anyNz |= nz;
                     short[] raster = zigzagToRaster(zz);
                     if (!isI4x4)
                         raster[0] = dcValues[y * 4 + x];
@@ -953,6 +976,7 @@ public final class VP8Decoder {
                     int ctx = top[4 + x] + left[4 + y];
                     int nz = VP8TokenDecoder.decode(td, zz, 0, ctx, VP8Tables.TYPE_CHROMA_A, s.proba);
                     top[4 + x] = left[4 + y] = nz;
+                    anyNz |= nz;
                     short[] raster = zigzagToRaster(zz);
                     raster[0] = (short) (raster[0] * s.uvDc);
                     for (int i = 1; i < 16; i++) raster[i] = (short) (raster[i] * s.uvAc);
@@ -965,12 +989,14 @@ public final class VP8Decoder {
                     int ctx = top[6 + x] + left[6 + y];
                     int nz = VP8TokenDecoder.decode(td, zz, 0, ctx, VP8Tables.TYPE_CHROMA_A, s.proba);
                     top[6 + x] = left[6 + y] = nz;
+                    anyNz |= nz;
                     short[] raster = zigzagToRaster(zz);
                     raster[0] = (short) (raster[0] * s.uvDc);
                     for (int i = 1; i < 16; i++) raster[i] = (short) (raster[i] * s.uvAc);
                     vCoefs[y * 2 + x] = raster;
                 }
             }
+            s.mbHasCoeffs[mbIdxIp] = anyNz != 0;
         }
 
         if (isI4x4)
@@ -993,7 +1019,7 @@ public final class VP8Decoder {
      * @param effInternalCol effective MV col in 1/8-pel internal units
      */
     private static void decodeInterWithMv(
-        @NotNull State s, @NotNull BooleanDecoder br, @NotNull BooleanDecoder td,
+        @NotNull State s, @NotNull BooleanDecoder td,
         int mbX, int mbY, int skip, int effInternalRow, int effInternalCol, int refFrame
     ) {
         // buildInterPrediction takes wire (quarter-pel); convert from internal (>>1).
@@ -1006,17 +1032,24 @@ public final class VP8Decoder {
         short[] predV = new short[64];
         buildInterPrediction(s, mbX, mbY, wireRow, wireCol, refFrame, predY, predU, predV);
 
-        decodeInterResidualAndCommit(s, td, mbX, mbY, skip, predY, predU, predV);
+        decodeInterResidualAndCommit(s, td, mbX, mbY, skip, /*splitMv=*/ false, predY, predU, predV);
     }
 
     /**
      * Residual-decode and commit for an inter MB whose MC prediction has already been
      * built into {@code predY} / {@code predU} / {@code predV}. Shared between the
      * whole-MB inter path ({@link #decodeInterWithMv}) and the SPLITMV per-sub-block
-     * path which builds prediction differently but uses the same token layout.
+     * path. A whole-MB residual codes a Y2 block and sixteen luma AC blocks; a SPLITMV one
+     * codes no Y2 block, its sixteen luma blocks each carrying their own DC as B_PRED's do,
+     * and leaves the Y2 context as it found it, as libvpx's {@code vp8_decode_mb_tokens}
+     * reads a macroblock without {@code has_y2_block}. A skipped MB clears its contexts
+     * through {@link #clearNzForSkip}, a SPLITMV one keeping its Y2 context as libvpx's
+     * {@code vp8_reset_mb_tokens_context} does.
+     *
+     * @param splitMv whether the MB is SPLITMV
      */
     private static void decodeInterResidualAndCommit(
-        @NotNull State s, @NotNull BooleanDecoder td, int mbX, int mbY, int skip,
+        @NotNull State s, @NotNull BooleanDecoder td, int mbX, int mbY, int skip, boolean splitMv,
         short @NotNull [] predY, short @NotNull [] predU, short @NotNull [] predV
     ) {
         int[] top = s.topNz[mbX];
@@ -1029,27 +1062,34 @@ public final class VP8Decoder {
 
         if (skip != 0) {
             // Skip: no residual, prediction is the final reconstruction.
-            for (int i = 0; i < 9; i++) { top[i] = 0; left[i] = 0; }
+            clearNzForSkip(top, left, splitMv);
         } else {
-            // Y2 first (inter MBs that aren't B_PRED always have Y2).
-            short[] zz = new short[16];
-            int ctx = top[8] + left[8];
-            int nz = VP8TokenDecoder.decode(td, zz, 0, ctx, VP8Tables.TYPE_I16_DC, s.proba);
-            top[8] = left[8] = nz;
-            short[] y2Raster = zigzagToRaster(zz);
-            y2Raster[0] = (short) (y2Raster[0] * s.y2Dc);
-            for (int i = 1; i < 16; i++) y2Raster[i] = (short) (y2Raster[i] * s.y2Ac);
-            DCT.inverseWHT(y2Raster, dcValues);
+            // Y2 first, for a whole-MB residual only; a SPLITMV one has none.
+            int anyNz = 0;
+            if (!splitMv) {
+                short[] zz = new short[16];
+                int ctx = top[8] + left[8];
+                int nz = VP8TokenDecoder.decode(td, zz, 0, ctx, VP8Tables.TYPE_I16_DC, s.proba);
+                top[8] = left[8] = nz;
+                anyNz = nz;
+                short[] y2Raster = zigzagToRaster(zz);
+                y2Raster[0] = (short) (y2Raster[0] * s.y2Dc);
+                for (int i = 1; i < 16; i++) y2Raster[i] = (short) (y2Raster[i] * s.y2Ac);
+                DCT.inverseWHT(y2Raster, dcValues);
+            }
 
-            // 16 Y AC blocks.
+            // 16 Y blocks: AC only behind a Y2 block, DC and AC for SPLITMV.
+            int yFirst = splitMv ? 0 : 1;
+            int yType = splitMv ? VP8Tables.TYPE_I4_AC : VP8Tables.TYPE_I16_AC;
             for (int y = 0; y < 4; y++) {
                 for (int x = 0; x < 4; x++) {
                     short[] yzz = new short[16];
                     int yctx = top[x] + left[y];
-                    int ynz = VP8TokenDecoder.decode(td, yzz, 1, yctx, VP8Tables.TYPE_I16_AC, s.proba);
+                    int ynz = VP8TokenDecoder.decode(td, yzz, yFirst, yctx, yType, s.proba);
                     top[x] = left[y] = ynz;
+                    anyNz |= ynz;
                     short[] raster = zigzagToRaster(yzz);
-                    raster[0] = dcValues[y * 4 + x];
+                    raster[0] = splitMv ? (short) (raster[0] * s.y1Dc) : dcValues[y * 4 + x];
                     for (int i = 1; i < 16; i++) raster[i] = (short) (raster[i] * s.y1Ac);
                     yCoefs[y * 4 + x] = raster;
                 }
@@ -1061,6 +1101,7 @@ public final class VP8Decoder {
                     int uctx = top[4 + x] + left[4 + y];
                     int unz = VP8TokenDecoder.decode(td, uzz, 0, uctx, VP8Tables.TYPE_CHROMA_A, s.proba);
                     top[4 + x] = left[4 + y] = unz;
+                    anyNz |= unz;
                     short[] raster = zigzagToRaster(uzz);
                     raster[0] = (short) (raster[0] * s.uvDc);
                     for (int i = 1; i < 16; i++) raster[i] = (short) (raster[i] * s.uvAc);
@@ -1073,12 +1114,14 @@ public final class VP8Decoder {
                     int vctx = top[6 + x] + left[6 + y];
                     int vnz = VP8TokenDecoder.decode(td, vzz, 0, vctx, VP8Tables.TYPE_CHROMA_A, s.proba);
                     top[6 + x] = left[6 + y] = vnz;
+                    anyNz |= vnz;
                     short[] raster = zigzagToRaster(vzz);
                     raster[0] = (short) (raster[0] * s.uvDc);
                     for (int i = 1; i < 16; i++) raster[i] = (short) (raster[i] * s.uvAc);
                     vCoefs[y * 2 + x] = raster;
                 }
             }
+            s.mbHasCoeffs[mbY * s.mbCols + mbX] = anyNz != 0;
         }
 
         // Add residual to prediction (or just commit prediction when skip), clamp, write.
@@ -1088,7 +1131,7 @@ public final class VP8Decoder {
     }
 
     /**
-     * SPLITMV decode path (RFC 6386 section 17.3). Parses the 4-way partitioning scheme,
+     * SPLITMV decode path (RFC 6386 section 16.4). Parses the 4-way partitioning scheme,
      * then per-slot: resolves left/above neighbour sub-MVs, classifies context (5-way),
      * decodes LEFT/ABOVE/ZERO/NEW reference, fills the covered 4x4 slots. Persists the
      * final 16-slot BMI grid plus the scheme on {@link State#bmiRow} / {@link State#bmiCol}
@@ -1221,7 +1264,7 @@ public final class VP8Decoder {
         short[] predV = new short[64];
         buildSplitMvPrediction(s, mbX, mbY, refFrame, slotRow, slotCol, predY, predU, predV);
 
-        decodeInterResidualAndCommit(s, td, mbX, mbY, skip, predY, predU, predV);
+        decodeInterResidualAndCommit(s, td, mbX, mbY, skip, /*splitMv=*/ true, predY, predU, predV);
     }
 
     /**
@@ -1234,6 +1277,7 @@ public final class VP8Decoder {
         int @NotNull [] slotRow, int @NotNull [] slotCol,
         short @NotNull [] predY, short @NotNull [] predU, short @NotNull [] predV
     ) {
+        assert s.session != null;
         int refStrideY = s.session.refLumaStride;
         int refH = s.session.refMbRows * 16;
         int refStrideC = s.session.refChromaStride;
@@ -1257,8 +1301,7 @@ public final class VP8Decoder {
                 SubpelPrediction.predict6tap(refY, refStrideY, refH,
                     refX, refYPos, subX, subY, tmp, 4, 4, 4);
                 for (int y = 0; y < 4; y++)
-                    for (int x = 0; x < 4; x++)
-                        predY[(by * 4 + y) * 16 + (bx * 4 + x)] = tmp[y * 4 + x];
+                    System.arraycopy(tmp, y * 4, predY, (by * 4 + y) * 16 + bx * 4, 4);
             }
         }
 
@@ -1312,6 +1355,7 @@ public final class VP8Decoder {
         @NotNull State s, int mbX, int mbY, int wireRow, int wireCol, int refFrame,
         short @NotNull [] predY, short @NotNull [] predU, short @NotNull [] predV
     ) {
+        assert s.session != null;
         int refStrideY = s.session.refLumaStride;
         int refH = s.session.refMbRows * 16;
         int refStrideC = s.session.refChromaStride;
@@ -1522,7 +1566,7 @@ public final class VP8Decoder {
         };
     }
 
-    private static short[] zigzagToRaster(short @NotNull [] zz) {
+    private static short @NotNull [] zigzagToRaster(short @NotNull [] zz) {
         short[] raster = new short[16];
         for (int i = 0; i < 16; i++) raster[VP8Tables.ZIGZAG[i]] = zz[i];
         return raster;
@@ -1533,8 +1577,7 @@ public final class VP8Decoder {
     ) {
         short[] above = mbY > 0 ? extractRow(s.reconY, mbX * 16, (mbY * 16 - 1) * s.lumaStride, 16) : null;
         short[] leftCol = mbX > 0 ? extractCol(s.reconY, mbX * 16 - 1, mbY * 16, s.lumaStride, 16) : null;
-        short aboveLeft = (mbX > 0 && mbY > 0)
-            ? s.reconY[(mbY * 16 - 1) * s.lumaStride + mbX * 16 - 1] : (short) 128;
+        short aboveLeft = IntraPrediction.aboveLeft(s.reconY, s.lumaStride, mbX * 16, mbY * 16);
 
         short[] predicted = new short[256];
         IntraPrediction.predict16x16(predicted, above, leftCol, aboveLeft, yMode);
@@ -1589,8 +1632,7 @@ public final class VP8Decoder {
     ) {
         short[] above = mbY > 0 ? extractRow(plane, mbX * 8, (mbY * 8 - 1) * stride, 8) : null;
         short[] leftCol = mbX > 0 ? extractCol(plane, mbX * 8 - 1, mbY * 8, stride, 8) : null;
-        short aboveLeft = (mbX > 0 && mbY > 0)
-            ? plane[(mbY * 8 - 1) * stride + mbX * 8 - 1] : (short) 128;
+        short aboveLeft = IntraPrediction.aboveLeft(plane, stride, mbX * 8, mbY * 8);
 
         short[] predicted = new short[64];
         IntraPrediction.predict8x8(predicted, above, leftCol, aboveLeft, uvMode);
@@ -1611,17 +1653,39 @@ public final class VP8Decoder {
         }
     }
 
+    /**
+     * Clears the non-zero contexts a skipped macroblock leaves, as libwebp's
+     * {@code VP8DecodeMB} and libvpx's {@code vp8_reset_mb_tokens_context} do: every luma
+     * and chroma slot, and the Y2 slot only when the macroblock is neither B_PRED nor
+     * SPLITMV, so a skipped B_PRED or SPLITMV macroblock leaves the Y2 context as it found
+     * it.
+     *
+     * @param top the macroblock column's above contexts
+     * @param left the macroblock row's left contexts
+     * @param is4x4 whether the macroblock is B_PRED or SPLITMV
+     */
+    static void clearNzForSkip(int @NotNull [] top, int @NotNull [] left, boolean is4x4) {
+        for (int i = 0; i < 8; i++) {
+            top[i] = 0;
+            left[i] = 0;
+        }
+        if (!is4x4) {
+            top[8] = 0;
+            left[8] = 0;
+        }
+    }
+
     // ──────────────────────────────────────────────────────────────────────
     // Neighbor extraction helpers
     // ──────────────────────────────────────────────────────────────────────
 
-    private static short[] extractRow(short[] plane, int startX, int rowOffset, int count) {
+    private static short @NotNull [] extractRow(short @NotNull [] plane, int startX, int rowOffset, int count) {
         short[] row = new short[count];
         System.arraycopy(plane, rowOffset + startX, row, 0, count);
         return row;
     }
 
-    private static short[] extractCol(short[] plane, int x, int startY, int stride, int count) {
+    private static short @NotNull [] extractCol(short @NotNull [] plane, int x, int startY, int stride, int count) {
         short[] col = new short[count];
         for (int i = 0; i < count; i++)
             col[i] = plane[(startY + i) * stride + x];
@@ -1631,26 +1695,30 @@ public final class VP8Decoder {
     /**
      * Gets 8 pixels above a 4x4 sub-block: 4 above plus 4 above-right.
      * <p>
-     * For sub-blocks whose above-row falls inside the current MB row
-     * ({@code blockY % 16 != 0}), the right neighbour MB is not yet reconstructed,
-     * so above-right reads are clamped to the current MB's right edge - replicating
-     * the rightmost in-MB pixel. For top-of-MB sub-blocks the above-row is the prior
-     * MB row's bottom row (fully reconstructed), so we clamp at plane edge.
+     * A sub-block in the MB's top row reads the prior MB row's bottom row, clamped at the
+     * plane's right edge. Below the top row, a sub-block's above-right lies in the MB to the
+     * right, which is not yet reconstructed, so a right-column sub-block takes the four
+     * samples above and to the right of the MB instead, as the top-right sub-block does,
+     * where RFC 6386 and libwebp take them: 127 on the frame's top row.
      */
-    private static short[] getAbove8(short[] plane, int blockX, int blockY, int stride) {
+    private static short @Nullable [] getAbove8(short @NotNull [] plane, int blockX, int blockY, int stride) {
         if (blockY == 0) return null;
         short[] above = new short[8];
-        int aboveRow = blockY - 1;
-        boolean withinMbRow = (blockY % 16) != 0;
-        int rightLimit = withinMbRow ? ((blockX / 16) * 16 + 15) : (stride - 1);
+        int mbRight = (blockX / 16) * 16 + 15;
+        int mbTopRow = (blockY / 16) * 16 - 1;
         for (int i = 0; i < 8; i++) {
-            int x = Math.min(blockX + i, rightLimit);
-            above[i] = plane[aboveRow * stride + x];
+            int x = blockX + i;
+            if (blockY % 16 == 0 || x <= mbRight)
+                above[i] = plane[(blockY - 1) * stride + Math.min(x, stride - 1)];
+            else if (mbTopRow < 0)
+                above[i] = 127;
+            else
+                above[i] = plane[mbTopRow * stride + Math.min(x, stride - 1)];
         }
         return above;
     }
 
-    private static short[] getLeft4(short[] plane, int blockX, int blockY, int stride) {
+    private static short @Nullable [] getLeft4(short @NotNull [] plane, int blockX, int blockY, int stride) {
         if (blockX == 0) return null;
         short[] left = new short[4];
         for (int i = 0; i < 4; i++)
@@ -1658,15 +1726,14 @@ public final class VP8Decoder {
         return left;
     }
 
-    private static short getAboveLeft(short[] plane, int blockX, int blockY, int stride) {
-        if (blockX == 0 || blockY == 0) return 128;
-        return plane[(blockY - 1) * stride + blockX - 1];
+    private static short getAboveLeft(short @NotNull [] plane, int blockX, int blockY, int stride) {
+        return IntraPrediction.aboveLeft(plane, stride, blockX, blockY);
     }
 
     /**
-     * Deep-copies the static default proba table so per-frame updates do not mutate the source.
+     * Deep-copies a coefficient proba table so per-frame updates do not mutate the source.
      */
-    private static int[][][][] cloneProba(int[][][][] src) {
+    static int @NotNull [][][][] cloneProba(int @NotNull [][][][] src) {
         int[][][][] out = new int[src.length][][][];
         for (int t = 0; t < src.length; t++) {
             out[t] = new int[src[t].length][][];

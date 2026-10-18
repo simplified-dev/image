@@ -43,10 +43,12 @@ public enum ImageFormat {
     }
 
     /**
-     * Returns whether the given byte array matches this format's magic bytes.
+     * Returns whether the given byte array is laid out as this format: it opens with the format's
+     * magic bytes, except that a TGA file is known by its footer and an ICO file by a directory a
+     * reader can walk.
      *
      * @param data the raw image bytes to check
-     * @return true if the data starts with this format's magic bytes
+     * @return true if the data is laid out as this format
      */
     public boolean matches(byte @NotNull [] data) {
         return switch (this) {
@@ -78,11 +80,7 @@ public enum ImageFormat {
             case TIFF -> data.length >= 4
                 && ((data[0] == 0x49 && data[1] == 0x49 && data[2] == 0x2A && data[3] == 0x00)
                     || (data[0] == 0x4D && data[1] == 0x4D && data[2] == 0x00 && data[3] == 0x2A));
-            case ICO -> data.length >= 4
-                && data[0] == 0x00
-                && data[1] == 0x00
-                && data[2] == 0x01
-                && data[3] == 0x00;
+            case ICO -> matchesIcoDirectory(data);
             case TGA -> matchesTgaFooter(data);
             case QOI -> data.length >= 4
                 && data[0] == 0x71   // q
@@ -94,6 +92,46 @@ public enum ImageFormat {
                 && data[1] >= 0x31   // 1
                 && data[1] <= 0x36;  // 6
         };
+    }
+
+    /**
+     * Answers whether the data opens with an ICO directory a reader can walk: the reserved and type
+     * words 0 and 1, at least one entry, the whole directory inside the data, and a first entry
+     * whose image lies past the directory and inside the data. The leading {@code 00 00 01 00} alone is also the
+     * size of a 256-byte ISOBMFF {@code ftyp} box, whose {@code ftyp} letters fall on the entry
+     * count and whose brand letters fall on the first entry's image size and offset.
+     *
+     * @param data the raw image bytes to check
+     * @return true if the data opens with a walkable ICO directory
+     */
+    private static boolean matchesIcoDirectory(byte @NotNull [] data) {
+        if (data.length < 22 || data[0] != 0x00 || data[1] != 0x00 || data[2] != 0x01 || data[3] != 0x00)
+            return false;
+
+        int count = (int) readUnsigned(data, 4, 2);
+        long directoryEnd = 6 + 16L * count;
+
+        if (count == 0 || directoryEnd > data.length)
+            return false;
+
+        long size = readUnsigned(data, 14, 4);
+        long offset = readUnsigned(data, 18, 4);
+        return size > 0 && offset >= directoryEnd && offset + size <= data.length;
+    }
+
+    /**
+     * Reads an unsigned integer stored low byte first.
+     *
+     * @param data the bytes to read from
+     * @param offset the index of the low byte
+     * @param bytes how many bytes the integer spans, at most four
+     * @return the value
+     */
+    private static long readUnsigned(byte @NotNull [] data, int offset, int bytes) {
+        long value = 0;
+        for (int i = 0; i < bytes; i++)
+            value |= (long) (data[offset + i] & 0xFF) << (8 * i);
+        return value;
     }
 
     private static boolean matchesTgaFooter(byte @NotNull [] data) {

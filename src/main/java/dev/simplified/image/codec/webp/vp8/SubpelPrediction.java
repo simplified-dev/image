@@ -1,5 +1,6 @@
 package dev.simplified.image.codec.webp.vp8;
 
+import dev.simplified.annotations.UtilityClass;
 import org.jetbrains.annotations.NotNull;
 
 /**
@@ -19,6 +20,7 @@ import org.jetbrains.annotations.NotNull;
  * Reference samples outside the provided plane bounds are clamped to the edge
  * (pixel replication), matching libvpx's handling of edge MBs.
  */
+@UtilityClass
 final class SubpelPrediction {
 
     /**
@@ -46,8 +48,6 @@ final class SubpelPrediction {
         {  1,  -8,  36, 108, -11,  2 },   // 6/8: 3/4 pel
         {  0,  -1,  12, 123,  -6,  0 }    // 7/8
     };
-
-    private SubpelPrediction() { }
 
     /**
      * Computes a motion-compensated prediction block using 2D 6-tap sub-pel filtering.

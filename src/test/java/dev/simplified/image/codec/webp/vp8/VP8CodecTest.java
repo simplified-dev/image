@@ -1,7 +1,9 @@
 package dev.simplified.image.codec.webp.vp8;
 
+import dev.simplified.annotations.UtilityClass;
 import dev.simplified.image.PixelBuffer;
 import dev.simplified.image.codec.webp.LibwebpOracle;
+import org.jetbrains.annotations.NotNull;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -9,10 +11,13 @@ import org.junit.jupiter.api.Test;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.function.IntBinaryOperator;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.is;
+import static org.hamcrest.Matchers.lessThan;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 /**
  * Package-private tests for the VP8 (lossy) codec internals: boolean range coder,
@@ -305,8 +310,8 @@ public class VP8CodecTest {
 
         @Test @DisplayName("loop filter on doesn't decrease 32x48 PSNR vs libwebp-decoded baseline")
         void loopFilterDoesNotHurtPsnr() throws Exception {
-            // The encoder always emits filter_level > 0 now; asserting a healthy PSNR at
-            // q=0.9 guarantees the filter (applied by libwebp on decode) isn't degrading
+            // The encoder emits filter_level > 0 at q=0.9; asserting a healthy PSNR there
+            // guarantees the filter (applied by libwebp on decode) isn't degrading
             // output. If LoopFilter or filter_level computation drifts, this fails.
             PixelBuffer buf = PixelBuffer.create(32, 48);
             for (int y = 0; y < 48; y++)
@@ -400,7 +405,7 @@ public class VP8CodecTest {
                     expectR, expectG, expectB, (p >> 16) & 0xFF, (p >> 8) & 0xFF, p & 0xFF, tolerance));
         }
 
-        // ──── Sub-block motion search (Task 11 phase 2) ────
+        // ──── Sub-block motion search ────
 
         @Test @DisplayName("computeBestSubBlockMv: zero-shift source recovers MV (0, 0) for 16x16 block")
         void subBlockSearchZeroShift() {
@@ -412,10 +417,10 @@ public class VP8CodecTest {
             Macroblock mb = new Macroblock();
             int mbX = 1, mbY = 1;
             for (int y = 0; y < 16; y++)
-                for (int x = 0; x < 16; x++)
-                    mb.y[y * 16 + x] = refY[(mbY * 16 + y) * W + (mbX * 16 + x)];
+                System.arraycopy(refY, (mbY * 16 + y) * W + mbX * 16, mb.y, y * 16, 16);
 
             int[] mv = VP8Encoder.computeBestSubBlockMv(state, mb, mbX, mbY, 0, 0, 16, 16);
+            assertNotNull(mv);
             assertThat("zero-shift wire row", mv[0], is(0));
             assertThat("zero-shift wire col", mv[1], is(0));
         }
@@ -434,12 +439,13 @@ public class VP8CodecTest {
                     mb.y[y * 16 + x] = refY[(mbY * 16 + y + dyShift) * W + (mbX * 16 + x + dxShift)];
 
             int[] mv = VP8Encoder.computeBestSubBlockMv(state, mb, mbX, mbY, 0, 0, 16, 16);
+            assertNotNull(mv);
             // Wire units = quarter-pel; integer-pel shift of K resolves to wire = K * 4.
             assertThat("wire row = dyShift * 4", mv[0], is(dyShift * 4));
             assertThat("wire col = dxShift * 4", mv[1], is(dxShift * 4));
         }
 
-        @Test @DisplayName("computeBestSubBlockMv: per-sub-block 8x8 search isolates per-slot source (RFC 6386 section 17.3)")
+        @Test @DisplayName("computeBestSubBlockMv: per-sub-block 8x8 search isolates per-slot source (RFC 6386 section 16.4)")
         void subBlockSearch8x8PerSlot() {
             // QUARTERS scheme has 4 sub-MVs each over an 8x8 sub-block. Probe the top-left
             // and bottom-right slots with distinct shifts to confirm the search reads only
@@ -457,6 +463,7 @@ public class VP8CodecTest {
                 for (int x = 0; x < 8; x++)
                     mb.y[y * 16 + x] = refY[(mbY * 16 + y) * W + (mbX * 16 + x + 1)];
             int[] mvTL = VP8Encoder.computeBestSubBlockMv(state, mb, mbX, mbY, 0, 0, 8, 8);
+            assertNotNull(mvTL);
             assertThat("top-left wire row = 0", mvTL[0], is(0));
             assertThat("top-left wire col = +4", mvTL[1], is(4));
 
@@ -465,6 +472,7 @@ public class VP8CodecTest {
                 for (int x = 0; x < 8; x++)
                     mb.y[(8 + y) * 16 + (8 + x)] = refY[(mbY * 16 + 8 + y - 1) * W + (mbX * 16 + 8 + x)];
             int[] mvBR = VP8Encoder.computeBestSubBlockMv(state, mb, mbX, mbY, 8, 8, 8, 8);
+            assertNotNull(mvBR);
             assertThat("bottom-right wire row = -4", mvBR[0], is(-4));
             assertThat("bottom-right wire col = 0", mvBR[1], is(0));
         }
@@ -487,6 +495,7 @@ public class VP8CodecTest {
                         refY[(mbY * 16 + 4 + y + dyShift) * W + (mbX * 16 + 4 + x + dxShift)];
 
             int[] mv = VP8Encoder.computeBestSubBlockMv(state, mb, mbX, mbY, 4, 4, 4, 4);
+            assertNotNull(mv);
             assertThat("4x4 wire row = dyShift * 4", mv[0], is(dyShift * 4));
             assertThat("4x4 wire col = dxShift * 4", mv[1], is(dxShift * 4));
         }
@@ -596,9 +605,9 @@ public class VP8CodecTest {
 
             PixelBuffer decoded = VP8Decoder.decode(vp8);
             double psnr = rgbPsnr(src, decoded);
-            // Normal-filter support + fancy bilinear chroma upsampling landed in commit
-            // 6449249, raising this from the old 20 dB smoke-test threshold to a real
-            // parity check. Measured ~31.8 dB locally; 28 dB leaves ~3.5 dB of margin.
+            // A parity check of the decoder's normal loop filter and fancy bilinear
+            // chroma upsampling against libwebp's output. Measured ~31.8 dB locally;
+            // 28 dB leaves ~3.5 dB of margin.
             if (psnr < 28.0)
                 throw new AssertionError(String.format(
                     "PSNR decoding libwebp q=100 gradient = %.2f dB (expected >= 28 dB)", psnr));
@@ -972,13 +981,13 @@ public class VP8CodecTest {
             }
         }
 
-        @Test @DisplayName("conformance: MV component proba updates round-trip across a 3-frame session (RFC 6386 section 19.2)")
+        @Test @DisplayName("conformance: MV component proba updates last only their own frame when it clears refresh_entropy_probs")
         void mvProbaUpdatesRoundTripAcrossChain() {
             // A 3-frame translating sequence (keyframe + 2 P-frames) builds enough NEWMV
             // branch observations that P-frame 2's header is likely to emit at least one
-            // MV proba update. Regardless of whether updates are actually emitted, the
-            // encoder's mvProba and the decoder's mvProba must stay in lock-step - any
-            // divergence breaks NEW_MV wire decoding on subsequent MBs.
+            // MV proba update. The encoder clears refresh_entropy_probs, so libvpx restores
+            // the context a frame started from once the frame is done: whatever a frame
+            // updates, the decoder's session must hold the defaults again after it.
             int w = 32, h = 32;
             PixelBuffer[] frames = new PixelBuffer[3];
             for (int i = 0; i < 3; i++) {
@@ -1001,14 +1010,10 @@ public class VP8CodecTest {
             for (int i = 0; i < 3; i++) {
                 byte[] bytes = enc.encode(frames[i], 1.0f, i == 0);
                 decoded[i] = dec.decode(bytes);
+                for (int c = 0; c < 2; c++)
+                    assertThat("MV probabilities of component " + c + " after frame " + i,
+                        dec.mvProba[c], is(VP8Tables.MV_DEFAULT_PROBA[c]));
             }
-
-            // Encoder and decoder mvProba must match after each frame. If they diverged,
-            // NEW_MV bits would misalign and the last frame wouldn't decode correctly.
-            for (int c = 0; c < 2; c++)
-                for (int p = 0; p < VP8Tables.NUM_MV_PROBAS; p++)
-                    assertThat(String.format("mvProba[%d][%d] enc vs dec", c, p),
-                        enc.mvProba[c][p], is(dec.mvProba[c][p]));
 
             // Final decoded frame must match the source within reasonable PSNR (the
             // reconstruction path is what an update-divergence bug would actually break).
@@ -1029,8 +1034,19 @@ public class VP8CodecTest {
             double psnr = mse == 0 ? Double.POSITIVE_INFINITY : 10.0 * Math.log10(255.0 * 255.0 / mse);
             if (psnr < 30.0)
                 throw new AssertionError(String.format(
-                    "3-frame translation PSNR %.2f dB below 30 dB - likely mvProba enc/dec divergence",
+                    "3-frame translation PSNR %.2f dB below 30 dB - likely MV probabilities read differently than written",
                     psnr));
+
+            // A shear whose bands slide apart sends MV probability updates within its first four
+            // frames, and the session still starts every frame after one from the defaults.
+            VP8EncoderSession shearEnc = new VP8EncoderSession();
+            VP8DecoderSession shearDec = new VP8DecoderSession();
+            for (int i = 0; i < 6; i++) {
+                shearDec.decode(shearEnc.encode(shear(128, 96, i), 1.0f, i == 0));
+                for (int c = 0; c < 2; c++)
+                    assertThat("shear MV probabilities of component " + c + " after frame " + i,
+                        shearDec.mvProba[c], is(VP8Tables.MV_DEFAULT_PROBA[c]));
+            }
         }
 
         @Test @DisplayName("conformance: quarter-pel MV refinement beats half-pel on a 1.25-pel translation")
@@ -1112,11 +1128,12 @@ public class VP8CodecTest {
             int[] mbMvRow      = { 10,   0 };
             int[] mbMvCol      = { -20,  0 };
             int[] mbRefFrame   = { LoopFilter.REF_GOLDEN, LoopFilter.REF_INTRA };
+            int[] notSplit     = { -1, -1 };
 
             // Case 1: sign_bias_golden = 0 - current (REF_LAST bias=0) vs above (REF_GOLDEN bias=0).
             // No flip. Nearest MV = (10, -20).
             NearMvs.Result r0 = new NearMvs.Result();
-            NearMvs.find(mbIsInter, mbMvRow, mbMvCol, mbRefFrame, mbCols, 0, 1,
+            NearMvs.find(mbIsInter, mbMvRow, mbMvCol, mbRefFrame, notSplit, mbCols, 2, 0, 1,
                 LoopFilter.REF_LAST, false, false, r0);
             assertThat("no-flip nearest row", r0.nearestRow, is(10));
             assertThat("no-flip nearest col", r0.nearestCol, is(-20));
@@ -1124,7 +1141,7 @@ public class VP8CodecTest {
             // Case 2: sign_bias_golden = 1 - current bias 0, above bias 1. Flip the neighbour.
             // Nearest MV = (-10, 20).
             NearMvs.Result r1 = new NearMvs.Result();
-            NearMvs.find(mbIsInter, mbMvRow, mbMvCol, mbRefFrame, mbCols, 0, 1,
+            NearMvs.find(mbIsInter, mbMvRow, mbMvCol, mbRefFrame, notSplit, mbCols, 2, 0, 1,
                 LoopFilter.REF_LAST, true, false, r1);
             assertThat("flipped nearest row", r1.nearestRow, is(-10));
             assertThat("flipped nearest col", r1.nearestCol, is(20));
@@ -1132,7 +1149,7 @@ public class VP8CodecTest {
             // Case 3: current MB is itself REF_GOLDEN (bias 1) against REF_GOLDEN neighbour
             // (bias 1) - biases match, no flip. Nearest = (10, -20).
             NearMvs.Result r2 = new NearMvs.Result();
-            NearMvs.find(mbIsInter, mbMvRow, mbMvCol, mbRefFrame, mbCols, 0, 1,
+            NearMvs.find(mbIsInter, mbMvRow, mbMvCol, mbRefFrame, notSplit, mbCols, 2, 0, 1,
                 LoopFilter.REF_GOLDEN, true, false, r2);
             assertThat("same-bias nearest row", r2.nearestRow, is(10));
             assertThat("same-bias nearest col", r2.nearestCol, is(-20));
@@ -1144,7 +1161,7 @@ public class VP8CodecTest {
             boolean[] intraNeighbour = { false, false };
             int[] intraRef = { LoopFilter.REF_INTRA, LoopFilter.REF_INTRA };
             NearMvs.Result r3 = new NearMvs.Result();
-            NearMvs.find(intraNeighbour, mbMvRow, mbMvCol, intraRef, mbCols, 0, 1,
+            NearMvs.find(intraNeighbour, mbMvRow, mbMvCol, intraRef, notSplit, mbCols, 2, 0, 1,
                 LoopFilter.REF_LAST, true, true, r3);
             assertThat("intra neighbour contributes zero nearest row", r3.nearestRow, is(0));
             assertThat("intra neighbour contributes zero nearest col", r3.nearestCol, is(0));
@@ -1153,13 +1170,70 @@ public class VP8CodecTest {
                 + r3.cnt[NearMvs.CNT_NEAR] + r3.cnt[NearMvs.CNT_SPLITMV], is(0));
         }
 
-        @Test @DisplayName("conformance: SPLITMV self round-trip via forced-encode hook (RFC 6386 section 17.3)")
+        @Test @DisplayName("conformance: NearMvs counts SPLITMV neighbours as libvpx's vp8_find_near_mvs does")
+        void nearMvsCountsSplitMvNeighbours() {
+            // 2x2 grid, the current MB at (1, 1): index 0 is its above-left neighbour, 1 its above
+            // and 2 its left. Every neighbour is an inter MB at a zero MV, so only the SPLITMV count
+            // moves - two for the above and the left neighbour, one for the above-left.
+            int mbCols = 2;
+            boolean[] mbIsInter = { true, true, true, false };
+            int[] zero = new int[4];
+            int[] refs = { LoopFilter.REF_LAST, LoopFilter.REF_LAST, LoopFilter.REF_LAST, LoopFilter.REF_INTRA };
+            int[][] schemes = {
+                { -1, -1, -1, -1 },
+                { 0, -1, -1, -1 },
+                { -1, 1, -1, -1 },
+                { -1, -1, 2, -1 },
+                { 3, 1, 0, -1 }
+            };
+            int[] expected = { 0, 1, 2, 2, 5 };
+            for (int i = 0; i < schemes.length; i++) {
+                NearMvs.Result r = new NearMvs.Result();
+                NearMvs.find(mbIsInter, zero, zero, refs, schemes[i], mbCols, 2, 1, 1,
+                    LoopFilter.REF_LAST, false, false, r);
+                assertThat("SPLITMV count with schemes " + Arrays.toString(schemes[i]),
+                    r.cnt[NearMvs.CNT_SPLITMV], is(expected[i]));
+            }
+
+            // The top-left MB has no neighbour in the frame to count.
+            NearMvs.Result corner = new NearMvs.Result();
+            NearMvs.find(mbIsInter, zero, zero, refs, new int[] { 0, 0, 0, 0 }, mbCols, 2, 0, 0,
+                LoopFilter.REF_LAST, false, false, corner);
+            assertThat("SPLITMV count at the frame corner", corner.cnt[NearMvs.CNT_SPLITMV], is(0));
+        }
+
+        @Test @DisplayName("conformance: NearMvs clamps nearest, near and best to the frame as libvpx's vp8_clamp_mv2 does")
+        void nearMvsClampsToTheFrame() {
+            // 2x2 grid, the current MB at (1, 1), the bottom-right corner. Its above neighbour moves
+            // 50 pixels down and right, its left one 75 pixels up and left, in 1/8-pel units. libvpx
+            // lets an MV carry the MB at most 16 pixels past the grid: here 16 pixels down or right,
+            // and 32 pixels up or left, the MB's own 16 plus the margin.
+            int mbCols = 2;
+            boolean[] mbIsInter = { false, true, true, false };
+            int[] mbMvRow = { 0, 400, -600, 0 };
+            int[] mbMvCol = { 0, 400, -600, 0 };
+            int[] refs = { LoopFilter.REF_INTRA, LoopFilter.REF_LAST, LoopFilter.REF_LAST, LoopFilter.REF_INTRA };
+            NearMvs.Result r = new NearMvs.Result();
+            NearMvs.find(mbIsInter, mbMvRow, mbMvCol, refs, new int[] { -1, -1, -1, -1 }, mbCols, 2, 1, 1,
+                LoopFilter.REF_LAST, false, false, r);
+            assertThat("nearest row", r.nearestRow, is(128));
+            assertThat("nearest col", r.nearestCol, is(128));
+            assertThat("near row", r.nearRow, is(-256));
+            assertThat("near col", r.nearCol, is(-256));
+            assertThat("best row", r.bestRow, is(128));
+            assertThat("best col", r.bestCol, is(128));
+            // The votes compare the MVs as the neighbours hold them, so the two stay distinct.
+            assertThat("nearest votes", r.cnt[NearMvs.CNT_NEAREST], is(2));
+            assertThat("near votes", r.cnt[NearMvs.CNT_NEAR], is(2));
+        }
+
+        @Test @DisplayName("conformance: SPLITMV self round-trip via forced-encode hook (RFC 6386 section 16.4)")
         void splitMvSelfRoundTrip() {
             // 32x32 keyframe (2x2 MBs) followed by a forced-SPLITMV P-frame: every MB
             // emits scheme TOP_BOTTOM with two SUB_MV_REF_ZERO sub-MVs + mb_skip = 1,
             // so reconstruction is a straight LAST-reference copy. At q=1.0 filter_level
             // is 0 on both frames, so the decoded P-frame must be bit-exact with the
-            // decoded keyframe. Exercises the decoder's RFC 6386 section 17.3 parse:
+            // decoded keyframe. Exercises the decoder's RFC 6386 section 16.4 parse:
             // MV_REF_TREE=SPLITMV leaf, MBSPLIT_TREE=TOP_BOTTOM, per-slot
             // SUB_MV_REF_TREE=ZERO4X4 at the LEFT_ABOVE_BOTH_ZERO context, plus the
             // cross-MB bmi neighbour lookups (MB 0,0 is the seed; MBs 1,0 / 0,1 / 1,1
@@ -1243,7 +1317,7 @@ public class VP8CodecTest {
                     "SPLITMV-roundtrip-with-filter PSNR = %.2f dB (expected >= 35 dB)", psnr));
         }
 
-        @Test @DisplayName("conformance: SPLITMV R-D candidate captures non-uniform per-sub-MB motion (Task 11 phase 3)")
+        @Test @DisplayName("conformance: SPLITMV R-D candidate captures non-uniform per-sub-MB motion")
         void splitMvRdNonUniformMotion() {
             // 32x32 image (2x2 MBs). Construct a P-frame whose top half within each MB is the
             // keyframe shifted +1 luma pixel right, and whose bottom half is identical to the
@@ -1304,7 +1378,7 @@ public class VP8CodecTest {
                     psnr));
         }
 
-        @Test @DisplayName("conformance: SPLITMV-residual flavour roundtrip at reduced quality (Task 11 follow-up 1)")
+        @Test @DisplayName("conformance: SPLITMV-residual flavour roundtrip at reduced quality")
         void splitMvResidualRoundTrip() {
             // 32x32 input with non-uniform per-sub-MB motion (same shape as
             // splitMvRdNonUniformMotion) at q=0.5 so the encoder exercises both the skip
@@ -1363,39 +1437,49 @@ public class VP8CodecTest {
                     psnr));
         }
 
-        @Test @DisplayName("conformance: SPLITMV gate suppresses enumeration on smooth content (Task 11 phase 3)")
+        @Test @DisplayName("conformance: SPLITMV is searched only on MBs whose best whole-MB prediction misses SPLITMV_GATE_SSE")
         void splitMvGateSuppressesOnSmoothContent() {
-            // Solid-colour MBs have ZeroMV-skip SSE = 0, well below SPLITMV_GATE_SSE.
-            // The encoder must skip SPLITMV enumeration entirely (and pick ZeroMv-skip
-            // / NEAREST-skip), keeping the encoded byte count tiny. A regression where
-            // the gate failed open would explode the per-frame size with unwanted
-            // SPLITMV emissions on every MB.
+            // Smooth: an unchanged solid source predicts every MB with zero error, under the
+            // gate, so no MB reaches the SPLITMV search.
             int W = 32, H = 32;
-            PixelBuffer keyframe = PixelBuffer.create(W, H);
-            for (int y = 0; y < H; y++)
-                for (int x = 0; x < W; x++)
-                    keyframe.setPixel(x, y, 0xFF8080A0);   // single solid colour
+            PixelBuffer solid = PixelBuffer.create(W, H);
+            solid.fill(0xFF8080A0);
 
-            VP8EncoderSession encSess = new VP8EncoderSession();
-            byte[] kf = encSess.encode(keyframe, 0.75f, true);
-            byte[] pf = encSess.encode(keyframe, 0.75f, false);   // identical source
-
-            // P-frame for an unchanged source should be tiny (just per-MB header bits).
-            // The forced-SPLITMV hook produced ~80-100 bytes; an inter-skip P-frame on
-            // identical source is typically ~10-30 bytes. SPLITMV per MB would push it
-            // past this threshold even at the cheapest scheme.
+            VP8EncoderSession smooth = new VP8EncoderSession();
+            smooth.encode(solid, 0.75f, true);
+            byte[] pf = smooth.encode(solid, 0.75f, false);
+            if (smooth.splitMvSearches != 0)
+                throw new AssertionError(String.format(
+                    "SPLITMV searched on %d MBs of an unchanged solid frame - the gate let smooth MBs through",
+                    smooth.splitMvSearches));
             if (pf.length > 60)
                 throw new AssertionError(String.format(
-                    "P-frame for unchanged source is %d bytes (expected < 60) - "
-                    + "SPLITMV gate may have failed open and emitted SPLITMV on smooth MBs",
-                    pf.length));
+                    "P-frame for an unchanged solid source is %d bytes (expected <= 60)", pf.length));
+
+            // Busy: a P-frame of noise unrelated to its noise reference, coded at a coarse
+            // quantizer, leaves every candidate's reconstruction far above the gate, so the
+            // search runs. A candidate's error is measured after its residual is coded, so at
+            // a fine quantizer even noise can reconstruct under the gate.
+            java.util.Random random = new java.util.Random(7);
+            PixelBuffer first = PixelBuffer.create(W, H);
+            PixelBuffer second = PixelBuffer.create(W, H);
+            for (int i = 0; i < W * H; i++) {
+                first.data()[i] = 0xFF000000 | random.nextInt(0x1000000);
+                second.data()[i] = 0xFF000000 | random.nextInt(0x1000000);
+            }
+
+            VP8EncoderSession busy = new VP8EncoderSession();
+            busy.encode(first, 0.05f, true);
+            busy.encode(second, 0.05f, false);
+            if (busy.splitMvSearches == 0)
+                throw new AssertionError("SPLITMV searched on no MB of a noise P-frame - the gate shut on MBs no whole-MB prediction fits");
         }
 
-        @Test @DisplayName("conformance: subMvRefContext mirrors decoder's 5-way classifier (RFC 6386 section 17.3)")
+        @Test @DisplayName("conformance: subMvRefContext mirrors decoder's 5-way classifier (RFC 6386 section 16.4)")
         void subMvRefContextClassifier() {
             // The encoder's rate-cost estimation for SPLITMV must index the same
             // SUB_MV_REF_PROB row the decoder will read. VP8Decoder.decodeSplitMv
-            // computes the context inline at lines 1051-1060; VP8Encoder.subMvRefContext
+            // computes the context inline; VP8Encoder.subMvRefContext
             // is the matching static helper. This test pins the 5 cases:
             //   ctx 0 = NORMAL                 (left != above, neither zero)
             //   ctx 1 = LEFT_ZERO              (left == 0, above != 0)
@@ -1462,6 +1546,27 @@ public class VP8CodecTest {
                             "zero-delta segment-map encode pixel divergence at (%d, %d): "
                             + "baseline=0x%08X segmented=0x%08X", x, y, expected, actual));
                 }
+        }
+
+        @Test @DisplayName("a segment map crowded into one segment costs what its histogram does, as libwebp's SetSegmentProbas codes it")
+        void segmentMapProbabilitiesFollowTheHistogram() {
+            // 256 macroblocks, all in segment 0 but the last, which is in segment 3, under zero
+            // deltas so each codes as the unsegmented encode does: the difference in bytes is
+            // the segment header and map. A tree at 128 on every branch spends two bits on each
+            // segment ID, 64 bytes on the map alone; probabilities taken from the histogram put
+            // 255 of the 256 IDs on near-certain branches.
+            int size = 256;
+            PixelBuffer src = PixelBuffer.create(size, size);
+            for (int y = 0; y < size; y++)
+                for (int x = 0; x < size; x++)
+                    src.setPixel(x, y, 0xFF000000 | (x << 16) | (y << 8) | ((x + y) >> 1));
+            int[] assignment = new int[(size / 16) * (size / 16)];
+            assignment[assignment.length - 1] = 3;
+
+            int plain = VP8Encoder.encode(src, 0.5f).length;
+            int segmented = VP8Encoder.encodeWithSegmentMap(
+                src, 0.5f, assignment, new int[4], new int[4], /*absolute=*/ false).length;
+            assertThat("segment header and map, in bytes", segmented - plain, lessThan(16));
         }
 
         @Test @DisplayName("conformance: per-segment LF delta produces observable pixel divergence at segment boundary (RFC 6386 section 15)")
@@ -1576,13 +1681,12 @@ public class VP8CodecTest {
         @Test @DisplayName("conformance: per-segment quant delta changes encoder byte output (RFC 6386 section 10)")
         void segmentMapQuantDeltaAffectsEncoderBytes() {
             // Encoder trellises each MB at its segment's quantizer (see
-            // State.applySegment). Under the pre-Task-16 behaviour the encoder ran
-            // every MB at the frame's base quantizer and only the decoder applied
-            // the per-segment dequant delta, so byte output was identical across all
-            // quant-delta values. This test asserts that a negative delta (which
-            // lowers the segment's QI, raising quality) strictly increases byte
-            // output and a positive delta strictly decreases it, proving the
-            // encoder-side swap is actually wired.
+            // State.applySegment). An encoder that ran every MB at the frame's base
+            // quantizer, leaving the per-segment dequant delta to the decoder, would
+            // write the same bytes for every quant-delta value. This test asserts
+            // that a negative delta (which lowers the segment's QI, raising quality)
+            // strictly increases byte output and a positive delta strictly decreases
+            // it, so the encoder-side swap is wired.
             PixelBuffer src = PixelBuffer.create(32, 32);
             for (int y = 0; y < 32; y++)
                 for (int x = 0; x < 32; x++)
@@ -1615,15 +1719,15 @@ public class VP8CodecTest {
         @Test @DisplayName("conformance: auto-segment keyframe reduces bytes on high-variance content while keeping PSNR healthy")
         void autoSegmentKeyframeImprovesCompression() {
             // 64x64 source: left half is a smooth low-variance gradient, right half
-            // carries structured alternating horizontal stripes that give each right-
-            // half MB large per-MB luma variance while still being a highly-compressible
-            // signal (a DC-plus-basis-function pattern). The auto-segment heuristic
-            // should bucket left-half MBs into low-variance segments (kept at base
-            // quant) and right-half MBs into high-variance segments (bumped to higher
-            // quant where the eye's noise masking absorbs the extra quantization
-            // error). Net byte output must drop vs the single-segment baseline, and
-            // decoded PSNR must stay healthy - this is a realistic-variance source
-            // not a chaotic-noise worst case.
+            // carries dense two-level strokes, like small text, that give each right-half
+            // MB large per-MB luma variance and a residual the quantizer cannot zero. The
+            // auto-segment heuristic should bucket left-half MBs into low-variance
+            // segments (kept at base quant) and right-half MBs into high-variance
+            // segments (bumped to higher quant where the eye's noise masking absorbs the
+            // extra quantization error). Net byte output must drop vs the single-segment
+            // baseline, and decoded PSNR must stay healthy. A texture the predictors
+            // reproduce, such as regular stripes, leaves no residual for the coarser
+            // quantizer to cut, so it pays for the segment map and saves nothing.
             int w = 64, h = 64;
             PixelBuffer src = PixelBuffer.create(w, h);
             for (int y = 0; y < h; y++) {
@@ -1634,9 +1738,8 @@ public class VP8CodecTest {
                         int v = (x + y) * 2;
                         argb = 0xFF000000 | (v << 16) | (v << 8) | v;
                     } else {
-                        // 2-row-tall alternating bright/dark stripes. High per-MB
-                        // variance (~8000) but structured, compresses well.
-                        int v = ((y >> 1) & 1) != 0 ? 200 : 40;
+                        // Bright strokes on dark, high per-MB variance.
+                        int v = ((x * 7 + y * 13) % 11 < 3 || (x ^ y) % 7 == 0) ? 220 : 50;
                         argb = 0xFF000000 | (v << 16) | (v << 8) | v;
                     }
                     src.setPixel(x, y, argb);
@@ -1812,8 +1915,7 @@ public class VP8CodecTest {
 
         @Test @DisplayName("golden-reference harness: decodeWithMetadata round-trips per-MB decisions and compares against libwebp when available")
         void goldenReferenceHarnessSmokeTest() throws Exception {
-            // Smoke test for the Task 14 / Detected 2 golden-reference scaffolding.
-            // Verifies two things:
+            // Smoke test for GoldenReferenceHelper. Verifies two things:
             //
             //  1. (Always runs) VP8Decoder.decodeWithMetadata returns a FrameMetadata
             //     whose per-MB arrays are fully populated from a decode of our own
@@ -1822,9 +1924,10 @@ public class VP8CodecTest {
             //
             //  2. (libwebp-gated) Calls GoldenReferenceHelper.compare which runs both
             //     encoders and builds a ModeDecisionDiff. Logs the diff summary to
-            //     stderr for visual inspection - no tight assertion yet because the
-            //     diff IS the data that future sessions use to tune R-D lambdas.
-            //     Aborts, after part 1 has run, when Python/webp is unavailable.
+            //     stderr for reading and checks only that its counts add up: the
+            //     agreement it measures is what tuning the R-D lambdas reads, not
+            //     a value the test holds. Aborts, after part 1 has run, when
+            //     Python/webp is unavailable.
             //
             // 64x64 synthetic source: smooth gradient with two solid-colour regions
             // that give the encoder a realistic mix of intra-DC and intra-other
@@ -1877,9 +1980,8 @@ public class VP8CodecTest {
             // Part 2: libwebp-gated comparison.
             GoldenReferenceHelper.Result result = GoldenReferenceHelper.compare(src, 75);
             System.err.println("[golden-reference smoke] " + GoldenReferenceHelper.formatDiff(result.diff()));
-            // No tight assertion on the diff - the whole point of this harness is
-            // that future sessions use the measured agreement as the tuning signal.
-            // Sanity-check that the diff is coherent (total equals per-MB sum).
+            // No assertion bounds the measured agreement, which is reported rather
+            // than held. Sanity-check that the diff is coherent (total equals per-MB sum).
             var d = result.diff();
             if (d.agreeIntra() + d.agreeInter() + d.disagreeType() != d.totalMbs())
                 throw new AssertionError("diff counts inconsistent: agreeIntra+agreeInter+disagreeType != totalMbs");
@@ -1888,19 +1990,18 @@ public class VP8CodecTest {
     }
 
     /**
-     * Golden-reference tooling scaffold for Task 14 (libwebp lambda tuning) and
-     * Detected 2 (R-D ripple accounting) - encodes a source with both our encoder
-     * and libwebp, decodes both through our decoder via {@link VP8Decoder#decodeWithMetadata},
-     * and produces a structured per-MB diff.
+     * Golden-reference comparison against libwebp - encodes a source with both our
+     * encoder and libwebp, decodes both through our decoder via
+     * {@link VP8Decoder#decodeWithMetadata}, and produces a structured per-MB diff.
      * <p>
-     * Not a correctness test - the harness is diagnostic infrastructure. Future
-     * sessions use the captured {@link ModeDecisionDiff} to tune R-D lambdas
-     * against libwebp's choices on reference content, or to profile which MBs
-     * get downstream-costly SPLITMV-residual / MBSPLIT_EIGHTS picks.
+     * Not a correctness test - the harness is diagnostic infrastructure. The captured
+     * {@link ModeDecisionDiff} measures how far our mode, motion-vector and segment
+     * choices sit from libwebp's on the same content, which is what tuning the R-D
+     * lambdas against libwebp reads, and shows which MBs take downstream-costly
+     * SPLITMV-residual / MBSPLIT_EIGHTS picks.
      */
+    @UtilityClass
     private static final class GoldenReferenceHelper {
-
-        private GoldenReferenceHelper() { }
 
         /**
          * Per-MB comparison summary between two {@link VP8Decoder.FrameMetadata}
@@ -1928,9 +2029,9 @@ public class VP8CodecTest {
          * back through our decoder.
          */
         record Result(
-            @org.jetbrains.annotations.NotNull VP8Decoder.FrameMetadata ours,
-            @org.jetbrains.annotations.NotNull VP8Decoder.FrameMetadata libwebp,
-            @org.jetbrains.annotations.NotNull ModeDecisionDiff diff
+            @NotNull VP8Decoder.FrameMetadata ours,
+            @NotNull VP8Decoder.FrameMetadata libwebp,
+            @NotNull ModeDecisionDiff diff
         ) { }
 
         /**
@@ -1944,7 +2045,7 @@ public class VP8CodecTest {
          *                {@code WebPConfig.new(quality=...)} API; our encoder
          *                receives {@code quality / 100.0f}
          */
-        static @org.jetbrains.annotations.NotNull Result compare(PixelBuffer src, int quality) throws Exception {
+        static @NotNull Result compare(PixelBuffer src, int quality) throws Exception {
             byte[] oursVp8 = VP8Encoder.encode(src, quality / 100.0f);
             VP8Decoder.DecodedFrame ours = VP8Decoder.decodeWithMetadata(oursVp8);
 
@@ -1958,9 +2059,9 @@ public class VP8CodecTest {
                 buildDiff(ours.metadata(), theirs.metadata()));
         }
 
-        private static @org.jetbrains.annotations.NotNull ModeDecisionDiff buildDiff(
-            @org.jetbrains.annotations.NotNull VP8Decoder.FrameMetadata a,
-            @org.jetbrains.annotations.NotNull VP8Decoder.FrameMetadata b
+        private static @NotNull ModeDecisionDiff buildDiff(
+            @NotNull VP8Decoder.FrameMetadata a,
+            @NotNull VP8Decoder.FrameMetadata b
         ) {
             int mbCols = Math.min(a.mbCols(), b.mbCols());
             int mbRows = Math.min(a.mbRows(), b.mbRows());
@@ -2005,8 +2106,8 @@ public class VP8CodecTest {
         /**
          * Short human-readable summary of a diff - used by the demo test to log.
          */
-        static @org.jetbrains.annotations.NotNull String formatDiff(
-            @org.jetbrains.annotations.NotNull ModeDecisionDiff d
+        static @NotNull String formatDiff(
+            @NotNull ModeDecisionDiff d
         ) {
             return String.format(
                 "MBs=%d  typeAgree=%.1f%%  intra=%d (i4x4=%d i16x16=%d)  "
@@ -2019,7 +2120,7 @@ public class VP8CodecTest {
         }
     }
 
-    // ──── VP8 Session (Phase 0 stateful encoder/decoder wrappers) ────
+    // ──── VP8 Session (stateful encoder/decoder wrappers) ────
 
     @Nested
     class VP8SessionTests {
@@ -2251,7 +2352,7 @@ public class VP8CodecTest {
             assertThat("b1 is inter frame", b1[0] & 1, is(1));
 
             VP8DecoderSession decSess = new VP8DecoderSession();
-            PixelBuffer d0 = decSess.decode(b0);
+            decSess.decode(b0);
             PixelBuffer d1 = decSess.decode(b1);
 
             // Frame 1 decode must be close to its source in the interior (far from the
@@ -2334,17 +2435,18 @@ public class VP8CodecTest {
         @Test @DisplayName("P-frame sub-pel: 1-pel shifted frame uses sub-pel chroma + integer luma")
         void pFrameSubPelTranslationRoundTrip() {
             // 1-pel luma horizontal shift produces a 0.5-pel chroma MV, exercising the 6-tap
-            // chroma sub-pel path on both encoder + decoder. Phase 2c removed the prior
-            // "throw on sub-pel" guard - this test catches regressions of that.
-            int w = 32, h = 32;
+            // chroma sub-pel path on both encoder + decoder. Both must predict at the
+            // fractional position rather than refuse it: one that threw on a sub-pel
+            // MV fails here.
+            int w = 64, h = 32;
             PixelBuffer f0 = PixelBuffer.create(w, h);
             PixelBuffer f1 = PixelBuffer.create(w, h);
             for (int y = 0; y < h; y++) {
                 for (int x = 0; x < w; x++) {
-                    int color = 0xFF000000 | ((x * 8) << 16) | ((y * 8) << 8);
+                    int color = 0xFF000000 | ((x * 4) << 16) | ((y * 8) << 8);
                     f0.setPixel(x, y, color);
                     int srcX = (x - 1 + w) % w;
-                    int srcColor = 0xFF000000 | ((srcX * 8) << 16) | ((y * 8) << 8);
+                    int srcColor = 0xFF000000 | ((srcX * 4) << 16) | ((y * 8) << 8);
                     f1.setPixel(x, y, srcColor);
                 }
             }
@@ -2401,11 +2503,11 @@ public class VP8CodecTest {
             // encode/decode cycle. Encoder/decoder tree layout must match.
             int[] values = { 0, 1, 7, 8, 15, 16, 17, 64, -3, -64, -256 };
             BooleanEncoder enc = new BooleanEncoder(64);
-            for (int v : values)
+            for (int ignored : values)
                 enc.encodeBit(128, 0);  // dummy spacer to validate boundary
             byte[] out = enc.toByteArray();
             BooleanDecoder dec = new BooleanDecoder(out, 0, out.length);
-            for (int v : values)
+            for (int ignored : values)
                 assertThat("spacer bit", dec.decodeBit(128), is(0));
             // Real check: encode + decode via our internal helpers exposed through the
             // NEW_MV path - covered by pFrameTranslationRoundTrip.
@@ -2544,7 +2646,7 @@ public class VP8CodecTest {
         private static void assertRoundTrips(short[] coeffs, int first, int ctx0, int type) {
             byte[] bytes = encodeAndFinish(coeffs, first, ctx0, type);
             short[] decoded = new short[16];
-            for (int i = 0; i < first; i++) decoded[i] = coeffs[i];
+            System.arraycopy(coeffs, 0, decoded, 0, first);
             BooleanDecoder dec = new BooleanDecoder(bytes, 0, bytes.length);
             VP8TokenDecoder.decode(dec, decoded, first, ctx0, type, VP8Tables.COEFFS_PROBA_0);
             for (int i = 0; i < 16; i++)
@@ -2576,6 +2678,23 @@ public class VP8CodecTest {
             .putInt(vp8.length)
             .put(vp8)
             .array();
+    }
+
+    /**
+     * A shaded checkerboard whose bands of eight rows each slide right one pixel further per frame
+     * than the band above.
+     */
+    private static PixelBuffer shear(int width, int height, int frame) {
+        PixelBuffer pixels = PixelBuffer.create(width, height);
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                int sx = x - (y / 8) * frame;
+                double shade = 128 + 60 * Math.sin(sx * 0.21) * Math.cos(y * 0.17) + ((sx / 8 + y / 8) % 2 == 0 ? 25 : -25);
+                int c = Math.clamp((int) shade, 0, 255);
+                pixels.setPixel(x, y, 0xFF000000 | c << 16 | Math.clamp(255 - c, 0, 255) << 8 | Math.clamp(c / 2 + 60, 0, 255));
+            }
+        }
+        return pixels;
     }
 
 }

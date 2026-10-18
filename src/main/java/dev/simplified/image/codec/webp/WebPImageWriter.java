@@ -1,6 +1,6 @@
 package dev.simplified.image.codec.webp;
 
-
+import dev.simplified.annotations.SilentThrows;
 import dev.simplified.collection.Concurrent;
 import dev.simplified.collection.ConcurrentList;
 import dev.simplified.image.AnimatedImageData;
@@ -8,6 +8,7 @@ import dev.simplified.image.ImageData;
 import dev.simplified.image.ImageFormat;
 import dev.simplified.image.PixelBuffer;
 import dev.simplified.image.codec.ImageWriter;
+import dev.simplified.image.codec.common.LittleEndian;
 import dev.simplified.image.codec.webp.vp8.VP8Encoder;
 import dev.simplified.image.codec.webp.vp8.VP8EncoderSession;
 import dev.simplified.image.codec.webp.vp8l.NearLosslessPreprocess;
@@ -25,10 +26,19 @@ import org.jetbrains.annotations.Nullable;
 
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.stream.IntStream;
 
 /**
  * Writes WebP images (static and animated) using a pure Java implementation
  * of the VP8L lossless and VP8 lossy codecs.
+ * <p>
+ * An animation is written as the canvases its frames compose to, {@link ImageData#toCanvasFrames()},
+ * so a frame may be any size at any offset, blend over the canvas and dispose of itself in any way,
+ * {@link FrameDisposal#RESTORE_TO_PREVIOUS} included: each written frame shows what that frame
+ * leaves on the canvas.
  */
 @ApiStatus.Internal
 public class WebPImageWriter implements ImageWriter {
@@ -69,13 +79,15 @@ public class WebPImageWriter implements ImageWriter {
             nearLossless = webpOptions.getNearLossless();
         }
 
-        // Converted after the dispatch, not before: toAlphaMode answers an AnimatedImageData for any
-        // animated image, so converting first would send an animated ImageData implemented elsewhere
-        // down the animated path. An AnimatedImageData converts to an AnimatedImageData, so the cast holds.
+        // Composed and converted after the dispatch, not before: both answer an AnimatedImageData for any
+        // animated image, so doing either first would send an animated ImageData implemented elsewhere
+        // down the animated path. An AnimatedImageData composes and converts to an AnimatedImageData, so
+        // the cast holds. Composing comes first, so OVER frames are laid down in the convention the
+        // frames are held in.
         if (data instanceof AnimatedImageData animated) {
             LoopCount declared = loopCount.orElse(animated.getLoopCount());
-            AnimatedImageData straight = (AnimatedImageData) animated.toAlphaMode(AlphaMode.STRAIGHT);
-            return writeAnimated(straight, lossless, quality, declared, multithreaded, usePFrames, forceKeyframeEvery, motionSearchThreads, autoSegment, nearLossless);
+            AnimatedImageData canvases = (AnimatedImageData) animated.toCanvasFrames().toAlphaMode(AlphaMode.STRAIGHT);
+            return writeAnimated(canvases, lossless, quality, declared, multithreaded, usePFrames, forceKeyframeEvery, motionSearchThreads, autoSegment, nearLossless);
         }
 
         return writeStatic(data, lossless, quality, alphaCompression, autoSegment, nearLossless);
@@ -148,7 +160,7 @@ public class WebPImageWriter implements ImageWriter {
         // on content where only a small region of the canvas changes per frame
         // (tooltip animations where the body is static, only the bottom line of
         // obfuscated text cycles), matches what libwebp's WebPAnimEncoder and
-        // GIF89a both do, and removes the "animated WebP shows as static" issue
+        // GIF89a both do, and avoids the "animated WebP shows as static" issue
         // that strict viewers (Windows Photos) exhibit on very large full-frame
         // animated WebPs. Partial frames are skipped on the P-frame path because
         // VP8 inter prediction requires the full-canvas reference - a partial
@@ -174,7 +186,7 @@ public class WebPImageWriter implements ImageWriter {
             // Frame 0: full canvas.
             bboxX[0] = 0; bboxY[0] = 0;
             bboxW[0] = canvasW; bboxH[0] = canvasH;
-            framePixels[0] = frames.get(0).pixels();
+            framePixels[0] = frames.getFirst().pixels();
             for (int i = 1; i < numFrames; i++) {
                 PixelBuffer prev = frames.get(i - 1).pixels();
                 PixelBuffer curr = frames.get(i).pixels();
@@ -196,8 +208,8 @@ public class WebPImageWriter implements ImageWriter {
 
         // Encode all frames. Lossy animated with usePFrames enabled runs sequentially so
         // a shared VP8EncoderSession can carry reference-frame state across frames and
-        // emit P-frames for stationary macroblocks. Otherwise the existing per-frame
-        // independent path is used (optionally parallel).
+        // emit P-frames for stationary macroblocks. Otherwise each frame is encoded
+        // independently (optionally in parallel).
         ConcurrentList<byte[]> encodedPayloads;
         ConcurrentList<byte[]> alphaPayloads;
         if (!lossless && usePFrames) {
@@ -222,28 +234,26 @@ public class WebPImageWriter implements ImageWriter {
                 alphaPayloads = null;
             }
         } else if (multithreaded) {
-            PixelBuffer[] fpForLambda = framePixels;
-            var futures = java.util.stream.IntStream.range(0, numFrames)
-                .mapToObj(i -> CompletableFuture.supplyAsync(
-                    () -> encodeFramePixels(fpForLambda[i], lossless, quality, autoSegment, nearLossless),
-                    java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()
-                ))
-                .collect(Concurrent.toList());
-            encodedPayloads = futures.stream()
-                .map(CompletableFuture::join)
-                .collect(Concurrent.toList());
-            if (perFrameAlpha) {
-                var alphaFutures = java.util.stream.IntStream.range(0, numFrames)
+            try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+                var futures = IntStream.range(0, numFrames)
                     .mapToObj(i -> CompletableFuture.supplyAsync(
-                        () -> encodeAlphaPlane(fpForLambda[i], true),
-                        java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()
+                        () -> encodeFramePixels(framePixels[i], lossless, quality, autoSegment, nearLossless),
+                        executor
                     ))
+                    .toList();
+                encodedPayloads = futures.stream()
+                    .map(WebPImageWriter::join)
                     .collect(Concurrent.toList());
-                alphaPayloads = alphaFutures.stream()
-                    .map(CompletableFuture::join)
-                    .collect(Concurrent.toList());
-            } else {
-                alphaPayloads = null;
+                if (perFrameAlpha) {
+                    var alphaFutures = IntStream.range(0, numFrames)
+                        .mapToObj(i -> CompletableFuture.supplyAsync(() -> encodeAlphaPlane(framePixels[i], true), executor))
+                        .toList();
+                    alphaPayloads = alphaFutures.stream()
+                        .map(WebPImageWriter::join)
+                        .collect(Concurrent.toList());
+                } else {
+                    alphaPayloads = null;
+                }
             }
         } else {
             encodedPayloads = Concurrent.newList();
@@ -273,6 +283,8 @@ public class WebPImageWriter implements ImageWriter {
         // the canvas regions outside each ANMF's rectangle retain the previous
         // frame's pixels and the new frame's pixels overwrite inside the
         // rectangle - the delta-accumulation model that partial frames require.
+        // Every frame is a composed canvas, the whole picture its source frame
+        // leaves, so overwriting the rectangle that changed reproduces it.
         WebPChunk.Type innerType = lossless ? WebPChunk.Type.VP8L : WebPChunk.Type.VP8;
         for (int i = 0; i < frames.size(); i++) {
             ImageFrame frame = frames.get(i);
@@ -334,14 +346,8 @@ public class WebPImageWriter implements ImageWriter {
         if (alpha) flags |= 0x10;
         payload[0] = (byte) flags;
 
-        int w = width - 1;
-        int h = height - 1;
-        payload[4] = (byte) (w & 0xFF);
-        payload[5] = (byte) ((w >> 8) & 0xFF);
-        payload[6] = (byte) ((w >> 16) & 0xFF);
-        payload[7] = (byte) (h & 0xFF);
-        payload[8] = (byte) ((h >> 8) & 0xFF);
-        payload[9] = (byte) ((h >> 16) & 0xFF);
+        LittleEndian.writeUint24(payload, 4, width - 1);
+        LittleEndian.writeUint24(payload, 7, height - 1);
 
         return payload;
     }
@@ -364,12 +370,8 @@ public class WebPImageWriter implements ImageWriter {
 
     private static byte @NotNull [] buildAnimPayload(int backgroundColor, int loopCount) {
         byte[] payload = new byte[6];
-        payload[0] = (byte) (backgroundColor & 0xFF);
-        payload[1] = (byte) ((backgroundColor >> 8) & 0xFF);
-        payload[2] = (byte) ((backgroundColor >> 16) & 0xFF);
-        payload[3] = (byte) ((backgroundColor >> 24) & 0xFF);
-        payload[4] = (byte) (loopCount & 0xFF);
-        payload[5] = (byte) ((loopCount >> 8) & 0xFF);
+        LittleEndian.writeUint32(payload, 0, backgroundColor);
+        LittleEndian.writeUint16(payload, 4, loopCount);
         return payload;
     }
 
@@ -391,7 +393,7 @@ public class WebPImageWriter implements ImageWriter {
         int flags,
         byte @NotNull [] frameBitstream,
         @NotNull WebPChunk.Type innerType,
-        byte @org.jetbrains.annotations.Nullable [] alphaPayload
+        byte @Nullable [] alphaPayload
     ) {
         int alphaSubSize = alphaPayload != null ? 8 + alphaPayload.length + (alphaPayload.length & 1) : 0;
         int innerPayloadLen = frameBitstream.length;
@@ -403,26 +405,11 @@ public class WebPImageWriter implements ImageWriter {
         // decoded pixel offset is 2 * raw value, so the offset MUST be even.
         // Callers are expected to have aligned to even coordinates before
         // reaching here (see FrameDiffUtil.computeBoundingBox).
-        int x = pixelOffsetX / 2;
-        int y = pixelOffsetY / 2;
-        int w = width - 1;
-        int h = height - 1;
-
-        payload[0] = (byte) (x & 0xFF);
-        payload[1] = (byte) ((x >> 8) & 0xFF);
-        payload[2] = (byte) ((x >> 16) & 0xFF);
-        payload[3] = (byte) (y & 0xFF);
-        payload[4] = (byte) ((y >> 8) & 0xFF);
-        payload[5] = (byte) ((y >> 16) & 0xFF);
-        payload[6] = (byte) (w & 0xFF);
-        payload[7] = (byte) ((w >> 8) & 0xFF);
-        payload[8] = (byte) ((w >> 16) & 0xFF);
-        payload[9] = (byte) (h & 0xFF);
-        payload[10] = (byte) ((h >> 8) & 0xFF);
-        payload[11] = (byte) ((h >> 16) & 0xFF);
-        payload[12] = (byte) (durationMs & 0xFF);
-        payload[13] = (byte) ((durationMs >> 8) & 0xFF);
-        payload[14] = (byte) ((durationMs >> 16) & 0xFF);
+        LittleEndian.writeUint24(payload, 0, pixelOffsetX / 2);
+        LittleEndian.writeUint24(payload, 3, pixelOffsetY / 2);
+        LittleEndian.writeUint24(payload, 6, width - 1);
+        LittleEndian.writeUint24(payload, 9, height - 1);
+        LittleEndian.writeUint24(payload, 12, durationMs);
         payload[15] = (byte) flags;
 
         int offset = 16;
@@ -444,10 +431,7 @@ public class WebPImageWriter implements ImageWriter {
         dst[offset + 2] = fc[2];
         dst[offset + 3] = fc[3];
         int size = body.length;
-        dst[offset + 4] = (byte) (size & 0xFF);
-        dst[offset + 5] = (byte) ((size >> 8) & 0xFF);
-        dst[offset + 6] = (byte) ((size >> 16) & 0xFF);
-        dst[offset + 7] = (byte) ((size >> 24) & 0xFF);
+        LittleEndian.writeUint32(dst, offset + 4, size);
         System.arraycopy(body, 0, dst, offset + 8, size);
         // Trailing pad byte (if any) is already zero from array allocation.
         return offset + 8 + size + (size & 1);
@@ -469,7 +453,7 @@ public class WebPImageWriter implements ImageWriter {
             // VP8L header (see VP8LDecodeAlphaHeader in src/dec/vp8l_dec.c) - dimensions
             // are inferred from the parent VP8 chunk instead.
             PixelBuffer alphaBuf = PixelBuffer.of(
-                java.util.stream.IntStream.range(0, data.length)
+                IntStream.range(0, data.length)
                     .map(i -> 0xFF000000 | ((rawAlpha[i] & 0xFF) << 8))
                     .toArray(),
                 pixels.width(), pixels.height()
@@ -512,6 +496,23 @@ public class WebPImageWriter implements ImageWriter {
             if (cand.length < best.length) best = cand;
         }
         return best;
+    }
+
+    /**
+     * Waits for an encode and returns its result, throwing what the encode threw rather than the
+     * {@link CompletionException} that wraps it.
+     *
+     * @param future the encode
+     * @param <R> the result type
+     * @return the encode's result
+     */
+    @SilentThrows
+    private static <R> R join(@NotNull CompletableFuture<R> future) {
+        try {
+            return future.join();
+        } catch (CompletionException ex) {
+            throw ex.getCause();
+        }
     }
 
 }

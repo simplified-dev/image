@@ -218,4 +218,19 @@ class ColorMathTest {
         assertThat(ColorMath.blend(0x00FFFFFF, dst, BlendMode.QUADRATIC_ADD), equalTo(dst));
     }
 
+    @Test
+    @DisplayName("blend STRAIGHT lays straight colour over straight colour and answers straight colour")
+    void blendStraightOverStraight() {
+        assertThat(ColorMath.blend(0x80FF0000, 0xFF0000FF, BlendMode.STRAIGHT), equalTo(0xFF80007F));
+        assertThat(ColorMath.blend(0x80FF0000, 0x800000FF, BlendMode.STRAIGHT), equalTo(0xC0AA0055));
+    }
+
+    @Test
+    @DisplayName("blend STRAIGHT keeps either pixel whole where the other is fully transparent, and an opaque source")
+    void blendStraightEdges() {
+        assertThat(ColorMath.blend(0x00FFFFFF, 0x80123456, BlendMode.STRAIGHT), equalTo(0x80123456));
+        assertThat(ColorMath.blend(0x80123456, 0x00FFFFFF, BlendMode.STRAIGHT), equalTo(0x80123456));
+        assertThat(ColorMath.blend(0xFF123456, 0x80ABCDEF, BlendMode.STRAIGHT), equalTo(0xFF123456));
+    }
+
 }

@@ -1,9 +1,12 @@
 package dev.simplified.image.codec.webp.vp8l;
 
+import dev.simplified.annotations.UtilityClass;
 import dev.simplified.image.PixelBuffer;
+import dev.simplified.image.codec.common.DecodeBudget;
 import dev.simplified.image.exception.ImageDecodeException;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -15,6 +18,7 @@ import java.util.List;
  * meta-Huffman groups selected per tile, LZ77 backward references, color cache,
  * and four reversible transforms (predictor, color, subtract-green, color-indexing).
  */
+@UtilityClass
 @ApiStatus.Internal
 public final class VP8LDecoder {
 
@@ -38,8 +42,6 @@ public final class VP8LDecoder {
         17, 18, 0, 1, 2, 3, 4, 5, 16, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15
     };
 
-    private VP8LDecoder() { }
-
     /**
      * Decodes a VP8L bitstream into pixel data.
      *
@@ -60,11 +62,13 @@ public final class VP8LDecoder {
         // Read header: 14-bit width, 14-bit height, 1-bit alpha, 3-bit version
         int width = reader.readBits(14) + 1;
         int height = reader.readBits(14) + 1;
-        int alphaUsed = reader.readBit();
+        reader.readBit(); // alpha_is_used, a hint the decoded pixels do not depend on
         int version = reader.readBits(3);
 
         if (version != 0)
             throw new ImageDecodeException("Unsupported VP8L version: %d", version);
+
+        DecodeBudget.open("VP8L").claim(width, height);
 
         // Read transforms
         List<VP8LTransform> transforms = new ArrayList<>();
@@ -319,7 +323,7 @@ public final class VP8LDecoder {
         int width,
         int height,
         @NotNull ColorCache cache,
-        int @org.jetbrains.annotations.Nullable [] metaPrefixImage,
+        int @Nullable [] metaPrefixImage,
         int metaPrefixXsize,
         int metaPrefixBits
     ) {

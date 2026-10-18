@@ -5,9 +5,18 @@ package dev.simplified.image.pixel;
  * <p>
  * Filters differ in their trade-off between speed and output quality. {@link #NEAREST} is fastest
  * and preserves hard edges; {@link #BILINEAR} is a reasonable middle ground; {@link #BICUBIC}
- * produces the highest quality output at the greatest cost.
+ * produces the highest quality output at the greatest cost; {@link #AREA} averages a downscale
+ * without aliasing, which is what a supersampled render needs to be scaled down by.
  */
 public enum Resample {
+
+    /**
+     * Area averaging. Along an axis that shrinks, each output pixel is the average of every source pixel
+     * it covers, each weighted by the share of it covered, so an integer-ratio downscale averages whole
+     * blocks and no source pixel is skipped. Along an axis that grows or keeps its size, it reads the
+     * source as {@link #NEAREST} does. Colour is averaged in the convention the pixels are held in.
+     */
+    AREA,
 
     /**
      * Bicubic resampling using a 4x4 neighbourhood. Produces the smoothest output, at the highest

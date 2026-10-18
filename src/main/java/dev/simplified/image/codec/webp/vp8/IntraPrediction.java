@@ -1,6 +1,8 @@
 package dev.simplified.image.codec.webp.vp8;
 
+import dev.simplified.annotations.UtilityClass;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 /**
  * VP8 intra-frame spatial prediction for luma and chroma blocks.
@@ -8,6 +10,7 @@ import org.jetbrains.annotations.NotNull;
  * Supports 5 luma macroblock modes (4 whole-block 16x16 modes plus B_PRED),
  * 10 luma 4x4 sub-block modes, and 4 chroma 8x8 modes.
  */
+@UtilityClass
 final class IntraPrediction {
 
     /**
@@ -40,23 +43,9 @@ final class IntraPrediction {
     static final int B_HU_PRED = 9;
 
     /**
-     * Number of 16x16 luma modes (excluding B_PRED).
-     */
-    static final int NUM_16x16_MODES = 4;
-    /**
-     * Number of macroblock luma modes (including B_PRED).
-     */
-    static final int NUM_YMODES = 5;
-    /**
      * Number of 4x4 sub-block modes.
      */
     static final int NUM_4x4_MODES = 10;
-    /**
-     * Number of 8x8 chroma modes.
-     */
-    static final int NUM_CHROMA_MODES = 4;
-
-    private IntraPrediction() { }
 
     /**
      * Fills a 4x4 block with predicted values using a B_PRED sub-block mode.
@@ -64,20 +53,20 @@ final class IntraPrediction {
      * @param predicted output 16-element predicted block
      * @param above 8-element row - 4 above pixels followed by 4 above-right pixels (null if top row)
      * @param left 4-element column of pixels to the left (null if left column)
-     * @param aboveLeft the pixel above-left of the block (128 if unavailable)
+     * @param aboveLeft the pixel above-left of the block, as {@link #aboveLeft} gives it
      * @param mode the sub-block prediction mode (0-9)
      */
     static void predict4x4(
         short @NotNull [] predicted,
-        short[] above,
-        short[] left,
+        short @Nullable [] above,
+        short @Nullable [] left,
         short aboveLeft,
         int mode
     ) {
         // Materialize the neighbour pixels with libwebp's default fills so the per-mode
         // formulas stay simple and bit-compatible: 127 for missing top, 129 for missing
-        // left, 128 for missing above-left. Matches libwebp's dsp/dec.c predictors,
-        // which rely on the surrounding buffer being pre-seeded with those values.
+        // left, the above-left already seeded by aboveLeft. Matches libwebp's dsp/dec.c
+        // predictors, which rely on the surrounding buffer being pre-seeded with those values.
         short[] top = above;
         if (top == null) {
             top = new short[8];
@@ -88,7 +77,6 @@ final class IntraPrediction {
             lt = new short[4];
             java.util.Arrays.fill(lt, (short) 129);
         }
-        final int P = aboveLeft;
         final int A = top[0], B = top[1], C = top[2], D = top[3];
         final int E = top[4], F = top[5], G = top[6], H = top[7];
         final int I = lt[0], J = lt[1], K = lt[2], L = lt[3];
@@ -102,10 +90,10 @@ final class IntraPrediction {
             case B_TM_PRED -> {
                 for (int y = 0; y < 4; y++)
                     for (int x = 0; x < 4; x++)
-                        predicted[y * 4 + x] = (short) clamp(top[x] + lt[y] - P);
+                        predicted[y * 4 + x] = (short) clamp(top[x] + lt[y] - aboveLeft);
             }
             case B_VE_PRED -> {
-                short c0 = avg3((short) P, (short) A, (short) B);
+                short c0 = avg3(aboveLeft, (short) A, (short) B);
                 short c1 = avg3((short) A, (short) B, (short) C);
                 short c2 = avg3((short) B, (short) C, (short) D);
                 short c3 = avg3((short) C, (short) D, (short) E);
@@ -117,7 +105,7 @@ final class IntraPrediction {
                 }
             }
             case B_HE_PRED -> {
-                short r0 = avg3((short) P, (short) I, (short) J);
+                short r0 = avg3(aboveLeft, (short) I, (short) J);
                 short r1 = avg3((short) I, (short) J, (short) K);
                 short r2 = avg3((short) J, (short) K, (short) L);
                 short r3 = avg3((short) K, (short) L, (short) L);
@@ -140,18 +128,18 @@ final class IntraPrediction {
             case B_RD_PRED -> {
                 predicted[12] = avg3((short) J, (short) K, (short) L);
                 predicted[8] = predicted[13] = avg3((short) I, (short) J, (short) K);
-                predicted[4] = predicted[9] = predicted[14] = avg3((short) P, (short) I, (short) J);
-                predicted[0] = predicted[5] = predicted[10] = predicted[15] = avg3((short) I, (short) P, (short) A);
-                predicted[1] = predicted[6] = predicted[11] = avg3((short) P, (short) A, (short) B);
+                predicted[4] = predicted[9] = predicted[14] = avg3(aboveLeft, (short) I, (short) J);
+                predicted[0] = predicted[5] = predicted[10] = predicted[15] = avg3((short) I, aboveLeft, (short) A);
+                predicted[1] = predicted[6] = predicted[11] = avg3(aboveLeft, (short) A, (short) B);
                 predicted[2] = predicted[7] = avg3((short) A, (short) B, (short) C);
                 predicted[3] = avg3((short) B, (short) C, (short) D);
             }
             case B_VR_PRED -> {
                 predicted[12] = avg3((short) K, (short) J, (short) I);
-                predicted[8] = avg3((short) J, (short) I, (short) P);
-                predicted[4] = predicted[13] = avg3((short) I, (short) P, (short) A);
-                predicted[0] = predicted[9] = avg2((short) P, (short) A);
-                predicted[5] = predicted[14] = avg3((short) P, (short) A, (short) B);
+                predicted[8] = avg3((short) J, (short) I, aboveLeft);
+                predicted[4] = predicted[13] = avg3((short) I, aboveLeft, (short) A);
+                predicted[0] = predicted[9] = avg2(aboveLeft, (short) A);
+                predicted[5] = predicted[14] = avg3(aboveLeft, (short) A, (short) B);
                 predicted[1] = predicted[10] = avg2((short) A, (short) B);
                 predicted[6] = predicted[15] = avg3((short) A, (short) B, (short) C);
                 predicted[2] = predicted[11] = avg2((short) B, (short) C);
@@ -167,8 +155,9 @@ final class IntraPrediction {
                 predicted[6] = predicted[13] = avg3((short) C, (short) D, (short) E);
                 predicted[3] = predicted[10] = avg2((short) D, (short) E);
                 predicted[7] = predicted[14] = avg3((short) D, (short) E, (short) F);
-                predicted[11] = avg2((short) E, (short) F);
-                predicted[15] = avg3((short) E, (short) F, (short) G);
+                // The last two break the pattern, as RFC 6386 and libwebp's VL4 do.
+                predicted[11] = avg3((short) E, (short) F, (short) G);
+                predicted[15] = avg3((short) F, (short) G, (short) H);
             }
             case B_HD_PRED -> {
                 predicted[12] = avg2((short) L, (short) K);
@@ -176,10 +165,10 @@ final class IntraPrediction {
                 predicted[8] = predicted[14] = avg2((short) K, (short) J);
                 predicted[9] = predicted[15] = avg3((short) K, (short) J, (short) I);
                 predicted[4] = predicted[10] = avg2((short) J, (short) I);
-                predicted[5] = predicted[11] = avg3((short) J, (short) I, (short) P);
-                predicted[0] = predicted[6] = avg2((short) I, (short) P);
-                predicted[1] = predicted[7] = avg3((short) I, (short) P, (short) A);
-                predicted[2] = avg3((short) P, (short) A, (short) B);
+                predicted[5] = predicted[11] = avg3((short) J, (short) I, aboveLeft);
+                predicted[0] = predicted[6] = avg2((short) I, aboveLeft);
+                predicted[1] = predicted[7] = avg3((short) I, aboveLeft, (short) A);
+                predicted[2] = avg3(aboveLeft, (short) A, (short) B);
                 predicted[3] = avg3((short) A, (short) B, (short) C);
             }
             case B_HU_PRED -> {
@@ -202,13 +191,13 @@ final class IntraPrediction {
      * @param predicted output 64-element predicted block
      * @param above 8-element row of pixels above the block (null if top row)
      * @param left 8-element column of pixels to the left (null if left column)
-     * @param aboveLeft the pixel above-left of the block (128 if unavailable)
+     * @param aboveLeft the pixel above-left of the block, as {@link #aboveLeft} gives it
      * @param mode the prediction mode (0-3)
      */
     static void predict8x8(
         short @NotNull [] predicted,
-        short[] above,
-        short[] left,
+        short @Nullable [] above,
+        short @Nullable [] left,
         short aboveLeft,
         int mode
     ) {
@@ -250,13 +239,13 @@ final class IntraPrediction {
      * @param predicted output 256-element predicted block
      * @param above 16-element row of pixels above the block (null if top row)
      * @param left 16-element column of pixels to the left (null if left column)
-     * @param aboveLeft the pixel above-left of the block (128 if unavailable)
+     * @param aboveLeft the pixel above-left of the block, as {@link #aboveLeft} gives it
      * @param mode the prediction mode (0-3)
      */
     static void predict16x16(
         short @NotNull [] predicted,
-        short[] above,
-        short[] left,
+        short @Nullable [] above,
+        short @Nullable [] left,
         short aboveLeft,
         int mode
     ) {
@@ -293,19 +282,20 @@ final class IntraPrediction {
     }
 
     /**
-     * Computes the sum of squared differences between two blocks.
+     * Returns the sample above and to the left of a block, or the value libwebp's decoder seeds
+     * there when the block touches the frame's edge: 127 along the top row, the corner
+     * included, and 129 down the left column.
      *
-     * @param original the original pixel block
-     * @param predicted the predicted pixel block
-     * @return the sum of squared differences
+     * @param plane the reconstructed plane
+     * @param stride the plane's row length
+     * @param x the block's left column
+     * @param y the block's top row
+     * @return the above-left sample
      */
-    static long computeSSD(short @NotNull [] original, short @NotNull [] predicted) {
-        long ssd = 0;
-        for (int i = 0; i < original.length; i++) {
-            int diff = original[i] - predicted[i];
-            ssd += (long) diff * diff;
-        }
-        return ssd;
+    static short aboveLeft(short @NotNull [] plane, int stride, int x, int y) {
+        if (y == 0) return 127;
+        if (x == 0) return 129;
+        return plane[(y - 1) * stride + x - 1];
     }
 
     private static short avg2(int a, int b) {

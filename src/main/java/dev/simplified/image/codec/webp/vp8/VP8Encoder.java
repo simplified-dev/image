@@ -1,6 +1,10 @@
 package dev.simplified.image.codec.webp.vp8;
 
+import dev.simplified.annotations.AccessLevel;
+import dev.simplified.annotations.RequiredArgsConstructor;
+import dev.simplified.annotations.UtilityClass;
 import dev.simplified.image.PixelBuffer;
+import dev.simplified.image.codec.common.LittleEndian;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -13,14 +17,16 @@ import org.jetbrains.annotations.Nullable;
  * of inter frames is coded through a {@link VP8EncoderSession}, which carries the reference frames
  * between calls.
  * <p>
- * A keyframe macroblock is coded one of two ways, and the lower rate-distortion score wins:
+ * A keyframe macroblock's modes are chosen as libwebp's rate-distortion search chooses them, each
+ * candidate quantized, reconstructed and scored on its distortion, texture distortion, mode cost and
+ * residual rate:
  * <ul>
- *   <li><b>16x16</b> - the DC, V, H or TM prediction with the least distortion plus mode cost, its
- *       sixteen DC coefficients gathered into a Walsh-Hadamard transformed Y2 block</li>
- *   <li><b>B_PRED</b> - each 4x4 sub-block predicted by whichever of the ten sub-block modes scores
- *       best on distortion plus mode cost</li>
+ *   <li><b>16x16</b> - the best of the DC, TM, V and H predictions, its sixteen DC coefficients
+ *       gathered into a Walsh-Hadamard transformed Y2 block</li>
+ *   <li><b>B_PRED</b> - each 4x4 sub-block predicted by the best of the ten sub-block modes, taken
+ *       over 16x16 when the sub-blocks together score lower</li>
  * </ul>
- * Chroma takes the DC, V, H or TM 8x8 prediction the same way. Source ARGB is converted to BT.601
+ * Chroma takes the best of the four 8x8 predictions. Source ARGB is converted to BT.601
  * YCbCr in {@link Macroblock#fromARGB}, residuals are forward-transformed and trellis-quantized
  * against the frame's token costs through {@link TrellisQuantizer}, and the dequantized coefficients
  * rebuild the reconstruction the next macroblock predicts from. Tokens go out through
@@ -35,6 +41,7 @@ import org.jetbrains.annotations.Nullable;
  *
  * @see <a href="https://datatracker.ietf.org/doc/html/rfc6386">RFC 6386</a>
  */
+@UtilityClass
 @ApiStatus.Internal
 public final class VP8Encoder {
 
@@ -49,8 +56,6 @@ public final class VP8Encoder {
      * {@code log2(NUM_TOKEN_PARTITIONS)}; encoded into the 2-bit header field.
      */
     private static final int LOG2_NUM_TOKEN_PARTITIONS = 2;
-
-    private VP8Encoder() { }
 
     /**
      * Probability for the {@code prob_skip_false} header field in P-frames. 0x80 = 50/50,
@@ -83,6 +88,46 @@ public final class VP8Encoder {
      * libwebp's default.
      */
     private static final int INTER_PROB_GF = 128;
+
+    /**
+     * Weight of the texture distortion in an intra mode's score, libwebp's {@code tlambda}.
+     * libwebp scales it by its spatial noise shaping strength, which this encoder does not
+     * have, so it holds the floor of 1 libwebp keeps every lambda at.
+     */
+    static final int TLAMBDA = 1;
+
+    /**
+     * Most non-zero AC levels a 16x16 macroblock's sixteen blocks can hold between them and
+     * still count as flat, libwebp's {@code FLATNESS_LIMIT_I16}.
+     */
+    private static final int FLATNESS_LIMIT_I16 = 0;
+
+    /**
+     * Most non-zero AC levels a 4x4 sub-block can hold and still count as flat, libwebp's
+     * {@code FLATNESS_LIMIT_I4}.
+     */
+    private static final int FLATNESS_LIMIT_I4 = 3;
+
+    /**
+     * Most non-zero AC levels a macroblock's eight chroma blocks can hold between them and
+     * still count as flat, libwebp's {@code FLATNESS_LIMIT_UV}.
+     */
+    private static final int FLATNESS_LIMIT_UV = 2;
+
+    /**
+     * Rate added per block, in {@code 1/256} bits, when a mode other than DC predicts a flat
+     * block, libwebp's {@code FLATNESS_PENALTY}: about one bit, so a flat area is not
+     * mispredicted by a complex mode.
+     */
+    private static final int FLATNESS_PENALTY = 140;
+
+    /**
+     * The four 16x16 and chroma modes in the order libwebp tries them, which settles a tie:
+     * libwebp numbers TM second, where this codec numbers it last.
+     */
+    private static final int[] INTRA_MODE_ORDER = {
+        IntraPrediction.DC_PRED, IntraPrediction.TM_PRED, IntraPrediction.V_PRED, IntraPrediction.H_PRED
+    };
 
     /**
      * Per-frame encoding state threaded through the MB loop.
@@ -132,7 +177,7 @@ public final class VP8Encoder {
         final int[] mbMvRow;
         final int[] mbMvCol;
 
-        // Per-4x4-sub-block MV grid for SPLITMV MBs (RFC 6386 section 17.3). Layout
+        // Per-4x4-sub-block MV grid for SPLITMV MBs (RFC 6386 section 16.4). Layout
         // mirrors VP8Decoder.State:
         //   bmiRow[mbIdx * 16 + k] where k is the 4x4 sub-block index (0..15 raster).
         // Populated only for SPLITMV MBs - non-SPLITMV MBs leave their slots at the
@@ -152,10 +197,13 @@ public final class VP8Encoder {
         //   mbRefFrame[i]   = one of LoopFilter.REF_INTRA / REF_LAST / REF_GOLDEN / REF_ALTREF
         //   mbModeLfIdx[i]  = one of LoopFilter.MODE_NON_BPRED_INTRA / MODE_BPRED / MODE_ZEROMV
         //                     / MODE_OTHER_INTER / MODE_SPLITMV
+        //   mbHasCoeffs[i]  = the MB carries a non-zero coefficient, which has the loop
+        //                     filter take its inner edges whatever its mode
         // Populated as each MB is committed and consumed at the end-of-frame loop-filter
         // pass to apply RFC 6386 section 15 ref_lf_delta + mode_lf_delta per-MB.
         final int[] mbRefFrame;
         final int[] mbModeLfIdx;
+        final boolean[] mbHasCoeffs;
 
         // Active quantizer steps for the MB currently being encoded. Mirror of the
         // decoder's State fields of the same names. Swapped by {@link #applySegment}
@@ -169,42 +217,22 @@ public final class VP8Encoder {
         // the quant steps.
         QuantMatrix y1Mtx, y2Mtx, uvMtx;
 
-        // Active R-D lambdas for the MB currently being encoded, derived from the
-        // segment's quant steps via libwebp's {@code SetupMatrices} formulas
-        // ({@code src/enc/quant_enc.c} lines 301-308). {@code score = RD_DISTO_MULT *
-        // distortion + rate * lambda}. Field mapping:
+        // Active R-D lambdas for the MB currently being encoded: libwebp's SetupMatrices
+        // ({@code src/enc/quant_enc.c}) over the segment's mean quantizer steps, each the
+        // rounded mean of a matrix's DC step and 15 copies of its AC step, as libwebp's
+        // ExpandMatrix returns it. A candidate scores
+        // {@code rate * lambda + RD_DISTO_MULT * distortion}.
         // <ul>
-        //   <li>{@code lambdaI4} = libwebp {@code lambda_i4}: per-candidate i4 / i16
-        //       mode scoring ({@code (3 * q_i4^2) >> 7})</li>
-        //   <li>{@code lambdaUv} = libwebp {@code lambda_uv}: UV mode-loop scoring
-        //       ({@code (3 * q_uv^2) >> 6})</li>
-        //   <li>{@code lambdaTrellisI4} / {@code lambdaTrellisI16} /
-        //       {@code lambdaTrellisUv} = libwebp trellis lambdas at respective
-        //       quantizers.</li>
-        //   <li>{@code lambdaI16} = libwebp {@code lambda_i16} ({@code 3 * q_i16^2}).
-        //       libwebp's {@code SetupMatrices} populates it and none of its
-        //       scorers reads it; it is held here for parity.</li>
-        //   <li>{@code lambdaMode} = libwebp {@code lambda_mode}
-        //       ({@code (q_i4^2) >> 7}): libwebp re-scores the winning i16 / i4 / uv
-        //       candidates with it BEFORE cross-candidate comparison, 3x smaller
-        //       than {@code lambdaI4} so cross-candidate selection de-emphasises
-        //       bitrate vs distortion relative to internal per-candidate search.
-        //       No scorer in this encoder reads it; it is held for parity.</li>
-        //   <li>{@code tlambda} = libwebp {@code tlambda} gated on
-        //       {@code method >= 4 && sns_strength > 0}. Our encoder has no
-        //       method / sns analog so it's always 0; held for parity.</li>
+        //   <li>{@code lambdaI16}, {@code lambdaI4} and {@code lambdaUv} score each 16x16
+        //       mode, each sub-block mode and each chroma mode</li>
+        //   <li>{@code lambdaMode} re-scores the winning 16x16 mode and each winning
+        //       sub-block for the choice between 16x16 prediction and B_PRED</li>
+        //   <li>{@code lambdaTrellisI4}, {@code lambdaTrellisI16} and {@code lambdaTrellisUv}
+        //       drive the trellis quantizer; {@code lambdaTrellisI16} also weighs rate in
+        //       the P-frame candidate comparison</li>
         // </ul>
-        // <p>
-        // <b>Divergence from libwebp's q_i16 derivation:</b> libwebp's
-        // {@code q_i16 = ExpandMatrix(y2Mtx, mode=1)} returns {@code y2Mtx.q[0]}
-        // which equals {@code y2Dc} in our derivation. This encoder's
-        // {@code lambdaTrellisI16} formula uses {@code y2Ac} as {@code q_i16},
-        // the value the PSNR test thresholds are calibrated against, while
-        // {@code lambdaI16} and {@code lambdaMode} use libwebp's
-        // {@code q_i16 = y2Dc}.
-        int lambdaI4, lambdaUv;
+        int lambdaI4, lambdaI16, lambdaUv, lambdaMode;
         int lambdaTrellisI4, lambdaTrellisI16, lambdaTrellisUv;
-        int lambdaI16, lambdaMode, tlambda;
 
         // Per-segment pre-derived quant + matrix + lambda tables, indexed by segment ID
         // (0..3). Populated by {@link #rebuildSegmentMatrices} from the frame's base
@@ -225,16 +253,12 @@ public final class VP8Encoder {
         final QuantMatrix[] segY2Mtx = new QuantMatrix[4];
         final QuantMatrix[] segUvMtx = new QuantMatrix[4];
         final int[] segLambdaI4 = new int[4];
+        final int[] segLambdaI16 = new int[4];
         final int[] segLambdaUv = new int[4];
+        final int[] segLambdaMode = new int[4];
         final int[] segLambdaTrellisI4 = new int[4];
         final int[] segLambdaTrellisI16 = new int[4];
         final int[] segLambdaTrellisUv = new int[4];
-        // Per-segment copies of lambdaI16, lambdaMode and tlambda (see the field
-        // block above), populated by {@link #rebuildSegmentMatrices}; no R-D
-        // scorer reads them.
-        final int[] segLambdaI16 = new int[4];
-        final int[] segLambdaMode = new int[4];
-        final int[] segTlambda = new int[4];
 
         final BooleanEncoder header;                // first partition: frame header + per-MB modes
         final BooleanEncoder[] tokens;              // token partitions: MB row {@code y} writes to
@@ -267,7 +291,7 @@ public final class VP8Encoder {
         // with one-frame lag (libvpx's approach - avoids a two-pass encode).
         final int[][][] mvBranches = new int[2][VP8Tables.NUM_MV_PROBAS][2];
 
-        // Per-frame Y-mode / UV-mode probabilities (RFC 6386 section 16.2). For P-frames
+        // Per-frame Y-mode / UV-mode probabilities (RFC 6386 section 16.1). For P-frames
         // the header may emit an all-or-nothing update block overriding the default
         // INTER table; for keyframes these remain at the defaults.
         final int[] yModeProba;
@@ -363,6 +387,7 @@ public final class VP8Encoder {
             java.util.Arrays.fill(this.mbSplitScheme, -1);
             this.mbRefFrame = new int[mbCols * mbRows];       // defaults to REF_INTRA = 0
             this.mbModeLfIdx = new int[mbCols * mbRows];       // defaults to MODE_NON_BPRED_INTRA = 0
+            this.mbHasCoeffs = new boolean[mbCols * mbRows];
             this.mbSegmentId = new int[mbCols * mbRows];       // defaults to 0 (single-segment)
 
             this.motionSearchThreads = session != null ? session.getMotionSearchThreads() : 1;
@@ -390,18 +415,10 @@ public final class VP8Encoder {
             for (int i = 0; i < NUM_TOKEN_PARTITIONS; i++)
                 this.tokens[i] = new BooleanEncoder(perPartBytes);
 
-            // Keyframes always reset MV probs to defaults; P-frames inherit the probs
-            // the decoder carried forward from the prior frame via session.mvProba.
-            this.mvProba = new int[2][VP8Tables.NUM_MV_PROBAS];
-            if (isKeyframe || session == null) {
-                for (int c = 0; c < 2; c++)
-                    System.arraycopy(VP8Tables.MV_DEFAULT_PROBA[c], 0, this.mvProba[c], 0,
-                        VP8Tables.NUM_MV_PROBAS);
-            } else {
-                for (int c = 0; c < 2; c++)
-                    System.arraycopy(session.mvProba[c], 0, this.mvProba[c], 0,
-                        VP8Tables.NUM_MV_PROBAS);
-            }
+            // MV probs start at the defaults every frame, as the mode and token probs below
+            // do: the header clears refresh_entropy_probs, so a decoder drops each frame's
+            // updates once the frame is done and starts the next from the keyframe defaults.
+            this.mvProba = VP8DecoderSession.cloneMvProba();
             // Y-mode / UV-mode probs start at the inter-frame defaults every frame.
             // The decoder re-initialises the same way. Writing an update block in the
             // header mutates these for the rest of the frame only.
@@ -450,31 +467,31 @@ public final class VP8Encoder {
                 segY1Mtx[seg] = QuantMatrix.luma(y1Dc, y1Ac);
                 segY2Mtx[seg] = QuantMatrix.lumaY2(y2Dc, y2Ac);
                 segUvMtx[seg] = QuantMatrix.chroma(uvDc, uvAc);
-                // libwebp-style quantizer-driven lambdas, per-segment. libwebp's
-                // q_i4 / q_uv are the AC-mean over q[1..15] of the respective
-                // matrix - flat AC lane in VP8 so this is simply the AC step
-                // value. These formulas take q_i16 = y2Ac, which diverges from
-                // libwebp's q_i16 = y2Mtx.q[0] = y2Dc; the calibrated PSNR test
-                // thresholds rest on it.
-                int qI4 = y1Ac;
-                int qUv = uvAc;
-                int qI16 = y2Ac;                // this encoder's q_i16; used by segLambdaTrellisI16
+                // libwebp's SetupMatrices lambdas over each matrix's mean step, every
+                // one held at its floor of 1.
+                int qI4 = meanStep(y1Dc, y1Ac);
+                int qI16 = meanStep(y2Dc, y2Ac);
+                int qUv = meanStep(uvDc, uvAc);
                 segLambdaI4[seg] = Math.max(1, (3 * qI4 * qI4) >> 7);
+                segLambdaI16[seg] = Math.max(1, 3 * qI16 * qI16);
                 segLambdaUv[seg] = Math.max(1, (3 * qUv * qUv) >> 6);
+                segLambdaMode[seg] = Math.max(1, (qI4 * qI4) >> 7);
                 segLambdaTrellisI4[seg] = Math.max(1, (7 * qI4 * qI4) >> 3);
                 segLambdaTrellisI16[seg] = Math.max(1, (qI16 * qI16) >> 2);
                 segLambdaTrellisUv[seg] = Math.max(1, (qUv * qUv) << 1);
-                // The libwebp-parity lambdas take libwebp's own q_i16 = y2Dc. No
-                // scorer reads them.
-                int qI16Libwebp = y2Dc;
-                segLambdaI16[seg] = Math.max(1, 3 * qI16Libwebp * qI16Libwebp);
-                segLambdaMode[seg] = Math.max(1, (qI4 * qI4) >> 7);
-                // tlambda is gated on libwebp's method >= 4 && sns_strength > 0.
-                // Our encoder has no method / sns analog, so tlambda stays 0 and
-                // is clamp-to-1 via CheckLambdaValue matching libwebp's guard.
-                int tlambdaScale = 0;
-                segTlambda[seg] = Math.max(1, (tlambdaScale * qI4) >> 5);
             }
+        }
+
+        /**
+         * Returns libwebp's {@code ExpandMatrix} step for a quantizer matrix: the rounded mean of
+         * its 16 steps, the DC step and 15 copies of the AC step.
+         *
+         * @param dc the DC step
+         * @param ac the AC step
+         * @return the mean step
+         */
+        private static int meanStep(int dc, int ac) {
+            return (dc + 15 * ac + 8) >> 4;
         }
 
         /**
@@ -501,22 +518,19 @@ public final class VP8Encoder {
             this.y2Mtx = segY2Mtx[segId];
             this.uvMtx = segUvMtx[segId];
             this.lambdaI4 = segLambdaI4[segId];
+            this.lambdaI16 = segLambdaI16[segId];
             this.lambdaUv = segLambdaUv[segId];
+            this.lambdaMode = segLambdaMode[segId];
             this.lambdaTrellisI4 = segLambdaTrellisI4[segId];
             this.lambdaTrellisI16 = segLambdaTrellisI16[segId];
             this.lambdaTrellisUv = segLambdaTrellisUv[segId];
-            // The libwebp-parity lambdas, swapped with the rest so each holds the
-            // segment's value; no R-D site reads them.
-            this.lambdaI16 = segLambdaI16[segId];
-            this.lambdaMode = segLambdaMode[segId];
-            this.tlambda = segTlambda[segId];
         }
     }
 
     /**
      * Deep-copies the {@code [NUM_TYPES][NUM_BANDS][NUM_CTX][NUM_PROBAS]} proba table.
      */
-    private static int[][][][] deepCloneTokenProba(int @NotNull [][][][] src) {
+    private static int @NotNull [][][][] deepCloneTokenProba(int @NotNull [][][][] src) {
         int[][][][] out = new int[src.length][][][];
         for (int t = 0; t < src.length; t++) {
             out[t] = new int[src[t].length][][];
@@ -603,10 +617,10 @@ public final class VP8Encoder {
      * {@link VP8Tables#SUB_MV_REF_ZERO} sub-MVs. All sub-MVs resolve to {@code (0, 0)}
      * and {@code mb_skip} is set, so the decoded reconstruction is a straight copy of
      * the session's {@code LAST} reference - bit-identical to what ZEROMV+skip would
-     * produce, but routed through the RFC 6386 section 17.3 SPLITMV parse path.
+     * produce, but routed through the RFC 6386 section 16.4 SPLITMV parse path.
      * <p>
-     * Exists to exercise the decoder's SPLITMV wire-format coverage without wiring
-     * SPLITMV into the R-D candidate set. Source pixels are not used for
+     * Exercises the decoder's SPLITMV wire format at a fixed pattern, whatever the R-D
+     * candidate search would pick for the frame. Source pixels are not used for
      * reconstruction - they only drive the quantizer / filter-level derivations in
      * {@link #writeFrameHeader}.
      *
@@ -681,15 +695,16 @@ public final class VP8Encoder {
      * content with meaningful variance spread.
      * <p>
      * When the source has too little variance spread to benefit (e.g. mostly flat
-     * tooltip content), the call falls through to a single-segment encode via
-     * {@link #encode(PixelBuffer, float)}. This keeps callers from paying the 2-4
+     * tooltip content), the call falls through to the single-segment encode
+     * {@link #encode(PixelBuffer, float)} writes. This keeps callers from paying the 2-4
      * byte per-MB segment-tree emit cost on content where segmentation cannot pay
      * off.
      * <p>
      * Gated by an internal spread threshold rather than a caller-tunable setting;
-     * see {@link #computeAutoSegmentAssignment} for the heuristic. Keyframe-only -
-     * P-frame auto-segmentation is separate work (the session-based writer path
-     * does not yet thread an auto-segment flag through).
+     * see {@link #computeAutoSegmentAssignment} for the heuristic. Keyframe-only and
+     * sessionless - a session auto-segments its keyframes through
+     * {@link #encodeKeyframeAutoSegment} and its P-frames through
+     * {@link #encodePFrameAutoSegment}.
      *
      * @param pixels source pixel buffer
      * @param quality encoding quality in {@code [0.0, 1.0]}
@@ -763,7 +778,8 @@ public final class VP8Encoder {
      * <p>
      * When segmentation is enabled, sets {@code s.useSegment = true}, installs
      * {@code AUTO_SEGMENT_QUANT_DELTAS} relative deltas, fills {@code s.mbSegmentId}
-     * with the per-quartile assignment, and calls
+     * with the per-quartile assignment, codes the map at the probabilities its
+     * histogram gives through {@link #setSegmentProbas}, and calls
      * {@link State#rebuildSegmentMatrices} so the per-MB
      * {@link State#applySegment} swap has non-trivial values to pick.
      */
@@ -781,11 +797,39 @@ public final class VP8Encoder {
         s.segmentAbsoluteDelta = false;
         System.arraycopy(assignment, 0, s.mbSegmentId, 0, assignment.length);
         System.arraycopy(quantDelta, 0, s.segmentQuantDelta, 0, 4);
-        // Uniform segment prior: 50/50 at probs[0], 50/50 inside each half.
-        s.segmentProbs[0] = 128;
-        s.segmentProbs[1] = 128;
-        s.segmentProbs[2] = 128;
+        setSegmentProbas(assignment, s.segmentProbs);
         s.rebuildSegmentMatrices(qi);
+    }
+
+    /**
+     * Sets the segment tree's three probabilities from how many macroblocks each segment
+     * holds, as libwebp's {@code SetSegmentProbas} does, so the segment map costs what its
+     * histogram costs rather than two bits a macroblock.
+     *
+     * @param assignment each macroblock's segment, in {@code [0, 3]}
+     * @param probs the three tree probabilities to fill
+     */
+    private static void setSegmentProbas(int @NotNull [] assignment, int @NotNull [] probs) {
+        int[] count = new int[4];
+        for (int segment : assignment)
+            count[segment]++;
+        probs[0] = segmentProba(count[0] + count[1], count[2] + count[3]);
+        probs[1] = segmentProba(count[0], count[1]);
+        probs[2] = segmentProba(count[2], count[3]);
+    }
+
+    /**
+     * Returns a segment-tree branch's probability, libwebp's {@code GetProba}: the share of
+     * its macroblocks taking the left side, scaled to 255 and rounded, or 255 when no
+     * macroblock reaches the branch.
+     *
+     * @param left the macroblocks taking the left side
+     * @param right the macroblocks taking the right side
+     * @return the branch probability
+     */
+    private static int segmentProba(int left, int right) {
+        int total = left + right;
+        return total == 0 ? 255 : (255 * left + total / 2) / total;
     }
 
     /**
@@ -803,8 +847,10 @@ public final class VP8Encoder {
      * (higher quant index = coarser quantization, since VP8 quant step grows with
      * QI) because noise masks artifacts in detailed regions; low-variance MBs stay
      * at the base quantizer to preserve smooth-gradient quality. Values chosen to
-     * hit a ~1-3% bit reduction on mixed-variance natural content without dropping
-     * average PSNR more than ~0.5 dB.
+     * save bytes on mixed-variance natural content without dropping average PSNR
+     * more than ~0.5 dB. A texture the intra predictors reproduce, such as regular
+     * stripes, has no residual left for a coarser quantizer to cut, so segmenting it
+     * costs the map and saves nothing.
      */
     private static final int[] AUTO_SEGMENT_QUANT_DELTAS = { 0, 0, 2, 6 };
 
@@ -876,7 +922,7 @@ public final class VP8Encoder {
         // (mbCols*mbRows is bounded by ~8k for 1920x1080) so O(N log N) is fine.
         int[] sorted = variance.clone();
         java.util.Arrays.sort(sorted);
-        int q1Cut = sorted[(numMbs * 1) / 4];
+        int q1Cut = sorted[numMbs / 4];
         int q2Cut = sorted[(numMbs * 2) / 4];
         int q3Cut = sorted[(numMbs * 3) / 4];
 
@@ -918,11 +964,7 @@ public final class VP8Encoder {
         // deltas; this refresh produces the per-segment quantizers the decoder will
         // actually dequantize with, so the encoder's trellis + residualCost match.
         s.rebuildSegmentMatrices(qi);
-        // Uniform segment prior: 50/50 at probs[0], 50/50 inside each half. Works for
-        // any assignment without requiring histogram analysis.
-        s.segmentProbs[0] = 128;
-        s.segmentProbs[1] = 128;
-        s.segmentProbs[2] = 128;
+        setSegmentProbas(mbSegmentAssignment, s.segmentProbs);
 
         // Derive per-segment effective filter levels for LoopFilter.
         int baseFilterLevel = pickFilterLevel(qi);
@@ -959,7 +1001,7 @@ public final class VP8Encoder {
                 s.lumaStride, s.chromaStride,
                 s.mbCols, s.mbRows,
                 /*simpleFilter=*/ false, baseFilterLevel, /*sharpness=*/ 0,
-                s.mbRefFrame, s.mbModeLfIdx,
+                s.mbRefFrame, s.mbModeLfIdx, s.mbHasCoeffs,
                 s.useLfDelta, s.refLfDelta, s.modeLfDelta,
                 s.mbSegmentId, s.segFilterLevel
             );
@@ -1135,17 +1177,15 @@ public final class VP8Encoder {
                 s.lumaStride, s.chromaStride,
                 s.mbCols, s.mbRows,
                 /*simpleFilter=*/ false, filterLevel, /*sharpness=*/ 0,
-                s.mbRefFrame, s.mbModeLfIdx,
+                s.mbRefFrame, s.mbModeLfIdx, s.mbHasCoeffs,
                 s.useLfDelta, s.refLfDelta, s.modeLfDelta,
                 s.mbSegmentId, s.segFilterLevel
             );
         }
 
         if (session != null) {
-            // Stash MV proba state + this-frame branch counts for the next frame's
-            // header emit (RFC 6386 section 19.2 one-frame-lag proba updates).
-            for (int c = 0; c < 2; c++)
-                System.arraycopy(s.mvProba[c], 0, session.mvProba[c], 0, VP8Tables.NUM_MV_PROBAS);
+            // Stash this frame's branch counts for the next frame's header emit (RFC 6386
+            // section 19.2 one-frame-lag proba updates).
             session.prevMvBranches = s.mvBranches;
             session.prevYModeBranches = s.yModeBranches;
             session.prevUvModeBranches = s.uvModeBranches;
@@ -1340,7 +1380,7 @@ public final class VP8Encoder {
         // frame of a session, prevTokenBranches is null and we emit all zeros.
         emitTokenProbaUpdates(e, s);
 
-        // Per-MB skip-flag proba. Keyframes keep the existing use_skip_proba=0 behaviour;
+        // Per-MB skip-flag proba. Keyframes write use_skip_proba=0;
         // P-frames enable skip with a 50/50 default so the inter-skip MBs actually save
         // bits (one skip bit per MB instead of a zero Y2 + 16 zero YAC + 8 zero UV tokens).
         if (s.isKeyframe) {
@@ -1350,7 +1390,7 @@ public final class VP8Encoder {
             e.encodeUint(INTER_SKIP_PROBA, 8);
         }
 
-        // Inter-frame mode/MV probabilities (RFC 6386 sections 16.2 and 17.2).
+        // Inter-frame mode/MV probabilities (RFC 6386 sections 16.1, 16.2 and 17.2).
         if (!s.isKeyframe) {
             e.encodeUint(INTER_PROB_INTRA, 8);   // prob_intra
             e.encodeUint(INTER_PROB_LAST, 8);    // prob_last
@@ -1437,7 +1477,7 @@ public final class VP8Encoder {
 
     /**
      * Emits the all-or-nothing proba-update block for the inter-frame Y-mode (4 slots)
-     * or UV-mode (3 slots) tree (RFC 6386 section 16.2). A single {@code encodeBool}
+     * or UV-mode (3 slots) tree (RFC 6386 section 16.1). A single {@code encodeBool}
      * gate at 50/50 prob controls whether the full {@code slots * 8} bits of new probs
      * follow. When the update is cost-beneficial the passed {@code probs} array is
      * mutated to the new values so subsequent MB emits use the updated probs.
@@ -1450,7 +1490,7 @@ public final class VP8Encoder {
      * @param prevBranches prior-frame observations (null when no data yet)
      */
     private static void emitIntraModeProbaUpdate(
-        @NotNull BooleanEncoder e, int @NotNull [] probs, int[] @Nullable [] prevBranches
+        @NotNull BooleanEncoder e, int @NotNull [] probs, int @Nullable [][] prevBranches
     ) {
         if (prevBranches == null) {
             e.encodeBool(0);
@@ -1592,79 +1632,49 @@ public final class VP8Encoder {
         Macroblock mb = new Macroblock();
         mb.fromARGB(argb, mbX, mbY, width, height);
 
-        // 2. Extract neighbors for chroma intra prediction (luma neighbors are computed
-        //    inside the per-mode evaluation paths below).
-        short[] yAbove = extractAbove(s.reconY, s.lumaStride, mbX * 16, mbY * 16, 16);
-        short[] yLeft  = extractLeft(s.reconY, s.lumaStride, mbX * 16, mbY * 16, 16);
-        short yAboveLeft = (mbX > 0 && mbY > 0)
-            ? s.reconY[(mbY * 16 - 1) * s.lumaStride + mbX * 16 - 1] : (short) 128;
-        short[] uAbove = extractAbove(s.reconU, s.chromaStride, mbX * 8, mbY * 8, 8);
-        short[] uLeft  = extractLeft(s.reconU, s.chromaStride, mbX * 8, mbY * 8, 8);
-        short[] vAbove = extractAbove(s.reconV, s.chromaStride, mbX * 8, mbY * 8, 8);
-        short[] vLeft  = extractLeft(s.reconV, s.chromaStride, mbX * 8, mbY * 8, 8);
-        short uvAboveLeft = (mbX > 0 && mbY > 0)
-            ? s.reconU[(mbY * 8 - 1) * s.chromaStride + mbX * 8 - 1] : (short) 128;
-        short vuAboveLeft = (mbX > 0 && mbY > 0)
-            ? s.reconV[(mbY * 8 - 1) * s.chromaStride + mbX * 8 - 1] : (short) 128;
-
-        // 3. 16x16 luma path - DCT + trellis + reconstruct into a local 256-sample buffer.
-        short[] predY16 = new short[256];
-        int yMode16 = selectBest16x16Mode(mb.y, yAbove, yLeft, yAboveLeft, predY16);
-        I16Result i16 = trellisI16(s, mb.y, predY16, mbX);
-        long sse16 = sumSquaredError(mb.y, i16.recon);
-        long rdScore16 = sse16 * VP8Costs.RD_DISTO_MULT + (long) i16.rate * s.lambdaTrellisI16;
-
-        // 4. B_PRED luma path - per-sub-block mode + reconstruct into a local 256-sample buffer.
-        BPredResult bpred = encodeBPredLuma(s, mb.y, mbX, mbY);
-
-        // 5. Pick the winner by R-D score. The B_PRED path already accumulates per-sub-block
-        //    {@code sse*RD_DISTO_MULT + rate*lambda_i4}; we compare that against the i16 total.
-        boolean useBPred = bpred.rdScore < rdScore16;
+        // 2. Pick the modes as libwebp's rate-distortion search does: the best 16x16 mode,
+        //    then B_PRED if its sub-blocks score lower, then the best chroma mode.
+        I16Choice i16 = pickBestIntra16(s, mb.y, mbX, mbY);
+        BPredResult bpred = pickBestIntra4(s, mb.y, mbX, mbY, i16.score());
+        boolean useBPred = bpred != null;
+        UvChoice uv = pickBestUv(s, mb, mbX, mbY);
         int mbIdx = mbY * s.mbCols + mbX;
         s.mbIsI4x4[mbIdx] = useBPred;
         s.mbIsInter[mbIdx] = false;
         s.mbRefFrame[mbIdx] = LoopFilter.REF_INTRA;
         s.mbModeLfIdx[mbIdx] = useBPred ? LoopFilter.MODE_BPRED : LoopFilter.MODE_NON_BPRED_INTRA;
 
-        // 6. Chroma: mode selection + DCT + trellis.
-        short[] predU = new short[64];
-        short[] predV = new short[64];
-        int uvMode = selectBestChromaMode(
-            mb.cb, uAbove, uLeft, uvAboveLeft,
-            mb.cr, vAbove, vLeft, vuAboveLeft,
-            predU, predV
-        );
+        // 3. Commit luma reconstruction to the frame's reconY plane.
+        commitLumaToRecon(s, mbX, mbY, useBPred ? bpred.recon : i16.result().recon);
 
-        // 7. Commit luma reconstruction to the frame's reconY plane.
-        commitLumaToRecon(s, mbX, mbY, useBPred ? bpred.recon : i16.recon);
-
-        // 8. Emit per-MB header.
+        // 4. Emit per-MB header.
         BooleanEncoder h = s.header;
         if (useBPred) {
             h.encodeBit(145, 0);                            // is_i4x4 = true
             emitBPredModes(s, h, mbX, bpred.modes);
         } else {
             h.encodeBit(145, 1);                            // 16x16 prediction
-            emitYMode16x16(h, yMode16);
-            // Fill sub-block neighbour context with the analogous B_*_PRED for future MBs.
-            int ctxMode = mb16ToSubMode(yMode16);
+            emitYMode16x16(h, i16.mode());
+            // Fill sub-block neighbour context with the analogous B_*_PRED for later MBs.
+            int ctxMode = mb16ToSubMode(i16.mode());
             java.util.Arrays.fill(s.intraT, mbX * 4, mbX * 4 + 4, ctxMode);
             java.util.Arrays.fill(s.intraL, ctxMode);
         }
-        emitUvMode(h, uvMode);
+        emitUvMode(h, uv.mode());
 
-        // 9. Emit tokens + quantize+emit chroma (using trellis in emit-time order so each
-        //    block sees the correct {@code top_nz + left_nz} context). MB rows are
-        //    interleaved across {@code NUM_TOKEN_PARTITIONS} partitions so a multi-
-        //    threaded decoder can parse rows in parallel.
+        // 5. Emit tokens. Chroma's nz context slots are its own, so the levels picked before
+        //    luma is emitted are the levels its context would have produced now. MB rows are
+        //    interleaved across {@code NUM_TOKEN_PARTITIONS} partitions so a multi-threaded
+        //    decoder can parse rows in parallel.
         BooleanEncoder tokenPart = s.tokens[mbY & (NUM_TOKEN_PARTITIONS - 1)];
-        emitLumaTokens(s, tokenPart, mbX, useBPred, i16.y2ZigZag, useBPred ? bpred.yAc : i16.yAcZigZag);
-        ChromaTrellisResult uResult = trellisAndEmitChroma(s, tokenPart, mbX, mb.cb, predU, /*isU=*/ true);
-        ChromaTrellisResult vResult = trellisAndEmitChroma(s, tokenPart, mbX, mb.cr, predV, /*isU=*/ false);
+        s.mbHasCoeffs[mbIdx] = emitLumaTokens(s, tokenPart, mbX, useBPred, i16.result().y2ZigZag,
+                useBPred ? bpred.yAc : i16.result().yAcZigZag)
+            | emitChromaTokensFromTrellis(s, tokenPart, mbX, uv.u(), /*isU=*/ true)
+            | emitChromaTokensFromTrellis(s, tokenPart, mbX, uv.v(), /*isU=*/ false);
 
-        // 10. Commit chroma reconstruction using the dequantized coefficients from trellis.
-        commitChromaFromDequant(s.reconU, s.chromaStride, mbX, mbY, predU, uResult.dequant);
-        commitChromaFromDequant(s.reconV, s.chromaStride, mbX, mbY, predV, vResult.dequant);
+        // 6. Commit chroma reconstruction using the dequantized coefficients from trellis.
+        commitChromaFromDequant(s.reconU, s.chromaStride, mbX, mbY, uv.predU(), uv.u().dequant);
+        commitChromaFromDequant(s.reconV, s.chromaStride, mbX, mbY, uv.predV(), uv.v().dequant);
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -1728,7 +1738,7 @@ public final class VP8Encoder {
             copyRef8x8(s.session.refU, s.session.refChromaStride, s.reconU, s.chromaStride, mbX, mbY);
             copyRef8x8(s.session.refV, s.session.refChromaStride, s.reconV, s.chromaStride, mbX, mbY);
 
-            clearNzAndIntraContextForInterSkip(s, mbX);
+            clearNzAndIntraContextForInterSkip(s, mbX, /*splitMv=*/ false);
         }
     }
 
@@ -1774,7 +1784,7 @@ public final class VP8Encoder {
             commitChromaBufferToRecon(s.reconU, s.chromaStride, mbX, mbY, predU);
             commitChromaBufferToRecon(s.reconV, s.chromaStride, mbX, mbY, predV);
 
-            clearNzAndIntraContextForInterSkip(s, mbX);
+            clearNzAndIntraContextForInterSkip(s, mbX, /*splitMv=*/ false);
         }
     }
 
@@ -1785,7 +1795,7 @@ public final class VP8Encoder {
      */
     private static final class InterResidualCandidate extends InterCandidate {
         final int mvMode;               // 1 = NEAREST, 2 = NEAR, 3 = NEW
-        final int wireRow, wireCol;
+        final int wireRow, wireCol;     // NEW's MV less the best MV, quarter-pel - what goes on the wire
         final int internalRow, internalCol;
         final short @NotNull [] predU, predV;
         final @NotNull I16Result i16;
@@ -1839,9 +1849,9 @@ public final class VP8Encoder {
             java.util.Arrays.fill(s.intraL, IntraPrediction.B_DC_PRED);
 
             BooleanEncoder tokenPart = s.tokens[mbY & (NUM_TOKEN_PARTITIONS - 1)];
-            emitLumaTokens(s, tokenPart, mbX, /*isBPred=*/ false, i16.y2ZigZag, i16.yAcZigZag);
-            emitChromaTokensFromTrellis(s, tokenPart, mbX, u, /*isU=*/ true);
-            emitChromaTokensFromTrellis(s, tokenPart, mbX, v, /*isU=*/ false);
+            s.mbHasCoeffs[mbIdx] = emitLumaTokens(s, tokenPart, mbX, /*is4x4=*/ false, i16.y2ZigZag, i16.yAcZigZag)
+                | emitChromaTokensFromTrellis(s, tokenPart, mbX, u, /*isU=*/ true)
+                | emitChromaTokensFromTrellis(s, tokenPart, mbX, v, /*isU=*/ false);
             commitChromaFromDequant(s.reconU, s.chromaStride, mbX, mbY, predU, u.dequant);
             commitChromaFromDequant(s.reconV, s.chromaStride, mbX, mbY, predV, v.dequant);
         }
@@ -1893,9 +1903,9 @@ public final class VP8Encoder {
             java.util.Arrays.fill(s.intraL, ctxMode);
 
             BooleanEncoder tokenPart = s.tokens[mbY & (NUM_TOKEN_PARTITIONS - 1)];
-            emitLumaTokens(s, tokenPart, mbX, /*isBPred=*/ false, i16.y2ZigZag, i16.yAcZigZag);
-            emitChromaTokensFromTrellis(s, tokenPart, mbX, u, /*isU=*/ true);
-            emitChromaTokensFromTrellis(s, tokenPart, mbX, v, /*isU=*/ false);
+            s.mbHasCoeffs[mbIdx] = emitLumaTokens(s, tokenPart, mbX, /*is4x4=*/ false, i16.y2ZigZag, i16.yAcZigZag)
+                | emitChromaTokensFromTrellis(s, tokenPart, mbX, u, /*isU=*/ true)
+                | emitChromaTokensFromTrellis(s, tokenPart, mbX, v, /*isU=*/ false);
             commitChromaFromDequant(s.reconU, s.chromaStride, mbX, mbY, predU, u.dequant);
             commitChromaFromDequant(s.reconV, s.chromaStride, mbX, mbY, predV, v.dequant);
         }
@@ -1905,7 +1915,7 @@ public final class VP8Encoder {
      * B_PRED 4x4 sub-block-mode macroblock inside a P-frame. Y-mode emits the
      * {@link IntraPrediction#B_PRED} leaf of {@link VP8Tables#YMODE_TREE}, followed by
      * 16 sub-block modes via the context-free {@link VP8Tables#BMODE_PROBA_INTER} per
-     * RFC 6386 section 16.2. No Y2 block (each 4x4 sub-block has its own DC + AC coefs).
+     * RFC 6386 section 16.1. No Y2 block (each 4x4 sub-block has its own DC + AC coefs).
      */
     private static final class BPredIntraInPCandidate extends InterCandidate {
         final int uvMode;
@@ -1943,9 +1953,9 @@ public final class VP8Encoder {
             commitLumaToRecon(s, mbX, mbY, bpred.recon);
 
             BooleanEncoder tokenPart = s.tokens[mbY & (NUM_TOKEN_PARTITIONS - 1)];
-            emitLumaTokens(s, tokenPart, mbX, /*isBPred=*/ true, /*y2ZigZag=*/ null, bpred.yAc);
-            emitChromaTokensFromTrellis(s, tokenPart, mbX, u, /*isU=*/ true);
-            emitChromaTokensFromTrellis(s, tokenPart, mbX, v, /*isU=*/ false);
+            s.mbHasCoeffs[mbIdx] = emitLumaTokens(s, tokenPart, mbX, /*is4x4=*/ true, /*y2ZigZag=*/ null, bpred.yAc)
+                | emitChromaTokensFromTrellis(s, tokenPart, mbX, u, /*isU=*/ true)
+                | emitChromaTokensFromTrellis(s, tokenPart, mbX, v, /*isU=*/ false);
             commitChromaFromDequant(s.reconU, s.chromaStride, mbX, mbY, predU, u.dequant);
             commitChromaFromDequant(s.reconV, s.chromaStride, mbX, mbY, predV, v.dequant);
         }
@@ -1972,7 +1982,7 @@ public final class VP8Encoder {
         final int @NotNull [] slotRef;         // [slotCount] SUB_MV_REF_LEFT/ABOVE/ZERO/NEW
         final int @NotNull [] slotInternalRow; // [slotCount] chosen internal MV per slot
         final int @NotNull [] slotInternalCol;
-        final int @NotNull [] slotWireRow;     // [slotCount] wire MV (NEW slots only)
+        final int @NotNull [] slotWireRow;     // [slotCount] NEW slot's MV less the best MV, quarter-pel
         final int @NotNull [] slotWireCol;
         final short @NotNull [] predY, predU, predV;
         final int @NotNull [] mvRefProbs;
@@ -2042,14 +2052,15 @@ public final class VP8Encoder {
             commitChromaBufferToRecon(s.reconU, s.chromaStride, mbX, mbY, predU);
             commitChromaBufferToRecon(s.reconV, s.chromaStride, mbX, mbY, predV);
 
-            clearNzAndIntraContextForInterSkip(s, mbX);
+            clearNzAndIntraContextForInterSkip(s, mbX, /*splitMv=*/ true);
         }
     }
 
     /**
      * SPLITMV macroblock with a coded residual ({@code mb_skip = 0}). Same wire
      * layout as {@link SplitMvCandidate} for the MB-type / scheme / sub-MV-ref
-     * bits, but follows with a Y2 + 16 Y AC + chroma token payload built from
+     * bits, but follows with 16 luma blocks that each carry their own DC - no Y2
+     * block, as libvpx codes a SPLITMV residual - and the chroma tokens, built from
      * the (source - per-4x4-MC-prediction) residual. Useful when the per-4x4
      * prediction is close but not exact - the trellis can clean up small
      * mismatches that SPLITMV-skip would leave in the reconstruction.
@@ -2065,7 +2076,7 @@ public final class VP8Encoder {
         final int @NotNull [] slotWireRow;
         final int @NotNull [] slotWireCol;
         final short @NotNull [] predU, predV;
-        final @NotNull I16Result i16;
+        final @NotNull I16Result luma;
         final @NotNull ChromaTrellisResult u;
         final @NotNull ChromaTrellisResult v;
         final int @NotNull [] mvRefProbs;
@@ -2075,7 +2086,7 @@ public final class VP8Encoder {
                                  int @NotNull [] slotInternalRow, int @NotNull [] slotInternalCol,
                                  int @NotNull [] slotWireRow, int @NotNull [] slotWireCol,
                                  short @NotNull [] predU, short @NotNull [] predV,
-                                 @NotNull I16Result i16,
+                                 @NotNull I16Result luma,
                                  @NotNull ChromaTrellisResult u, @NotNull ChromaTrellisResult v,
                                  int @NotNull [] mvRefProbs) {
             super(sse, rate, lambda);
@@ -2090,7 +2101,7 @@ public final class VP8Encoder {
             this.slotWireCol = slotWireCol;
             this.predU = predU;
             this.predV = predV;
-            this.i16 = i16;
+            this.luma = luma;
             this.u = u;
             this.v = v;
             this.mvRefProbs = mvRefProbs;
@@ -2129,15 +2140,15 @@ public final class VP8Encoder {
             s.mbRefFrame[mbIdx] = LoopFilter.REF_LAST;
             s.mbModeLfIdx[mbIdx] = LoopFilter.MODE_SPLITMV;
 
-            commitLumaToRecon(s, mbX, mbY, i16.recon);
+            commitLumaToRecon(s, mbX, mbY, luma.recon);
 
             java.util.Arrays.fill(s.intraT, mbX * 4, mbX * 4 + 4, IntraPrediction.B_DC_PRED);
             java.util.Arrays.fill(s.intraL, IntraPrediction.B_DC_PRED);
 
             BooleanEncoder tokenPart = s.tokens[mbY & (NUM_TOKEN_PARTITIONS - 1)];
-            emitLumaTokens(s, tokenPart, mbX, /*isBPred=*/ false, i16.y2ZigZag, i16.yAcZigZag);
-            emitChromaTokensFromTrellis(s, tokenPart, mbX, u, /*isU=*/ true);
-            emitChromaTokensFromTrellis(s, tokenPart, mbX, v, /*isU=*/ false);
+            s.mbHasCoeffs[mbIdx] = emitLumaTokens(s, tokenPart, mbX, /*is4x4=*/ true, /*y2ZigZag=*/ null, luma.yAcZigZag)
+                | emitChromaTokensFromTrellis(s, tokenPart, mbX, u, /*isU=*/ true)
+                | emitChromaTokensFromTrellis(s, tokenPart, mbX, v, /*isU=*/ false);
             commitChromaFromDequant(s.reconU, s.chromaStride, mbX, mbY, predU, u.dequant);
             commitChromaFromDequant(s.reconV, s.chromaStride, mbX, mbY, predV, v.dequant);
         }
@@ -2154,11 +2165,22 @@ public final class VP8Encoder {
 
     /**
      * Resets the per-MB nz slots and {@code intraT}/{@code intraL} context for an inter-skip MB.
+     * Every luma and chroma slot clears, and the Y2 slot clears unless the MB is SPLITMV, which
+     * leaves it as it found it, as libvpx's {@code vp8_fix_contexts} does and as its decoder's
+     * {@code vp8_reset_mb_tokens_context} reads it.
+     *
+     * @param s the frame state
+     * @param mbX the macroblock column
+     * @param splitMv whether the skipped MB is SPLITMV
      */
-    private static void clearNzAndIntraContextForInterSkip(@NotNull State s, int mbX) {
-        for (int i = 0; i < 9; i++) {
+    private static void clearNzAndIntraContextForInterSkip(@NotNull State s, int mbX, boolean splitMv) {
+        for (int i = 0; i < 8; i++) {
             s.topNz[mbX][i] = 0;
             s.leftNz[i] = 0;
+        }
+        if (!splitMv) {
+            s.topNz[mbX][8] = 0;
+            s.leftNz[8] = 0;
         }
         java.util.Arrays.fill(s.intraT, mbX * 4, mbX * 4 + 4, IntraPrediction.B_DC_PRED);
         java.util.Arrays.fill(s.intraL, IntraPrediction.B_DC_PRED);
@@ -2192,7 +2214,7 @@ public final class VP8Encoder {
      *   <li><b>Intra i16x16 in P</b> - full 16x16 intra encode with inter-frame mode
      *       probabilities.</li>
      *   <li><b>Intra B_PRED in P</b> - 4x4 sub-block-mode intra with fixed inter-frame
-     *       sub-block mode probabilities (RFC 6386 section 16.2). The fallback for
+     *       sub-block mode probabilities (RFC 6386 section 16.1). The fallback for
      *       locally textured MBs where i16 is too coarse.</li>
      * </ul>
      * The winner's {@link InterCandidate#commit} emits its header + residual bits, commits
@@ -2208,7 +2230,7 @@ public final class VP8Encoder {
 
         NearMvs.Result near = new NearMvs.Result();
         // Our encoder only emits LAST-ref MBs, so currentRefFrame is always REF_LAST here.
-        NearMvs.find(s.mbIsInter, s.mbMvRow, s.mbMvCol, s.mbRefFrame, s.mbCols, mbX, mbY,
+        NearMvs.find(s.mbIsInter, s.mbMvRow, s.mbMvCol, s.mbRefFrame, s.mbSplitScheme, s.mbCols, s.mbRows, mbX, mbY,
             LoopFilter.REF_LAST, s.signBiasGolden, s.signBiasAltref, near);
         int[] mvRefProbs = new int[4];
         NearMvs.refProbs(near.cnt, mvRefProbs);
@@ -2254,7 +2276,7 @@ public final class VP8Encoder {
         if (near.cnt[NearMvs.CNT_NEAREST] > 0) {
             best = chooseBetter(best, buildInterResidualCandidate(
                 s, mb, mbX, mbY, /*mvMode=*/ 1,
-                near.nearestRow, near.nearestCol,
+                near.nearestRow, near.nearestCol, near,
                 mvRefProbs, skipBit0, baseInterHeader, lambda
             ));
         }
@@ -2263,13 +2285,13 @@ public final class VP8Encoder {
         if (near.cnt[NearMvs.CNT_NEAR] > 0) {
             best = chooseBetter(best, buildInterResidualCandidate(
                 s, mb, mbX, mbY, /*mvMode=*/ 2,
-                near.nearRow, near.nearCol,
+                near.nearRow, near.nearCol, near,
                 mvRefProbs, skipBit0, baseInterHeader, lambda
             ));
         }
 
         // --- NEW + residual (motion search; skip when (0,0) or coincides with NEAREST/NEAR) ---
-        int[] bestWireMv = findBestMv(s, mb, mbX, mbY);
+        int[] bestWireMv = findBestMv(s, mbX, mbY);
         if (bestWireMv != null && (bestWireMv[0] != 0 || bestWireMv[1] != 0)) {
             int wireRow = bestWireMv[0];
             int wireCol = bestWireMv[1];
@@ -2280,30 +2302,32 @@ public final class VP8Encoder {
             if (!matchesNearest && !matchesNear) {
                 best = chooseBetter(best, buildInterResidualCandidate(
                     s, mb, mbX, mbY, /*mvMode=*/ 3,
-                    wireRow << 1, wireCol << 1,   // wire -> 1/8-pel internal
+                    wireRow << 1, wireCol << 1, near,   // wire -> 1/8-pel internal
                     mvRefProbs, skipBit0, baseInterHeader, lambda
                 ));
             }
         }
 
-        // --- Intra i16x16 in P ---
+        // --- Intra i16x16 in P, sharing one chroma choice with B_PRED in P ---
+        UvChoice uv = pickBestUv(s, mb, mbX, mbY);
         best = chooseBetter(best, buildIntraInPCandidate(
-            s, mb, mbX, mbY, skipBit0, baseIntraHeader, lambda
+            s, mb, mbX, mbY, uv, skipBit0, baseIntraHeader, lambda
         ));
 
-        // --- Intra B_PRED in P (4x4 sub-block modes at fixed probs, RFC 6386 section 16.2) ---
+        // --- Intra B_PRED in P (4x4 sub-block modes at fixed probs, RFC 6386 section 16.1) ---
         best = chooseBetter(best, buildBPredIntraInPCandidate(
-            s, mb, mbX, mbY, skipBit0, baseIntraHeader, lambda
+            s, mb, mbX, mbY, uv, skipBit0, baseIntraHeader, lambda
         ));
 
-        // --- SPLITMV (skip-only, RFC 6386 section 17.3) ---
+        // --- SPLITMV (skip-only, RFC 6386 section 16.4) ---
         // Heuristic gate: skip the per-scheme search when the best non-SPLITMV candidate
         // already has low SSE. Per-sub-block MVs only help when the whole-MB prediction
         // doesn't fit; smooth content where ZEROMV / NEAREST / NEW already nail it
         // cannot benefit from the extra MV-tree bits.
         if (best.sse > SPLITMV_GATE_SSE) {
+            s.session.splitMvSearches++;
             InterCandidate split = buildBestSplitMvCandidate(
-                s, mb, mbX, mbY, mvRefProbs, skipBit0, skipBit1, baseInterHeader, lambda
+                s, mb, mbX, mbY, near, mvRefProbs, skipBit0, skipBit1, baseInterHeader, lambda
             );
             if (split != null) best = chooseBetter(best, split);
         }
@@ -2319,8 +2343,8 @@ public final class VP8Encoder {
      * context is {@code LEFT_ABOVE_BOTH_ZERO} (ctx 4) for every slot.
      * <p>
      * The encoder's {@code bmiRow} / {@code bmiCol} / {@code mbSplitScheme} mirror
-     * is populated to match the decoder so future R-D-integrated SPLITMV emits at
-     * non-zero sub-MVs see consistent neighbour context.
+     * is filled as the decoder fills its own, so every sub-MV context a later MB
+     * reads holds what the decoder will hold.
      * <p>
      * Reconstruction is a direct {@code LAST}-reference copy, matching the decoder's
      * SPLITMV path at all-zero sub-MVs with {@code skip = 1}.
@@ -2333,7 +2357,7 @@ public final class VP8Encoder {
         // is {ref=LAST, mv=(0,0), inter=true}, so neighbour votes in NearMvs are
         // stable across the forced-SPLITMV grid.
         NearMvs.Result near = new NearMvs.Result();
-        NearMvs.find(s.mbIsInter, s.mbMvRow, s.mbMvCol, s.mbRefFrame, s.mbCols, mbX, mbY,
+        NearMvs.find(s.mbIsInter, s.mbMvRow, s.mbMvCol, s.mbRefFrame, s.mbSplitScheme, s.mbCols, s.mbRows, mbX, mbY,
             LoopFilter.REF_LAST, s.signBiasGolden, s.signBiasAltref, near);
         int[] mvRefProbs = new int[4];
         NearMvs.refProbs(near.cnt, mvRefProbs);
@@ -2361,9 +2385,9 @@ public final class VP8Encoder {
         s.mbIsInter[mbIdx] = true;
         s.mbMvRow[mbIdx] = 0;
         s.mbMvCol[mbIdx] = 0;
-        // bmiRow / bmiCol default to 0 from State allocation - explicit fill is a
-        // no-op for this all-zero forced pattern but documents the contract for
-        // future non-zero SPLITMV emit paths.
+        // bmiRow / bmiCol already hold 0 from State allocation; the fill writes this
+        // MB's sixteen sub-MVs explicitly, as the R-D SPLITMV candidates write their
+        // non-zero ones.
         int bmiBase = mbIdx * 16;
         for (int i = 0; i < 16; i++) {
             s.bmiRow[bmiBase + i] = 0;
@@ -2378,11 +2402,11 @@ public final class VP8Encoder {
         copyRef8x8 (s.session.refU, s.session.refChromaStride, s.reconU, s.chromaStride, mbX, mbY);
         copyRef8x8 (s.session.refV, s.session.refChromaStride, s.reconV, s.chromaStride, mbX, mbY);
 
-        clearNzAndIntraContextForInterSkip(s, mbX);
+        clearNzAndIntraContextForInterSkip(s, mbX, /*splitMv=*/ true);
     }
 
     /**
-     * Classifies the sub-MV reference probability context (RFC 6386 section 17.3 /
+     * Classifies the sub-MV reference probability context (RFC 6386 section 16.4 /
      * libvpx {@code vp8_sub_mv_ref_prob3}) given the LEFT and ABOVE neighbour
      * sub-MVs. Returns one of the 5 row indices into {@link VP8Tables#SUB_MV_REF_PROB}:
      * {@code 0 = NORMAL}, {@code 1 = LEFT_ZERO}, {@code 2 = ABOVE_ZERO},
@@ -2421,7 +2445,7 @@ public final class VP8Encoder {
      *   <li>1024 &lt;= gate &lt; 16384 - small additional savings (-484 to -590 bytes total)
      *       at 2-3x the wall time. Marginal byte / runtime tradeoff.</li>
      *   <li>gate &lt; 1024 - further savings (-1892 to -3278 bytes) at 5-12x runtime.
-     *       Worth opting into via a future encoder tier flag, not as the default.</li>
+     *       Not the default, and no option selects it.</li>
      *   <li>gate &gt;&gt; 16384 - savings degrade due to per-frame proba-update ripple when
      *       SPLITMV is picked sporadically on isolated very-high-SSE MBs.</li>
      * </ul>
@@ -2454,19 +2478,19 @@ public final class VP8Encoder {
      * {@code mbIdx * SUB_MV_SLOT_COUNT + subMvSlotBase(scheme) + j}.
      */
     private static int subMvSlotBase(int scheme) {
-        switch (scheme) {
-            case VP8Tables.MBSPLIT_TOP_BOTTOM: return 0;     // slots 0..1
-            case VP8Tables.MBSPLIT_LEFT_RIGHT: return 2;     // slots 2..3
-            case VP8Tables.MBSPLIT_QUARTERS:   return 4;     // slots 4..7
-            case VP8Tables.MBSPLIT_EIGHTS:     return 8;     // slots 8..23
-            default: throw new IllegalStateException("invalid SPLITMV scheme: " + scheme);
-        }
+        return switch (scheme) {
+            case VP8Tables.MBSPLIT_TOP_BOTTOM -> 0;     // slots 0..1
+            case VP8Tables.MBSPLIT_LEFT_RIGHT -> 2;     // slots 2..3
+            case VP8Tables.MBSPLIT_QUARTERS ->   4;     // slots 4..7
+            case VP8Tables.MBSPLIT_EIGHTS ->     8;     // slots 8..23
+            default -> throw new IllegalStateException("invalid SPLITMV scheme: " + scheme);
+        };
     }
 
     /**
      * Resolves the LEFT and ABOVE neighbour sub-MVs for slot {@code j} of SPLITMV
-     * scheme {@code scheme} of MB {@code (mbX, mbY)}. Mirrors VP8Decoder.decodeSplitMv
-     * (lines 1008-1049): intra-MB neighbour MVs come from {@code thisMbSlotRow} /
+     * scheme {@code scheme} of MB {@code (mbX, mbY)}. Mirrors VP8Decoder.decodeSplitMv:
+     * intra-MB neighbour MVs come from {@code thisMbSlotRow} /
      * {@code thisMbSlotCol} (already-resolved earlier slots in raster order); cross-MB
      * lookups read {@link State#bmiRow} / {@link State#bmiCol} when the neighbour MB is
      * SPLITMV ({@code mbSplitScheme[neighbour] >= 0}), else fall back to the MB-level
@@ -2535,6 +2559,7 @@ public final class VP8Encoder {
         int blockX0, int blockY0, int blockW, int blockH,
         int internalRow, int internalCol
     ) {
+        assert s.session != null;
         int refStrideY = s.session.refLumaStride;
         int refH = s.session.refMbRows * 16;
         int lumaY = mbY * 16 + blockY0 + (internalRow >> 3);
@@ -2567,6 +2592,7 @@ public final class VP8Encoder {
         int @NotNull [] slotRow, int @NotNull [] slotCol,
         short @NotNull [] predY, short @NotNull [] predU, short @NotNull [] predV
     ) {
+        assert s.session != null;
         int refStrideY = s.session.refLumaStride;
         int refH = s.session.refMbRows * 16;
         int refStrideC = s.session.refChromaStride;
@@ -2585,8 +2611,7 @@ public final class VP8Encoder {
                 SubpelPrediction.predict6tap(s.session.refY, refStrideY, refH,
                     refX, refYPos, subX, subY, tmp, 4, 4, 4);
                 for (int y = 0; y < 4; y++)
-                    for (int x = 0; x < 4; x++)
-                        predY[(by * 4 + y) * 16 + (bx * 4 + x)] = tmp[y * 4 + x];
+                    System.arraycopy(tmp, y * 4, predY, (by * 4 + y) * 16 + bx * 4, 4);
             }
         }
 
@@ -2634,11 +2659,11 @@ public final class VP8Encoder {
         int blockY0 = (firstK >> 2) * 4;
         int blockW, blockH;
         switch (scheme) {
-            case VP8Tables.MBSPLIT_TOP_BOTTOM: blockW = 16; blockH = 8; break;
-            case VP8Tables.MBSPLIT_LEFT_RIGHT: blockW = 8;  blockH = 16; break;
-            case VP8Tables.MBSPLIT_QUARTERS:   blockW = 8;  blockH = 8;  break;
-            case VP8Tables.MBSPLIT_EIGHTS:     blockW = 4;  blockH = 4;  break;
-            default: throw new IllegalStateException("invalid SPLITMV scheme: " + scheme);
+            case VP8Tables.MBSPLIT_TOP_BOTTOM -> { blockW = 16; blockH = 8; }
+            case VP8Tables.MBSPLIT_LEFT_RIGHT -> { blockW = 8;  blockH = 16; }
+            case VP8Tables.MBSPLIT_QUARTERS ->   { blockW = 8;  blockH = 8; }
+            case VP8Tables.MBSPLIT_EIGHTS ->     { blockW = 4;  blockH = 4; }
+            default -> throw new IllegalStateException("invalid SPLITMV scheme: " + scheme);
         }
         return (blockX0 & 0xFF) | ((blockY0 & 0xFF) << 8)
             | ((blockW & 0xFF) << 16) | ((blockH & 0xFF) << 24);
@@ -2658,15 +2683,15 @@ public final class VP8Encoder {
      * full per-4x4 MC prediction (luma + chroma via RFC 6386 section 17.4 averaging)
      * and evaluates BOTH the skip flavour ({@link SplitMvCandidate}) and the
      * residual flavour ({@link SplitMvResidualCandidate}, which trellises the
-     * (source - per-4x4-MC) residual through the same Y2 + 16 Y AC + chroma
-     * pipeline used by whole-MB inter residuals). Returns the minimum-R-D winner
+     * (source - per-4x4-MC) residual as 16 luma blocks that carry their own DC, through
+     * {@link #trellisSplitMvLuma}, plus chroma). Returns the minimum-R-D winner
      * across all {scheme, flavour} pairs.
      * <p>
      * Returns {@code null} when none of the considered schemes produced a usable
      * prediction (e.g., all NEW searches clipped).
      */
-    private static @org.jetbrains.annotations.Nullable InterCandidate buildBestSplitMvCandidate(
-        @NotNull State s, @NotNull Macroblock mb, int mbX, int mbY,
+    private static @Nullable InterCandidate buildBestSplitMvCandidate(
+        @NotNull State s, @NotNull Macroblock mb, int mbX, int mbY, @NotNull NearMvs.Result near,
         int @NotNull [] mvRefProbs, int skipBit0, int skipBit1, int baseInterHeader, int lambda
     ) {
         InterCandidate best = null;
@@ -2764,17 +2789,21 @@ public final class VP8Encoder {
                     int newWireCol = newWire[1];
                     int newInternalRow = newWireRow << 1;
                     int newInternalCol = newWireCol << 1;
+                    // NEW4x4 goes on the wire as its difference from the best MV, as libvpx's
+                    // write_mv codes it.
+                    int deltaRow = (newInternalRow - near.bestRow) >> 1;
+                    int deltaCol = (newInternalCol - near.bestCol) >> 1;
                     long sse = sseSubBlockAtInternalMv(s, mb, mbX, mbY,
                         blockX0, blockY0, blockW, blockH, newInternalRow, newInternalCol);
                     int rate = VP8Costs.treeLeafBitCost(
                         VP8Tables.SUB_MV_REF_TREE, VP8Tables.SUB_MV_REF_NEW, subMvRefProbs)
-                        + VP8Costs.mvWireBitCost(newWireRow, newWireCol, s.mvProba);
+                        + VP8Costs.mvWireBitCost(deltaRow, deltaCol, s.mvProba);
                     long score = sse * VP8Costs.RD_DISTO_MULT + (long) rate * lambda;
                     if (score < bestScore) {
-                        bestScore = score; bestRef = VP8Tables.SUB_MV_REF_NEW;
+                        bestRef = VP8Tables.SUB_MV_REF_NEW;
                         bestSse = sse; bestRate = rate;
                         bestInternalRow = newInternalRow; bestInternalCol = newInternalCol;
-                        bestWireRow = newWireRow; bestWireCol = newWireCol;
+                        bestWireRow = deltaRow; bestWireCol = deltaCol;
                     }
                 }
 
@@ -2815,25 +2844,23 @@ public final class VP8Encoder {
                 predY, predU, predV, mvRefProbs
             ));
 
-            // Residual flavour: trellis (mb - prediction) through the standard inter
-            // Y2 + 16 Y AC + chroma pipeline (same as InterResidualCandidate). The
-            // decoder treats SPLITMV residuals identically to any other inter
-            // residual (VP8Decoder.decodeInterResidualAndCommit).
-            I16Result i16 = trellisI16(s, mb.y, predY, mbX);
+            // Residual flavour: trellis (mb - prediction) as libvpx codes a SPLITMV
+            // residual - 16 luma blocks that carry their own DC, no Y2 block - plus chroma.
+            I16Result luma = trellisSplitMvLuma(s, mb.y, predY, mbX);
             ChromaTrellisResult u = trellisChroma(s, mbX, mb.cb, predU, /*isU=*/ true);
             ChromaTrellisResult v = trellisChroma(s, mbX, mb.cr, predV, /*isU=*/ false);
             short[] reconU = reconstructChroma8x8(predU, u.dequant);
             short[] reconV = reconstructChroma8x8(predV, v.dequant);
-            long residSse = sumSquaredError(mb.y, i16.recon)
+            long residSse = sumSquaredError(mb.y, luma.recon)
                           + sumSquaredError(mb.cb, reconU)
                           + sumSquaredError(mb.cr, reconV);
             int residTotalRate = skipBit0 + baseInterHeader + splitmvMvRefRate + slotsRate
-                               + i16.rate + u.rate + v.rate;
+                               + luma.rate + u.rate + v.rate;
             best = chooseBetter(best, new SplitMvResidualCandidate(
                 residSse, residTotalRate, lambda, scheme,
                 slotRow16, slotCol16, slotRef,
                 slotInternalRow, slotInternalCol, slotWireRow, slotWireCol,
-                predU, predV, i16, u, v, mvRefProbs
+                predU, predV, luma, u, v, mvRefProbs
             ));
         }
         return best;
@@ -2866,12 +2893,13 @@ public final class VP8Encoder {
 
     /**
      * Builds an {@link InterResidualCandidate} from an MC prediction + trellised residual.
-     * MV is in 1/8-pel internal units. {@code mvMode == 3} (NEW) pays the MV-wire-bit cost;
-     * NEAREST and NEAR (modes 1 and 2) infer the MV from neighbours.
+     * MV is in 1/8-pel internal units. {@code mvMode == 3} (NEW) pays the MV-wire-bit cost
+     * of its difference from {@code near}'s best MV, which is what goes on the wire; NEAREST
+     * and NEAR (modes 1 and 2) infer the MV from neighbours.
      */
     private static @NotNull InterCandidate buildInterResidualCandidate(
         @NotNull State s, @NotNull Macroblock mb, int mbX, int mbY, int mvMode,
-        int internalRow, int internalCol,
+        int internalRow, int internalCol, @NotNull NearMvs.Result near,
         int @NotNull [] mvRefProbs, int skipBit0, int baseInterHeader, int lambda
     ) {
         int wireRow = internalRow >> 1;
@@ -2892,102 +2920,51 @@ public final class VP8Encoder {
                  + sumSquaredError(mb.cr, reconV);
 
         int modeRate = VP8Costs.treeLeafBitCost(VP8Tables.MV_REF_TREE, mvMode, mvRefProbs);
-        int mvRate = (mvMode == 3) ? VP8Costs.mvWireBitCost(wireRow, wireCol, s.mvProba) : 0;
+        int deltaRow = (internalRow - near.bestRow) >> 1;
+        int deltaCol = (internalCol - near.bestCol) >> 1;
+        int mvRate = (mvMode == 3) ? VP8Costs.mvWireBitCost(deltaRow, deltaCol, s.mvProba) : 0;
         int rate = skipBit0 + baseInterHeader + modeRate + mvRate
                  + i16.rate + u.rate + v.rate;
         return new InterResidualCandidate(sse, rate, lambda, mvMode,
-            wireRow, wireCol, internalRow, internalCol,
+            deltaRow, deltaCol, internalRow, internalCol,
             predU, predV, i16, u, v, mvRefProbs);
     }
 
     /**
      * Builds an {@link IntraInPCandidate} - full 16x16 intra-in-P encode with inter-frame
-     * mode probabilities. Runs {@link #selectBest16x16Mode} + {@link #selectBestChromaMode}
-     * internally; residual rates are accumulated from the luma + chroma trellis passes.
+     * mode probabilities. Takes its luma mode from {@link #pickBestIntra16} and its chroma
+     * from {@code uv}; residual rates are accumulated from the luma + chroma trellis passes.
      */
     private static @NotNull InterCandidate buildIntraInPCandidate(
-        @NotNull State s, @NotNull Macroblock mb, int mbX, int mbY,
+        @NotNull State s, @NotNull Macroblock mb, int mbX, int mbY, @NotNull UvChoice uv,
         int skipBit0, int baseIntraHeader, int lambda
     ) {
-        short[] yAbove = extractAbove(s.reconY, s.lumaStride, mbX * 16, mbY * 16, 16);
-        short[] yLeft  = extractLeft(s.reconY, s.lumaStride, mbX * 16, mbY * 16, 16);
-        short yAboveLeft = (mbX > 0 && mbY > 0)
-            ? s.reconY[(mbY * 16 - 1) * s.lumaStride + mbX * 16 - 1] : (short) 128;
-        short[] uAbove = extractAbove(s.reconU, s.chromaStride, mbX * 8, mbY * 8, 8);
-        short[] uLeft  = extractLeft(s.reconU, s.chromaStride, mbX * 8, mbY * 8, 8);
-        short[] vAbove = extractAbove(s.reconV, s.chromaStride, mbX * 8, mbY * 8, 8);
-        short[] vLeft  = extractLeft(s.reconV, s.chromaStride, mbX * 8, mbY * 8, 8);
-        short uvAboveLeft = (mbX > 0 && mbY > 0)
-            ? s.reconU[(mbY * 8 - 1) * s.chromaStride + mbX * 8 - 1] : (short) 128;
-        short vuAboveLeft = (mbX > 0 && mbY > 0)
-            ? s.reconV[(mbY * 8 - 1) * s.chromaStride + mbX * 8 - 1] : (short) 128;
+        I16Choice i16 = pickBestIntra16(s, mb.y, mbX, mbY);
+        long sse = sumSquaredError(mb.y, i16.result().recon) + uv.sse();
 
-        short[] predY16 = new short[256];
-        int yMode16 = selectBest16x16Mode(mb.y, yAbove, yLeft, yAboveLeft, predY16);
-        I16Result i16 = trellisI16(s, mb.y, predY16, mbX);
-
-        short[] predU = new short[64];
-        short[] predV = new short[64];
-        int uvMode = selectBestChromaMode(
-            mb.cb, uAbove, uLeft, uvAboveLeft,
-            mb.cr, vAbove, vLeft, vuAboveLeft,
-            predU, predV
-        );
-        ChromaTrellisResult u = trellisChroma(s, mbX, mb.cb, predU, /*isU=*/ true);
-        ChromaTrellisResult v = trellisChroma(s, mbX, mb.cr, predV, /*isU=*/ false);
-
-        short[] reconU = reconstructChroma8x8(predU, u.dequant);
-        short[] reconV = reconstructChroma8x8(predV, v.dequant);
-        long sse = sumSquaredError(mb.y, i16.recon)
-                 + sumSquaredError(mb.cb, reconU)
-                 + sumSquaredError(mb.cr, reconV);
-
-        int yModeRate = VP8Costs.treeLeafBitCost(VP8Tables.YMODE_TREE, yMode16, s.yModeProba);
-        int uvModeRate = VP8Costs.treeLeafBitCost(VP8Tables.UV_MODE_TREE, uvMode, s.uvModeProba);
+        int yModeRate = VP8Costs.treeLeafBitCost(VP8Tables.YMODE_TREE, i16.mode(), s.yModeProba);
+        int uvModeRate = VP8Costs.treeLeafBitCost(VP8Tables.UV_MODE_TREE, uv.mode(), s.uvModeProba);
         int rate = skipBit0 + baseIntraHeader + yModeRate + uvModeRate
-                 + i16.rate + u.rate + v.rate;
-        return new IntraInPCandidate(sse, rate, lambda, yMode16, uvMode,
-            predU, predV, i16, u, v);
+                 + i16.result().rate + uv.u().rate + uv.v().rate;
+        return new IntraInPCandidate(sse, rate, lambda, i16.mode(), uv.mode(),
+            uv.predU(), uv.predV(), i16.result(), uv.u(), uv.v());
     }
 
     /**
      * Builds a {@link BPredIntraInPCandidate} - B_PRED 4x4 sub-block-mode intra MB inside
-     * a P-frame. Runs {@link #encodeBPredLuma} for the 16 sub-blocks (each picks its best
-     * of 10 modes by per-sub-block R-D), selects a shared chroma mode via
-     * {@link #selectBestChromaMode}, and accumulates the full rate: header + Y-mode tree
-     * (B_PRED leaf) + 16 sub-block modes at fixed {@link VP8Tables#BMODE_PROBA_INTER} +
-     * UV mode + luma 4x4 token rate (no Y2) + chroma token rate.
+     * a P-frame. Takes its 16 sub-block modes from {@link #pickBestIntra4}, unbounded since
+     * the candidate is weighed against the inter candidates rather than 16x16 alone, and its
+     * chroma from {@code uv}, and accumulates the full rate: header + Y-mode tree (B_PRED
+     * leaf) + 16 sub-block modes at fixed {@link VP8Tables#BMODE_PROBA_INTER} + UV mode +
+     * luma 4x4 token rate (no Y2) + chroma token rate.
      */
     private static @NotNull InterCandidate buildBPredIntraInPCandidate(
-        @NotNull State s, @NotNull Macroblock mb, int mbX, int mbY,
+        @NotNull State s, @NotNull Macroblock mb, int mbX, int mbY, @NotNull UvChoice uv,
         int skipBit0, int baseIntraHeader, int lambda
     ) {
-        short[] uAbove = extractAbove(s.reconU, s.chromaStride, mbX * 8, mbY * 8, 8);
-        short[] uLeft  = extractLeft(s.reconU, s.chromaStride, mbX * 8, mbY * 8, 8);
-        short[] vAbove = extractAbove(s.reconV, s.chromaStride, mbX * 8, mbY * 8, 8);
-        short[] vLeft  = extractLeft(s.reconV, s.chromaStride, mbX * 8, mbY * 8, 8);
-        short uvAboveLeft = (mbX > 0 && mbY > 0)
-            ? s.reconU[(mbY * 8 - 1) * s.chromaStride + mbX * 8 - 1] : (short) 128;
-        short vuAboveLeft = (mbX > 0 && mbY > 0)
-            ? s.reconV[(mbY * 8 - 1) * s.chromaStride + mbX * 8 - 1] : (short) 128;
-
-        BPredResult bpred = encodeBPredLuma(s, mb.y, mbX, mbY);
-
-        short[] predU = new short[64];
-        short[] predV = new short[64];
-        int uvMode = selectBestChromaMode(
-            mb.cb, uAbove, uLeft, uvAboveLeft,
-            mb.cr, vAbove, vLeft, vuAboveLeft,
-            predU, predV
-        );
-        ChromaTrellisResult u = trellisChroma(s, mbX, mb.cb, predU, /*isU=*/ true);
-        ChromaTrellisResult v = trellisChroma(s, mbX, mb.cr, predV, /*isU=*/ false);
-
-        short[] reconU = reconstructChroma8x8(predU, u.dequant);
-        short[] reconV = reconstructChroma8x8(predV, v.dequant);
-        long sse = bpred.sse
-                 + sumSquaredError(mb.cb, reconU)
-                 + sumSquaredError(mb.cr, reconV);
+        BPredResult bpred = pickBestIntra4(s, mb.y, mbX, mbY, Long.MAX_VALUE);
+        assert bpred != null : "an unbounded B_PRED search always completes";
+        long sse = bpred.sse + uv.sse();
 
         int yModeRate = VP8Costs.treeLeafBitCost(
             VP8Tables.YMODE_TREE, IntraPrediction.B_PRED, s.yModeProba);
@@ -2996,18 +2973,18 @@ public final class VP8Encoder {
             subModesRate += VP8Costs.treeLeafBitCost(
                 VP8Tables.BMODE_TREE, bpred.modes[i], VP8Tables.BMODE_PROBA_INTER);
         int uvModeRate = VP8Costs.treeLeafBitCost(
-            VP8Tables.UV_MODE_TREE, uvMode, s.uvModeProba);
+            VP8Tables.UV_MODE_TREE, uv.mode(), s.uvModeProba);
         int bpredLumaTokenRate = bpredLumaTokenRate(s, mbX, bpred.yAc);
         int rate = skipBit0 + baseIntraHeader
                  + yModeRate + subModesRate + uvModeRate
-                 + bpredLumaTokenRate + u.rate + v.rate;
-        return new BPredIntraInPCandidate(sse, rate, lambda, uvMode,
-            predU, predV, bpred, u, v);
+                 + bpredLumaTokenRate + uv.u().rate + uv.v().rate;
+        return new BPredIntraInPCandidate(sse, rate, lambda, uv.mode(),
+            uv.predU(), uv.predV(), bpred, uv.u(), uv.v());
     }
 
     /**
      * Computes the bit cost of token-coding the 16 Y AC sub-blocks of a B_PRED MB. Mirrors
-     * {@link #emitLumaTokens}'s {@code isBPred=true} walk: each sub-block is coded as
+     * {@link #emitLumaTokens}'s {@code is4x4=true} walk: each sub-block is coded as
      * {@link VP8Tables#TYPE_I4_AC} starting at coefficient index 0 with a {@code top+left}
      * nz context that propagates through the 4x4 grid in raster order.
      */
@@ -3066,9 +3043,7 @@ public final class VP8Encoder {
      * Returns {@code null} when the prepass determined no valid NEW-MV exists for
      * this MB (all candidates fell outside the reference frame bounds).
      */
-    private static int @org.jetbrains.annotations.Nullable [] findBestMv(
-        @NotNull State s, @NotNull Macroblock mb, int mbX, int mbY
-    ) {
+    private static int @Nullable [] findBestMv(@NotNull State s, int mbX, int mbY) {
         int mbIdx = mbY * s.mbCols + mbX;
         if (!s.cachedMvFound[mbIdx]) return null;
         return new int[] { s.cachedMvWireRow[mbIdx], s.cachedMvWireCol[mbIdx] };
@@ -3125,9 +3100,7 @@ public final class VP8Encoder {
             return;
         }
 
-        java.util.concurrent.ForkJoinPool pool =
-            new java.util.concurrent.ForkJoinPool(s.motionSearchThreads);
-        try {
+        try (java.util.concurrent.ForkJoinPool pool = new java.util.concurrent.ForkJoinPool(s.motionSearchThreads)) {
             pool.submit(() ->
                 java.util.stream.IntStream.range(0, total).parallel().forEach(mvPass)
             ).get();
@@ -3136,8 +3109,6 @@ public final class VP8Encoder {
             throw new RuntimeException("motion-search prepass interrupted", ie);
         } catch (java.util.concurrent.ExecutionException ee) {
             throw new RuntimeException("motion-search prepass failed", ee.getCause());
-        } finally {
-            pool.shutdown();
         }
     }
 
@@ -3196,7 +3167,7 @@ public final class VP8Encoder {
      * @return 2-entry {@code [wireRow, wireCol]} array, or {@code null} if no
      *         valid MV exists for this slot (every candidate clipped)
      */
-    private static int @org.jetbrains.annotations.Nullable [] findBestSubBlockMv(
+    private static int @Nullable [] findBestSubBlockMv(
         @NotNull State s, @NotNull Macroblock mb, int mbX, int mbY,
         int scheme, int j,
         int blockX0, int blockY0, int blockW, int blockH
@@ -3226,11 +3197,12 @@ public final class VP8Encoder {
      * Called exactly once per MB from {@link #runMotionSearchPrepass}; the per-MB
      * serial R-D loop reads the cached result via {@link #findBestMv}.
      */
-    private static int @org.jetbrains.annotations.Nullable [] computeBestMv(
+    private static int @Nullable [] computeBestMv(
         @NotNull State s, @NotNull Macroblock mb, int mbX, int mbY
     ) {
         int baseX = mbX * 16;
         int baseY = mbY * 16;
+        assert s.session != null;
         int refStride = s.session.refLumaStride;
         int refH = s.session.refMbRows * 16;
 
@@ -3342,12 +3314,13 @@ public final class VP8Encoder {
      * @return wire MV in {@code [bestWireRow, bestWireCol]} (quarter-pel units), or
      *         {@code null} if every candidate clipped
      */
-    static int @org.jetbrains.annotations.Nullable [] computeBestSubBlockMv(
+    static int @Nullable [] computeBestSubBlockMv(
         @NotNull State s, @NotNull Macroblock mb, int mbX, int mbY,
         int blockX0, int blockY0, int blockW, int blockH
     ) {
         int baseX = mbX * 16 + blockX0;
         int baseY = mbY * 16 + blockY0;
+        assert s.session != null;
         int refStride = s.session.refLumaStride;
         int refH = s.session.refMbRows * 16;
 
@@ -3453,6 +3426,7 @@ public final class VP8Encoder {
         @NotNull State s, @NotNull Macroblock mb, int mbX, int mbY,
         int blockX0, int blockY0, int blockW, int blockH, int wireRow, int wireCol
     ) {
+        assert s.session != null;
         int refStrideY = s.session.refLumaStride;
         int refH = s.session.refMbRows * 16;
         int lumaIntRow = wireRow << 1;
@@ -3503,6 +3477,7 @@ public final class VP8Encoder {
         @NotNull State s, int mbX, int mbY, int wireRow, int wireCol,
         short @NotNull [] predY, short @NotNull [] predU, short @NotNull [] predV
     ) {
+        assert s.session != null;
         int refStrideY = s.session.refLumaStride;
         int refH = s.session.refMbRows * 16;
         int refStrideC = s.session.refChromaStride;
@@ -3592,7 +3567,7 @@ public final class VP8Encoder {
      * @param probs the 19-element probability vector for this component
      */
     private static void emitMvComponent(
-        @NotNull BooleanEncoder w, int v, int @NotNull [] probs, int[] @Nullable [] branches
+        @NotNull BooleanEncoder w, int v, int @NotNull [] probs, int @Nullable [][] branches
     ) {
         int x = Math.abs(v);
         if (x < VP8Tables.MV_SHORT_COUNT) {
@@ -3638,7 +3613,7 @@ public final class VP8Encoder {
      * Piggybacks on {@link #findTreePath} so the tree traversal logic lives in one place.
      */
     private static void emitSmallMvTreeLeaf(
-        @NotNull BooleanEncoder w, int value, int @NotNull [] smallProbs, int[] @Nullable [] branches
+        @NotNull BooleanEncoder w, int value, int @NotNull [] smallProbs, int @Nullable [][] branches
     ) {
         int[] pathBranches = new int[16];
         int[] pathNodes = new int[16];
@@ -3653,7 +3628,7 @@ public final class VP8Encoder {
     /**
      * Increments {@code branches[slot][outcome]} when {@code branches} is non-null.
      */
-    private static void countBranch(int[] @Nullable [] branches, int slot, int outcome) {
+    private static void countBranch(int @Nullable [][] branches, int slot, int outcome) {
         if (branches != null) branches[slot][outcome]++;
     }
 
@@ -3664,7 +3639,7 @@ public final class VP8Encoder {
      */
     private static void emitTreeLeafCounted(
         @NotNull BooleanEncoder h, int @NotNull [] tree, int mode,
-        int @NotNull [] probs, int[] @Nullable [] branches
+        int @NotNull [] probs, int @Nullable [][] branches
     ) {
         int[] pathBranches = new int[16];
         int[] pathNodes = new int[16];
@@ -3677,20 +3652,14 @@ public final class VP8Encoder {
     }
 
     /**
-     * Output of the per-MB 16x16 luma encode: zig-zag coefficients for emit + reconstruction.
+     * Output of a per-MB luma encode: zig-zag coefficients for emit + reconstruction.
      */
+    @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
     private static final class I16Result {
-        final short[] y2ZigZag;              // Y2 block, zig-zag order (16 entries)
-        final short[][] yAcZigZag;           // 16 Y AC blocks, zig-zag order
+        final short @Nullable [] y2ZigZag;   // Y2 block, zig-zag order (16 entries); null for SPLITMV
+        final short[][] yAcZigZag;           // 16 Y blocks, zig-zag order; AC only behind a Y2 block
         final short[] recon;                 // 256-sample reconstructed MB
         final int rate;                      // sum of residual bit costs across Y2 + 16 Y AC blocks
-
-        I16Result(short[] y2ZigZag, short[][] yAcZigZag, short[] recon, int rate) {
-            this.y2ZigZag = y2ZigZag;
-            this.yAcZigZag = yAcZigZag;
-            this.recon = recon;
-            this.rate = rate;
-        }
     }
 
     /**
@@ -3774,22 +3743,66 @@ public final class VP8Encoder {
     }
 
     /**
+     * DCTs, trellis-quantizes, and reconstructs a SPLITMV macroblock's 16x16 luma residual
+     * as libvpx codes it: no Y2 block, each of the 16 blocks carrying its own DC and coded at
+     * {@link VP8Tables#TYPE_I4_AC} from coefficient 0, as B_PRED's are. Does NOT mutate the
+     * frame-level {@link State#topNz} or {@link State#leftNz} - those are updated by the emit
+     * pass, which leaves the Y2 slots alone.
+     *
+     * @return the coded blocks in {@link I16Result#yAcZigZag}, no Y2 block, the MB-local
+     *         reconstruction and the blocks' token cost
+     */
+    private static @NotNull I16Result trellisSplitMvLuma(
+        @NotNull State s, short @NotNull [] src, short @NotNull [] pred, int mbX
+    ) {
+        int[] topNz = { s.topNz[mbX][0], s.topNz[mbX][1], s.topNz[mbX][2], s.topNz[mbX][3] };
+        int[] leftNz = { s.leftNz[0], s.leftNz[1], s.leftNz[2], s.leftNz[3] };
+        short[][] yZigZag = new short[16][];
+        short[] recon = new short[256];
+        int rate = 0;
+        for (int by = 0; by < 4; by++) {
+            for (int bx = 0; bx < 4; bx++) {
+                short[] residual = new short[16];
+                for (int y = 0; y < 4; y++)
+                    for (int x = 0; x < 4; x++) {
+                        int idx = (by * 4 + y) * 16 + bx * 4 + x;
+                        residual[y * 4 + x] = (short) (src[idx] - pred[idx]);
+                    }
+                short[] coef = new short[16];
+                DCT.forwardDCT(residual, coef);
+                int ctx = topNz[bx] + leftNz[by];
+                short[] zz = new short[16];
+                int nz = TrellisQuantizer.quantize(
+                    s.tokenCosts, coef, zz, ctx, VP8Tables.TYPE_I4_AC, s.y1Mtx, s.lambdaTrellisI4);
+                rate += VP8Costs.residualCost(s.tokenCosts, ctx, VP8Tables.TYPE_I4_AC, 0, zz);
+                yZigZag[by * 4 + bx] = zz;
+                topNz[bx] = nz;
+                leftNz[by] = nz;
+
+                // The trellis left the dequantized coefficients in coef.
+                DCT.inverseDCT(coef, residual);
+                for (int y = 0; y < 4; y++)
+                    for (int x = 0; x < 4; x++) {
+                        int idx = (by * 4 + y) * 16 + bx * 4 + x;
+                        recon[idx] = (short) clamp(pred[idx] + residual[y * 4 + x]);
+                    }
+            }
+        }
+        return new I16Result(null, yZigZag, recon, rate);
+    }
+
+    /**
      * Output of the per-channel chroma trellis pass: per-sub-block dequantized + zig-zag
      * coefficients, nz flags, and the token-emit bit cost. Packed so R-D scoring can
      * enumerate multiple prediction candidates without mutating {@link State#topNz}/
      * {@link State#leftNz} until a winner is picked.
      */
+    @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
     private static final class ChromaTrellisResult {
         final short[][] dequant;            // 4 sub-blocks of raster-order dequantized coefficients
         final short[][] zz;                 // 4 sub-blocks of zig-zag-order quantized levels
         final int[] nz;                     // 4 nz flags in layout {@code [by*2+bx]}
         final int rate;                     // token-emit bit cost in {@code 1/256} bits
-        ChromaTrellisResult(short[][] dequant, short[][] zz, int[] nz, int rate) {
-            this.dequant = dequant;
-            this.zz = zz;
-            this.nz = nz;
-            this.rate = rate;
-        }
     }
 
     /**
@@ -3844,14 +3857,17 @@ public final class VP8Encoder {
      * per-sub-block nz flags into {@code s.topNz[mbX]} / {@code s.leftNz}. Must be called
      * in the same channel order as the trellis (U before V) with the same {@code isU}
      * argument so the context slots line up.
+     *
+     * @return whether any of the four blocks carries a non-zero level
      */
-    private static void emitChromaTokensFromTrellis(
+    private static boolean emitChromaTokensFromTrellis(
         @NotNull State s, @NotNull BooleanEncoder tokens, int mbX,
         @NotNull ChromaTrellisResult tr, boolean isU
     ) {
         int[] top = s.topNz[mbX];
         int[] left = s.leftNz;
         int baseIdx = isU ? 4 : 6;
+        int anyNz = 0;
         for (int by = 0; by < 2; by++) {
             for (int bx = 0; bx < 2; bx++) {
                 int ctx = top[baseIdx + bx] + left[baseIdx + by];
@@ -3861,25 +3877,10 @@ public final class VP8Encoder {
                 int nz = tr.nz[by * 2 + bx];
                 top[baseIdx + bx] = nz;
                 left[baseIdx + by] = nz;
+                anyNz |= nz;
             }
         }
-    }
-
-    /**
-     * Trellis-quantizes one chroma plane and emits its tokens in one call, {@link #trellisChroma}
-     * then {@link #emitChromaTokensFromTrellis}, for the keyframe path and the winning inter /
-     * intra candidates. The returned {@link ChromaTrellisResult#dequant} feeds
-     * {@link #commitChromaFromDequant}.
-     *
-     * @param isU {@code true} for U (context slots 4..5), {@code false} for V (slots 6..7)
-     */
-    private static @NotNull ChromaTrellisResult trellisAndEmitChroma(
-        @NotNull State s, @NotNull BooleanEncoder tokens, int mbX,
-        short @NotNull [] src, short @NotNull [] pred, boolean isU
-    ) {
-        ChromaTrellisResult tr = trellisChroma(s, mbX, src, pred, isU);
-        emitChromaTokensFromTrellis(s, tokens, mbX, tr, isU);
-        return tr;
+        return anyNz != 0;
     }
 
     /**
@@ -3909,46 +3910,55 @@ public final class VP8Encoder {
     /**
      * Output of the per-MB B_PRED evaluation path.
      */
+    @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
     private static final class BPredResult {
         final int[] modes;          // 16 sub-block modes, raster order (by * 4 + bx)
         final short[][] yAc;        // 16 quantized coefficient blocks, <b>zig-zag order</b>
         final short[] recon;        // 256 reconstructed luma samples, MB-local raster
         final long sse;             // sum-of-squared-error vs source
-        final long rdScore;         // {@code RD_DISTO_MULT * sse + rate * lambda} summed over sub-blocks
-
-        BPredResult(int[] modes, short[][] yAc, short[] recon, long sse, long rdScore) {
-            this.modes = modes;
-            this.yAc = yAc;
-            this.recon = recon;
-            this.sse = sse;
-            this.rdScore = rdScore;
-        }
+        final long rdScore;         // the sub-blocks' lambda_mode scores plus the cost of signalling B_PRED
     }
 
     /**
-     * Evaluates the B_PRED path: for each of 16 sub-blocks in raster order, picks the best
-     * of the 10 4x4 prediction modes by SSE, forward-DCTs + quantizes the residual, and
-     * reconstructs into a local 256-sample buffer that subsequent sub-blocks use as
-     * intra neighbours. Does NOT mutate {@code s.reconY}.
+     * Codes a macroblock as B_PRED as libwebp's {@code PickBestIntra4} does, or answers
+     * {@code null} once 16x16 prediction is the cheaper choice. Each sub-block, in raster
+     * order, tries the ten sub-block modes against the sub-blocks reconstructed before it:
+     * trellis-quantized and reconstructed, each mode is scored under {@code lambda_i4} on
+     * its distortion, texture distortion, mode cost and residual rate, a mode other than
+     * DC paying {@link #FLATNESS_PENALTY} when it leaves no more than
+     * {@link #FLATNESS_LIMIT_I4} AC levels. The first lowest score wins, is re-scored under
+     * {@code lambda_mode} and joins a total that starts at the cost of signalling B_PRED;
+     * the search gives up as soon as that total reaches {@code limit}. Does NOT mutate
+     * {@code s.reconY}.
+     * <p>
+     * libwebp also gives up when the sub-block mode costs pass a budget set by its
+     * partition limit. At its default limit sixteen of the dearest mode costs stay under
+     * that budget, so this search keeps none.
+     *
+     * @param limit the {@code lambda_mode} score of the 16x16 choice, or {@link Long#MAX_VALUE}
+     *              to finish the search whatever it costs
+     * @return the B_PRED coding, or {@code null} when its total reaches {@code limit}
      */
-    private static @NotNull BPredResult encodeBPredLuma(@NotNull State s, short @NotNull [] src, int mbX, int mbY) {
+    private static @Nullable BPredResult pickBestIntra4(
+        @NotNull State s, short @NotNull [] src, int mbX, int mbY, long limit
+    ) {
         int[] modes = new int[16];
         short[][] yAc = new short[16][];
         short[] recon = new short[256];
         long totalSse = 0;
-        long totalRDScore = 0;
+        long total = rdScore(s.lambdaMode, VP8Costs.bitCost(0, 145), 0);
 
         // Sub-block mode neighbour context tracked locally (so we don't update s.intraT/L
         // until after we know B_PRED has won).
         int[] localTop = new int[4];
-        for (int bx = 0; bx < 4; bx++) localTop[bx] = s.intraT[mbX * 4 + bx];
+        System.arraycopy(s.intraT, mbX * 4, localTop, 0, 4);
         int[] localLeft = s.intraL.clone();
 
         // Non-zero sub-block contexts tracked locally so token-cost scoring sees the same
         // {@code top_nz + left_nz} values that libwebp's {@code PickBestIntra4} passes into
         // its {@code VP8Residual}. Mirror layout of {@link State#topNz} (rows 0..3 = luma).
         int[] localTopNz = new int[4];
-        for (int bx = 0; bx < 4; bx++) localTopNz[bx] = s.topNz[mbX][bx];
+        System.arraycopy(s.topNz[mbX], 0, localTopNz, 0, 4);
         int[] localLeftNz = { s.leftNz[0], s.leftNz[1], s.leftNz[2], s.leftNz[3] };
 
         for (int by = 0; by < 4; by++) {
@@ -3973,7 +3983,9 @@ public final class VP8Encoder {
                 int bestMode = -1;
                 int bestNz = 0;
                 long bestScore = Long.MAX_VALUE;
-                long bestSseValue = Long.MAX_VALUE;
+                long bestSse = 0;
+                long bestDistortion = 0;
+                long bestRate = 0;
                 short[] cand = new short[16];
                 short[] candResidual = new short[16];
                 short[] candDeq = new short[16];
@@ -3996,14 +4008,20 @@ public final class VP8Encoder {
                         candReconBlk[i] = (short) Math.clamp(cand[i] + candResidual[i], 0, 255);
 
                     long sse = sumSquaredError(srcBlock, candReconBlk);
-                    // R-D: lambda_i4 * mode-tree fixed cost, added to distortion. Residual
-                    // cost is intentionally omitted: including it at small quantizers causes
-                    // the encoder to prefer simpler modes with larger quantization error.
-                    long score = sse * VP8Costs.RD_DISTO_MULT
-                        + (long) modeCosts[mode] * s.lambdaI4;
-                    if (score < bestScore) {
+                    long distortion = sse + weighTexture(DCT.textureDistortion4x4(srcBlock, candReconBlk, 0, 4));
+                    long rate = modeCosts[mode];
+                    if (mode != IntraPrediction.B_DC_PRED && acLevels(candZigZag) <= FLATNESS_LIMIT_I4)
+                        rate += FLATNESS_PENALTY;
+                    // The residual rate only adds, so a mode already behind skips costing it.
+                    if (bestMode >= 0 && rdScore(s.lambdaI4, rate, distortion) >= bestScore)
+                        continue;
+                    rate += VP8Costs.residualCost(s.tokenCosts, ctxNz, VP8Tables.TYPE_I4_AC, 0, candZigZag);
+                    long score = rdScore(s.lambdaI4, rate, distortion);
+                    if (bestMode < 0 || score < bestScore) {
                         bestScore = score;
-                        bestSseValue = sse;
+                        bestSse = sse;
+                        bestDistortion = distortion;
+                        bestRate = rate;
                         bestMode = mode;
                         bestNz = nz;
                         System.arraycopy(candReconBlk, 0, bestRecon, 0, 16);
@@ -4011,10 +4029,12 @@ public final class VP8Encoder {
                     }
                 }
 
+                total += rdScore(s.lambdaMode, bestRate, bestDistortion);
+                if (total >= limit)
+                    return null;
                 modes[by * 4 + bx] = bestMode;
                 yAc[by * 4 + bx] = bestCoef;
-                totalSse += bestSseValue;
-                totalRDScore += bestScore;
+                totalSse += bestSse;
 
                 // Write reconstructed sub-block into the local 16x16 buffer.
                 for (int yy = 0; yy < 4; yy++)
@@ -4028,7 +4048,7 @@ public final class VP8Encoder {
             }
         }
 
-        return new BPredResult(modes, yAc, recon, totalSse, totalRDScore);
+        return new BPredResult(modes, yAc, recon, totalSse, total);
     }
 
     /**
@@ -4046,24 +4066,22 @@ public final class VP8Encoder {
     /**
      * Above-row neighbours for sub-block ({@code by}, {@code bx}): 4 above + 4 above-right,
      * sourced from {@code mbRecon} for sub-blocks within the current MB and from
-     * {@code s.reconY} for the prior MB row. Above-right past the current MB's right edge
-     * is replicated from the rightmost in-MB pixel (matching {@link VP8Decoder}).
+     * {@code s.reconY} for the prior MB row. A sub-block in the MB's right column below its
+     * top row takes its above-right from the row above the MB, as the top-right sub-block
+     * does, where RFC 6386 and libwebp take it: 127 on the frame's top row, the last
+     * sample of the MB above at the frame's right edge.
      */
-    private static short[] neighborAbove8(@NotNull State s, short @NotNull [] mbRecon, int mbX, int mbY, int bx, int by) {
+    private static short @Nullable [] neighborAbove8(@NotNull State s, short @NotNull [] mbRecon, int mbX, int mbY, int bx, int by) {
         if (by == 0 && mbY == 0) return null;
         short[] above = new short[8];
         for (int i = 0; i < 8; i++) {
             int relX = bx * 4 + i;
-            if (by == 0) {
-                int absX = mbX * 16 + relX;
-                int rightLimit = s.lumaStride - 1;
-                int x = Math.min(absX, rightLimit);
-                above[i] = s.reconY[(mbY * 16 - 1) * s.lumaStride + x];
-            } else {
-                int rightLimit = 15;
-                int x = Math.min(relX, rightLimit);
-                above[i] = mbRecon[(by * 4 - 1) * 16 + x];
-            }
+            if (by > 0 && relX < 16)
+                above[i] = mbRecon[(by * 4 - 1) * 16 + relX];
+            else if (mbY == 0)
+                above[i] = 127;
+            else
+                above[i] = s.reconY[(mbY * 16 - 1) * s.lumaStride + Math.min(mbX * 16 + relX, s.lumaStride - 1)];
         }
         return above;
     }
@@ -4071,7 +4089,7 @@ public final class VP8Encoder {
     /**
      * Left-column 4 neighbours for sub-block ({@code by}, {@code bx}).
      */
-    private static short[] neighborLeft4(@NotNull State s, short @NotNull [] mbRecon, int mbX, int mbY, int bx, int by) {
+    private static short @Nullable [] neighborLeft4(@NotNull State s, short @NotNull [] mbRecon, int mbX, int mbY, int bx, int by) {
         if (bx == 0 && mbX == 0) return null;
         short[] left = new short[4];
         for (int i = 0; i < 4; i++) {
@@ -4085,10 +4103,15 @@ public final class VP8Encoder {
         return left;
     }
 
+    /**
+     * Above-left neighbour for sub-block ({@code by}, {@code bx}), or the value
+     * {@link IntraPrediction#aboveLeft} gives a block on the frame's edge.
+     */
     private static short neighborAboveLeft(@NotNull State s, short @NotNull [] mbRecon, int mbX, int mbY, int bx, int by) {
         int absX = mbX * 16 + bx * 4 - 1;
         int absY = mbY * 16 + by * 4 - 1;
-        if (absX < 0 || absY < 0) return 128;
+        if (absY < 0) return 127;
+        if (absX < 0) return 129;
         if (by > 0 && bx > 0)
             return mbRecon[(by * 4 - 1) * 16 + bx * 4 - 1];
         if (by == 0 && bx > 0)
@@ -4127,7 +4150,7 @@ public final class VP8Encoder {
 
     /**
      * Reconstructs a chroma channel from its prediction plus per-sub-block raster-order
-     * dequantized coefficients (as produced by {@link #trellisAndEmitChroma}), and commits
+     * dequantized coefficients (as produced by {@link #trellisChroma}), and commits
      * the result to the appropriate region of {@code plane}.
      */
     private static void commitChromaFromDequant(
@@ -4150,29 +4173,37 @@ public final class VP8Encoder {
 
     /**
      * Emits the luma coefficient tokens for one MB in libwebp's order: Y2 first
-     * (if {@code !isBPred}), then 16 Y sub-blocks in raster order. Coefficient blocks are
+     * (if {@code !is4x4}), then 16 Y sub-blocks in raster order. Coefficient blocks are
      * already in zig-zag order - trellis writes directly to zig-zag. Updates the
      * {@link State#topNz}/{@link State#leftNz} luma slots.
+     *
+     * @param is4x4 whether the MB is B_PRED or SPLITMV, which code no Y2 block and carry
+     *              each luma block's DC in the block
+     * @return whether any luma block, Y2 included, carries a non-zero level
      */
-    private static void emitLumaTokens(
-        @NotNull State s, @NotNull BooleanEncoder t, int mbX, boolean isBPred,
+    private static boolean emitLumaTokens(
+        @NotNull State s, @NotNull BooleanEncoder t, int mbX, boolean is4x4,
         short @Nullable [] y2ZigZag, short @NotNull [] @NotNull [] yAcZigZag
     ) {
         int[] top = s.topNz[mbX];
         int[] left = s.leftNz;
+        int anyNz = 0;
 
         int yFirst;
         int yType;
-        if (isBPred) {
+        if (is4x4) {
             yFirst = 0;
             yType = VP8Tables.TYPE_I4_AC;
-            // B_PRED MBs have no Y2 block - per libwebp ParseResiduals, neither encoder
-            // nor decoder touches the Y2 nz context bits (top[8]/left[8]) here.
+            // B_PRED and SPLITMV MBs have no Y2 block - per libwebp ParseResiduals and
+            // libvpx's has_y2_block, neither encoder nor decoder touches the Y2 nz context
+            // bits (top[8]/left[8]) here.
         } else {
+            assert y2ZigZag != null;
             int ctx = top[8] + left[8];
             int nz = VP8TokenEncoder.emit(
                 t, y2ZigZag, 0, ctx, VP8Tables.TYPE_I16_DC, s.tokenProba, s.tokenBranches);
             top[8] = left[8] = nz;
+            anyNz = nz;
             yFirst = 1;
             yType = VP8Tables.TYPE_I16_AC;
         }
@@ -4183,8 +4214,10 @@ public final class VP8Encoder {
                 int nz = VP8TokenEncoder.emit(
                     t, yAcZigZag[y * 4 + x], yFirst, ctx, yType, s.tokenProba, s.tokenBranches);
                 top[x] = left[y] = nz;
+                anyNz |= nz;
             }
         }
+        return anyNz != 0;
     }
 
     /**
@@ -4195,8 +4228,7 @@ public final class VP8Encoder {
     private static void emitBPredModes(@NotNull State s, @NotNull BooleanEncoder h, int mbX, int @NotNull [] modes) {
         int[][] subModes = new int[4][4];
         for (int by = 0; by < 4; by++)
-            for (int bx = 0; bx < 4; bx++)
-                subModes[by][bx] = modes[by * 4 + bx];
+            System.arraycopy(modes, by * 4, subModes[by], 0, 4);
 
         for (int by = 0; by < 4; by++) {
             for (int bx = 0; bx < 4; bx++) {
@@ -4207,14 +4239,14 @@ public final class VP8Encoder {
             }
         }
 
-        // Update neighbour-mode context for future MBs.
-        for (int bx = 0; bx < 4; bx++) s.intraT[mbX * 4 + bx] = subModes[3][bx];
+        // Update neighbour-mode context for later MBs.
+        System.arraycopy(subModes[3], 0, s.intraT, mbX * 4, 4);
         for (int by = 0; by < 4; by++) s.intraL[by] = subModes[by][3];
     }
 
     /**
      * Emits the 16 sub-block modes for an inter-frame B_PRED macroblock. RFC 6386
-     * section 16.2 specifies that inter-frame B_PRED uses the <b>context-free</b>
+     * section 16.1 specifies that inter-frame B_PRED uses the <b>context-free</b>
      * fixed {@link VP8Tables#BMODE_PROBA_INTER} per sub-block, unlike the keyframe
      * variant in {@link #emitBPredModes} which indexes the context-dependent
      * {@link VP8Tables#KF_BMODE_PROB} by neighbouring modes. Still updates
@@ -4229,7 +4261,7 @@ public final class VP8Encoder {
 
         // Populate cross-MB neighbour context from the bottom-row / right-column sub-blocks,
         // matching the keyframe emitBPredModes bookkeeping.
-        for (int bx = 0; bx < 4; bx++) s.intraT[mbX * 4 + bx] = modes[3 * 4 + bx];
+        System.arraycopy(modes, 3 * 4, s.intraT, mbX * 4, 4);
         for (int by = 0; by < 4; by++) s.intraL[by] = modes[by * 4 + 3];
     }
 
@@ -4240,7 +4272,6 @@ public final class VP8Encoder {
      */
     private static void emitBMode(@NotNull BooleanEncoder h, int mode, int @NotNull [] probs) {
         int[] tree = VP8Tables.BMODE_TREE;
-        int node = 0;
         // Trees can have at most ~9 internal-node hops for the bmode tree.
         int[] pathBranches = new int[9];
         int[] pathNodes = new int[9];
@@ -4251,8 +4282,8 @@ public final class VP8Encoder {
 
     /** Depth-first walks {@code tree} looking for {@code targetLeaf}, recording the branch
      *  bits taken to reach it. Returns the depth on success, 0 on failure. */
-    private static int findTreePath(int[] tree, int node, int targetLeaf,
-                                    int[] branches, int[] nodes, int depth) {
+    private static int findTreePath(int @NotNull [] tree, int node, int targetLeaf,
+                                    int @NotNull [] branches, int @NotNull [] nodes, int depth) {
         for (int branch = 0; branch < 2; branch++) {
             int next = tree[node + branch];
             branches[depth] = branch;
@@ -4268,66 +4299,185 @@ public final class VP8Encoder {
     }
 
     /**
-     * Picks the 16x16 luma mode that minimises {@code RD_DISTO_MULT * sse + modeCost * lambda_d}
-     * against the source samples, where {@code modeCost = VP8Costs.FIXED_COSTS_I16[mode]}
-     * and {@code lambda_d = 106} (libwebp's {@code lambda_d_i16} constant from
-     * {@code RefineUsingDistortion} in {@code src/enc/quant_enc.c}). Fills {@code predOut}
-     * with the winning prediction.
+     * A macroblock's 16x16 luma choice.
      *
-     * @return the selected {@link IntraPrediction} mode constant
+     * @param mode the 16x16 prediction mode, an {@link IntraPrediction} constant
+     * @param result the mode's quantized levels and reconstruction
+     * @param score the mode's score under {@code lambda_mode}, the scale B_PRED is weighed on
      */
-    private static int selectBest16x16Mode(
-        short @NotNull [] src, short[] above, short[] left, short aboveLeft,
-        short @NotNull [] predOut
+    private record I16Choice(int mode, @NotNull I16Result result, long score) { }
+
+    /**
+     * A macroblock's chroma choice.
+     *
+     * @param mode the 8x8 prediction mode, an {@link IntraPrediction} constant
+     * @param predU the U plane's prediction
+     * @param predV the V plane's prediction
+     * @param u the U plane's quantized levels and dequantized coefficients
+     * @param v the V plane's quantized levels and dequantized coefficients
+     * @param sse the squared error of both planes' reconstruction against the source
+     */
+    private record UvChoice(
+        int mode, short @NotNull [] predU, short @NotNull [] predV,
+        @NotNull ChromaTrellisResult u, @NotNull ChromaTrellisResult v, long sse
+    ) { }
+
+    /**
+     * Picks the 16x16 luma mode as libwebp's {@code PickBestIntra16} does. Each of the four
+     * modes, in {@link #INTRA_MODE_ORDER}, is predicted, trellis-quantized and reconstructed,
+     * and scored under {@code lambda_i16} on its distortion, texture distortion, mode cost and
+     * residual rate; the first lowest score wins. While the source holds one value and every
+     * mode tried so far leaves it no AC level, a mode's distortion counts twice, so a flat
+     * block stays flat. The winner's score is then re-taken under {@code lambda_mode}, the
+     * scale {@link #pickBestIntra4} weighs B_PRED on.
+     *
+     * @param s the frame state
+     * @param src the macroblock's 256 luma samples
+     * @param mbX the macroblock column
+     * @param mbY the macroblock row
+     * @return the chosen mode, its coding and its {@code lambda_mode} score
+     */
+    private static @NotNull I16Choice pickBestIntra16(
+        @NotNull State s, short @NotNull [] src, int mbX, int mbY
     ) {
-        int[] modes = { IntraPrediction.DC_PRED, IntraPrediction.V_PRED,
-                        IntraPrediction.H_PRED, IntraPrediction.TM_PRED };
-        int bestMode = IntraPrediction.DC_PRED;
-        long bestScore = Long.MAX_VALUE;
-        short[] candidate = new short[256];
-        for (int mode : modes) {
-            IntraPrediction.predict16x16(candidate, above, left, aboveLeft, mode);
-            long sse = sumSquaredError(src, candidate);
-            long score = sse * VP8Costs.RD_DISTO_MULT + (long) VP8Costs.FIXED_COSTS_I16[mode] * 106;
-            if (score < bestScore) {
-                bestScore = score;
+        short[] above = extractAbove(s.reconY, s.lumaStride, mbX * 16, mbY * 16, 16);
+        short[] left = extractLeft(s.reconY, s.lumaStride, mbX * 16, mbY * 16, 16);
+        short aboveLeft = IntraPrediction.aboveLeft(s.reconY, s.lumaStride, mbX * 16, mbY * 16);
+        boolean flat = isFlatSource16(src);
+
+        int bestMode = -1;
+        I16Result best = null;
+        long bestScore = 0;
+        long bestRate = 0;
+        long bestDistortion = 0;
+        short[] pred = new short[256];
+        for (int mode : INTRA_MODE_ORDER) {
+            IntraPrediction.predict16x16(pred, above, left, aboveLeft, mode);
+            I16Result candidate = trellisI16(s, src, pred, mbX);
+            long distortion = sumSquaredError(src, candidate.recon)
+                + weighTexture(DCT.textureDistortion16x16(src, candidate.recon));
+            if (flat) {
+                int ac = 0;
+                for (short[] block : candidate.yAcZigZag)
+                    ac += acLevels(block);
+                flat = ac <= FLATNESS_LIMIT_I16;
+                if (flat)
+                    distortion *= 2;
+            }
+            long rate = VP8Costs.FIXED_COSTS_I16[mode] + candidate.rate;
+            long score = rdScore(s.lambdaI16, rate, distortion);
+            if (bestMode < 0 || score < bestScore) {
                 bestMode = mode;
-                System.arraycopy(candidate, 0, predOut, 0, 256);
+                best = candidate;
+                bestScore = score;
+                bestRate = rate;
+                bestDistortion = distortion;
             }
         }
-        return bestMode;
+        return new I16Choice(bestMode, best, rdScore(s.lambdaMode, bestRate, bestDistortion));
     }
 
     /**
-     * Picks the shared chroma 8x8 mode that minimises
-     * {@code RD_DISTO_MULT * (sseU + sseV) + VP8Costs.FIXED_COSTS_UV[mode] * 120}, where
-     * {@code 120} is libwebp's {@code lambda_d_uv} ({@code src/enc/quant_enc.c}). Fills
-     * {@code predU}/{@code predV} with the winning predictions.
+     * Picks the chroma mode as libwebp's {@code PickBestUV} does. Each of the four modes, in
+     * {@link #INTRA_MODE_ORDER}, predicts both planes, which are trellis-quantized and
+     * reconstructed, and is scored under {@code lambda_uv} on its distortion, mode cost and
+     * residual rate, a mode other than DC paying {@link #FLATNESS_PENALTY} per block when the
+     * eight blocks keep no more than {@link #FLATNESS_LIMIT_UV} AC levels between them; the
+     * first lowest score wins. Chroma takes no texture distortion, which libwebp leaves out
+     * because it tends to flatten chroma, and is trellis-quantized where libwebp quantizes it
+     * plainly.
+     *
+     * @param s the frame state
+     * @param mb the macroblock's samples
+     * @param mbX the macroblock column
+     * @param mbY the macroblock row
+     * @return the chosen mode with both planes' prediction and coding
      */
-    private static int selectBestChromaMode(
-        short @NotNull [] srcU, short[] aboveU, short[] leftU, short aboveLeftU,
-        short @NotNull [] srcV, short[] aboveV, short[] leftV, short aboveLeftV,
-        short @NotNull [] predU, short @NotNull [] predV
-    ) {
-        int[] modes = { IntraPrediction.DC_PRED, IntraPrediction.V_PRED,
-                        IntraPrediction.H_PRED, IntraPrediction.TM_PRED };
-        int bestMode = IntraPrediction.DC_PRED;
-        long bestScore = Long.MAX_VALUE;
-        short[] candU = new short[64];
-        short[] candV = new short[64];
-        for (int mode : modes) {
-            IntraPrediction.predict8x8(candU, aboveU, leftU, aboveLeftU, mode);
-            IntraPrediction.predict8x8(candV, aboveV, leftV, aboveLeftV, mode);
-            long sse = sumSquaredError(srcU, candU) + sumSquaredError(srcV, candV);
-            long score = sse * VP8Costs.RD_DISTO_MULT + (long) VP8Costs.FIXED_COSTS_UV[mode] * 120;
-            if (score < bestScore) {
+    private static @NotNull UvChoice pickBestUv(@NotNull State s, @NotNull Macroblock mb, int mbX, int mbY) {
+        short[] uAbove = extractAbove(s.reconU, s.chromaStride, mbX * 8, mbY * 8, 8);
+        short[] uLeft = extractLeft(s.reconU, s.chromaStride, mbX * 8, mbY * 8, 8);
+        short[] vAbove = extractAbove(s.reconV, s.chromaStride, mbX * 8, mbY * 8, 8);
+        short[] vLeft = extractLeft(s.reconV, s.chromaStride, mbX * 8, mbY * 8, 8);
+        short uAboveLeft = IntraPrediction.aboveLeft(s.reconU, s.chromaStride, mbX * 8, mbY * 8);
+        short vAboveLeft = IntraPrediction.aboveLeft(s.reconV, s.chromaStride, mbX * 8, mbY * 8);
+
+        UvChoice best = null;
+        long bestScore = 0;
+        for (int mode : INTRA_MODE_ORDER) {
+            short[] predU = new short[64];
+            short[] predV = new short[64];
+            IntraPrediction.predict8x8(predU, uAbove, uLeft, uAboveLeft, mode);
+            IntraPrediction.predict8x8(predV, vAbove, vLeft, vAboveLeft, mode);
+            ChromaTrellisResult u = trellisChroma(s, mbX, mb.cb, predU, /*isU=*/ true);
+            ChromaTrellisResult v = trellisChroma(s, mbX, mb.cr, predV, /*isU=*/ false);
+            long sse = sumSquaredError(mb.cb, reconstructChroma8x8(predU, u.dequant))
+                + sumSquaredError(mb.cr, reconstructChroma8x8(predV, v.dequant));
+            long rate = VP8Costs.FIXED_COSTS_UV[mode] + u.rate + v.rate;
+            if (mode != IntraPrediction.DC_PRED) {
+                int ac = 0;
+                for (int i = 0; i < 4; i++)
+                    ac += acLevels(u.zz[i]) + acLevels(v.zz[i]);
+                if (ac <= FLATNESS_LIMIT_UV)
+                    rate += FLATNESS_PENALTY * 8;
+            }
+            long score = rdScore(s.lambdaUv, rate, sse);
+            if (best == null || score < bestScore) {
+                best = new UvChoice(mode, predU, predV, u, v, sse);
                 bestScore = score;
-                bestMode = mode;
-                System.arraycopy(candU, 0, predU, 0, 64);
-                System.arraycopy(candV, 0, predV, 0, 64);
             }
         }
-        return bestMode;
+        return best;
+    }
+
+    /**
+     * Scores a coding choice as libwebp's {@code SetRDScore} does: its rate at {@code lambda}
+     * plus its distortion at {@link VP8Costs#RD_DISTO_MULT}.
+     *
+     * @param lambda the rate's weight
+     * @param rate the rate in {@code 1/256} bits
+     * @param distortion the distortion, any texture distortion included
+     * @return the score, lower being better
+     */
+    private static long rdScore(int lambda, long rate, long distortion) {
+        return rate * lambda + VP8Costs.RD_DISTO_MULT * distortion;
+    }
+
+    /**
+     * Weighs a texture distortion by {@link #TLAMBDA}, rounding as libwebp's {@code MULT_8B} does.
+     *
+     * @param textureDistortion the texture distortion {@link DCT} measures
+     * @return the weighted texture distortion
+     */
+    private static long weighTexture(int textureDistortion) {
+        return (TLAMBDA * textureDistortion + 128) >> 8;
+    }
+
+    /**
+     * Counts a block's non-zero AC levels, the measure libwebp's {@code IsFlat} holds to a limit.
+     *
+     * @param zigZag the block's 16 quantized levels in zig-zag order, the DC level first
+     * @return the number of non-zero levels after the first
+     */
+    private static int acLevels(short @NotNull [] zigZag) {
+        int count = 0;
+        for (int i = 1; i < 16; i++)
+            if (zigZag[i] != 0)
+                count++;
+        return count;
+    }
+
+    /**
+     * Answers whether every sample of a 16x16 block holds the same value, as libwebp's
+     * {@code IsFlatSource16} does.
+     *
+     * @param src the block's 256 samples
+     * @return whether the block is one value
+     */
+    private static boolean isFlatSource16(short @NotNull [] src) {
+        for (short sample : src)
+            if (sample != src[0])
+                return false;
+        return true;
     }
 
     private static long sumSquaredError(short @NotNull [] a, short @NotNull [] b) {
@@ -4385,7 +4535,7 @@ public final class VP8Encoder {
      * Extracts the bottom row of the MB above (length {@code n}, or {@code null}
      * when this is the top MB row).
      */
-    private static short[] extractAbove(short @NotNull [] plane, int stride, int x0, int y0, int n) {
+    private static short @Nullable [] extractAbove(short @NotNull [] plane, int stride, int x0, int y0, int n) {
         if (y0 == 0) return null;
         short[] row = new short[n];
         int off = (y0 - 1) * stride + x0;
@@ -4397,7 +4547,7 @@ public final class VP8Encoder {
      * Extracts the right column of the MB to the left (length {@code n}, or
      * {@code null} when this is the first MB in a row).
      */
-    private static short[] extractLeft(short @NotNull [] plane, int stride, int x0, int y0, int n) {
+    private static short @Nullable [] extractLeft(short @NotNull [] plane, int stride, int x0, int y0, int n) {
         if (x0 == 0) return null;
         short[] col = new short[n];
         for (int i = 0; i < n; i++) col[i] = plane[(y0 + i) * stride + x0 - 1];
@@ -4440,19 +4590,18 @@ public final class VP8Encoder {
         // stay 0 (simple-filter bilinear reconstruction profile).
         int frameTag = (1 << 4) | (firstSize << 5);
         if (!isKeyframe) frameTag |= 1;
-        frame[offset++] = (byte) (frameTag & 0xFF);
-        frame[offset++] = (byte) ((frameTag >>> 8) & 0xFF);
-        frame[offset++] = (byte) ((frameTag >>> 16) & 0xFF);
+        LittleEndian.writeUint24(frame, offset, frameTag);
+        offset += 3;
 
         if (isKeyframe) {
             frame[offset++] = (byte) 0x9D;
             frame[offset++] = (byte) 0x01;
             frame[offset++] = (byte) 0x2A;
 
-            frame[offset++] = (byte) (width & 0xFF);
-            frame[offset++] = (byte) ((width >>> 8) & 0x3F);
-            frame[offset++] = (byte) (height & 0xFF);
-            frame[offset++] = (byte) ((height >>> 8) & 0x3F);
+            // 14 bits of size, 2 of upscaling left 0.
+            LittleEndian.writeUint16(frame, offset, width & 0x3FFF);
+            LittleEndian.writeUint16(frame, offset + 2, height & 0x3FFF);
+            offset += 4;
         }
 
         System.arraycopy(firstPartition, 0, frame, offset, firstSize);
@@ -4460,10 +4609,8 @@ public final class VP8Encoder {
 
         // (N-1) size prefixes for partitions 0..N-2; the last partition's size is implicit.
         for (int p = 0; p < numParts - 1; p++) {
-            int partSize = tokenPartitions[p].length;
-            frame[offset++] = (byte) (partSize & 0xFF);
-            frame[offset++] = (byte) ((partSize >>> 8) & 0xFF);
-            frame[offset++] = (byte) ((partSize >>> 16) & 0xFF);
+            LittleEndian.writeUint24(frame, offset, tokenPartitions[p].length);
+            offset += 3;
         }
 
         // Concatenated partition bodies.

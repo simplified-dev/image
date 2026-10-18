@@ -24,9 +24,6 @@ dependencies {
     // JetBrains Annotations
     api(libs.annotations)
 
-    // Logging
-    api(libs.log4j2.api)
-
     // Simplified Annotations
     compileOnly(libs.simplified.annotations)
     annotationProcessor(libs.simplified.annotations)
@@ -57,11 +54,11 @@ tasks.withType<Javadoc>().configureEach {
     (options as StandardJavadocDocletOptions).addStringOption("-add-modules", "jdk.incubator.vector")
 }
 
-// NOTICE carries the libwebp, libvpx and RFC 6386 attributions, whose licences require them to
-// travel with a binary as well as with the source. LICENSE.md is the Apache-2.0 text NOTICE points
+// COPYRIGHT.md carries the libwebp, libvpx and RFC 6386 attributions, whose licences require them
+// to travel with a binary as well as with the source. LICENSE.md is the Apache-2.0 text it points
 // to, which the licence asks a redistributor to pass on with the work.
 tasks.jar {
-    metaInf { from("NOTICE", "LICENSE.md") }
+    metaInf { from("COPYRIGHT.md", "LICENSE.md") }
 }
 
 tasks.test {
@@ -71,4 +68,7 @@ tasks.test {
     // `-Dvp8.pythonBin=<path>` on the Gradle command line names the interpreter
     // tried first. See `LibwebpOracle` in the test sources for how one is chosen.
     System.getProperty("vp8.pythonBin")?.let { systemProperty("vp8.pythonBin", it) }
+    // The same for the libvpx oracle's ffmpeg: `-Dvp8.ffmpegBin=<path>` names the build tried
+    // first. See `LibvpxOracle` in the test sources.
+    System.getProperty("vp8.ffmpegBin")?.let { systemProperty("vp8.ffmpegBin", it) }
 }

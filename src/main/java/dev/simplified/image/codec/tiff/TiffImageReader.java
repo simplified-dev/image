@@ -10,6 +10,7 @@ import dev.simplified.image.ImageFormat;
 import dev.simplified.image.PixelBuffer;
 import dev.simplified.image.StaticImageData;
 import dev.simplified.image.codec.ImageReader;
+import dev.simplified.image.codec.common.DecodeBudget;
 import dev.simplified.image.exception.ImageDecodeException;
 import dev.simplified.image.frame.FrameBlend;
 import dev.simplified.image.frame.FrameDisposal;
@@ -63,7 +64,10 @@ public class TiffImageReader implements ImageReader {
         if (pages <= 0)
             throw new ImageDecodeException("TIFF contains no pages");
 
+        DecodeBudget budget = DecodeBudget.open("TIFF");
+
         if (pages == 1) {
+            budget.claim(reader.getWidth(0), reader.getHeight(0));
             BufferedImage image = reader.read(0);
             reader.dispose();
             return StaticImageData.of(PixelBuffer.wrap(image));
@@ -72,6 +76,7 @@ public class TiffImageReader implements ImageReader {
         ConcurrentList<ImageFrame> frames = Concurrent.newList();
 
         for (int i = 0; i < pages; i++) {
+            budget.claim(reader.getWidth(i), reader.getHeight(i));
             BufferedImage image = reader.read(i);
             frames.add(ImageFrame.of(PixelBuffer.wrap(image), PAGE_DELAY_MS, 0, 0, FrameDisposal.NONE, FrameBlend.SOURCE));
         }

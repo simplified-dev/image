@@ -134,6 +134,12 @@ ImageData detected = ImageFactory.fromByteArray(Files.readAllBytes(path));
 ImageData png = ImageFactory.fromByteArray(Files.readAllBytes(path), ImageFormat.PNG);
 ```
 
+A read holds at most `ImageFactory.getMaxPixels()` pixels, 8192 by 8192 unless set,
+across every frame, page and canvas it builds the image from. An image whose header asks
+for more is refused with `ImageTooLargeException` before anything is allocated.
+`ImageFactory.setMaxPixels(long)` sets the budget for every read opened after it, and
+`Long.MAX_VALUE` lifts it.
+
 ### Writing an Image
 
 Every write option type lives in `dev.simplified.image.option` and uses a fluent
@@ -187,7 +193,9 @@ for (ImageFrame frame : animated.getFrames()) {
     // Access per-frame timing, position, disposal, blend mode, and pixel data.
 }
 
-// Re-encode as animated WebP; frames encoded in parallel by default.
+// Re-encode as animated WebP; frames encoded in parallel by default. The writer
+// takes only frames that cover the canvas from the origin and refuses any other,
+// such as a GIF's partial frames.
 ImageFactory.toFile(animated, ImageFormat.WEBP, outputFile,
     WebPWriteOptions.builder().isLossless(false).withQuality(0.9f).build());
 
@@ -268,7 +276,7 @@ src/main/java/dev/simplified/image/
 └── codec/
     ├── ImageReader.java        # reader SPI
     ├── ImageWriter.java        # writer SPI
-    ├── common/                 # LittleEndian, ImageIOBridge - helpers two or more formats share
+    ├── common/                 # LittleEndian, ImageIOBridge, DecodeBudget - helpers two or more formats share
     ├── bmp/                    # BmpImageReader, BmpImageWriter
     ├── gif/                    # GifImageReader, GifImageWriter
     ├── ico/                    # IcoImageReader, IcoImageWriter
@@ -284,7 +292,7 @@ src/main/java/dev/simplified/image/
         ├── RiffContainer.java  # RIFF parse/write
         ├── WebPChunk.java      # chunk model + Type enum for FourCC
         ├── FrameDiffUtil.java  # partial-frame ANMF bounding-box diffing
-        ├── vp8/                # VP8Encoder, VP8Decoder, VP8EncoderSession, VP8DecoderSession + BooleanEncoder/Decoder, DCT, IntraPrediction, SubpelPrediction, Quantizer, QuantMatrix, TrellisQuantizer, Macroblock, NearMvs, VP8Tables, VP8Costs, VP8TokenEncoder/Decoder, LoopFilter, RateDistortion, ChromaUpsampler
+        ├── vp8/                # VP8Encoder, VP8Decoder, VP8EncoderSession, VP8DecoderSession + BooleanEncoder/Decoder, DCT, IntraPrediction, SubpelPrediction, QuantMatrix, TrellisQuantizer, Macroblock, NearMvs, VP8Tables, VP8Costs, VP8TokenEncoder/Decoder, LoopFilter, ChromaUpsampler
         └── vp8l/               # VP8LEncoder, VP8LDecoder, NearLosslessPreprocess + BitReader/Writer, HuffmanTree, ColorCache, LZ77, VP8LTransform
 ```
 
@@ -309,7 +317,6 @@ src/main/java/dev/simplified/image/
 
 | Dependency | Version | Scope |
 |---|---|---|
-| [Log4j2](https://logging.apache.org/log4j/) | 2.25.3 | API |
 | [JetBrains Annotations](https://github.com/JetBrains/java-annotations) | 26.0.2 | API |
 | [Simplified Annotations](https://github.com/simplified-dev/annotations) | 2.7.0 | Compile-only |
 | [collections](https://github.com/Simplified-Dev/collections) | master-SNAPSHOT | API (Simplified-Dev) |
@@ -322,10 +329,6 @@ guidelines, and how to submit a pull request.
 
 ## License
 
-This project is licensed under the **Apache License 2.0** - see
-[LICENSE.md](LICENSE.md) for the full text.
+This project is licensed under the **Apache License 2.0** - see [LICENSE](LICENSE.md) for the full text.
 
-The WebP codecs port code and tables from [libwebp](https://chromium.googlesource.com/webm/libwebp)
-and [libvpx](https://chromium.googlesource.com/webm/libvpx), both BSD-licensed, and from RFC 6386.
-[NOTICE](NOTICE) names what each one supplies and carries their copyright notices and licence
-terms; the jar ships it under `META-INF`, beside `LICENSE.md`.
+See [COPYRIGHT.md](COPYRIGHT.md) for third-party attribution notices, including the libwebp, libvpx and RFC 6386 code the WebP codecs port and upstream library licensing.

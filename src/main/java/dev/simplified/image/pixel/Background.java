@@ -12,11 +12,13 @@ import org.jetbrains.annotations.NotNull;
  * or a repeating two-colour checkerboard (the checkerboard makes the transparent extent of a
  * render visible without an external image editor).
  * <p>
- * {@link #composite(ImageData)} applies the fill as the very last step - the finished frame is
- * laid over a freshly filled background buffer with {@link BlendMode#PREMULTIPLIED}, because a
- * finished render's colours already carry their alpha. A partially transparent pixel therefore
- * shows the fill through it as it would had the render been drawn over the fill directly. A
- * {@link #TRANSPARENT} background is a no-op and leaves output byte-identical to the input.
+ * {@link #composite(ImageData)} applies the fill as the very last step - each frame, composed onto
+ * the whole canvas, is laid over a freshly filled canvas-sized buffer in the convention the image is
+ * held in: {@link BlendMode#PREMULTIPLIED} under an image held in {@link AlphaMode#PREMULTIPLIED},
+ * whose colours already carry their alpha, and {@link BlendMode#STRAIGHT} under a straight one. A
+ * partially transparent pixel therefore shows the fill through it as it would had the image been
+ * drawn over the fill directly. A {@link #TRANSPARENT} background is a no-op and leaves output
+ * byte-identical to the input.
  * <p>
  * A fill colour is straight colour. Under an image held in {@link AlphaMode#PREMULTIPLIED} the fill
  * is premultiplied before the image is laid over it, so the composite holds premultiplied colour
@@ -76,12 +78,19 @@ public sealed interface Background permits Background.Solid, Background.Checkerb
     void fill(@NotNull PixelBuffer target);
 
     /**
-     * Composites {@code image} over this background, applied as the very last step. Each frame is
-     * laid with {@link BlendMode#PREMULTIPLIED} onto a freshly filled background buffer of the same
-     * size; per-frame timing and metadata are preserved, and the result holds the convention
-     * {@code image} holds. Under an image held in {@link AlphaMode#PREMULTIPLIED} the fill is
-     * premultiplied first. A {@linkplain #isTransparent() transparent} background returns
-     * {@code image} unchanged.
+     * Composites {@code image} over this background, applied as the very last step. The image is first
+     * {@linkplain ImageData#toCanvasFrames() composed onto whole canvases}, so the fill covers the
+     * canvas outside every frame, a checkerboard is anchored at the canvas origin, and a partly
+     * transparent frame shows the frames beneath it rather than the fill. Each canvas is then laid over
+     * a freshly filled buffer of the canvas size, in the convention {@code image} holds - with
+     * {@link BlendMode#PREMULTIPLIED} and a premultiplied fill under {@link AlphaMode#PREMULTIPLIED},
+     * with {@link BlendMode#STRAIGHT} under {@link AlphaMode#STRAIGHT} - and the result holds that
+     * convention. A {@linkplain #isTransparent() transparent} background returns {@code image}
+     * unchanged.
+     * <p>
+     * An animation keeps its canvas size, each frame's timing, and - when it is an
+     * {@link AnimatedImageData} - its loop count and background colour. Each frame of the result is
+     * the canvas the composed frame covers, so it replaces the frame before it.
      *
      * @param image the finished render
      * @return the backgrounded image, or {@code image} unchanged when this background is transparent
@@ -90,25 +99,31 @@ public sealed interface Background permits Background.Solid, Background.Checkerb
         if (isTransparent()) return image;
 
         AlphaMode alphaMode = image.getAlphaMode();
+        ImageData canvas = image.toCanvasFrames();
 
-        if (!image.isAnimated())
-            return StaticImageData.of(over(image.getFrames().getFirst().pixels(), alphaMode), alphaMode);
+        if (!canvas.isAnimated())
+            return StaticImageData.of(over(canvas.getFrames().getFirst().pixels(), alphaMode), alphaMode);
 
-        AnimatedImageData.Builder builder = AnimatedImageData.builder().withAlphaMode(alphaMode);
-        if (image instanceof AnimatedImageData animated)
+        AnimatedImageData.Builder builder = AnimatedImageData.builder()
+            .withWidth(canvas.getWidth())
+            .withHeight(canvas.getHeight())
+            .withAlphaMode(alphaMode);
+
+        if (canvas instanceof AnimatedImageData animated)
             builder.withLoopCount(animated.getLoopCount()).withBackgroundColor(animated.getBackgroundColor());
-        for (ImageFrame frame : image.getFrames())
+        for (ImageFrame frame : canvas.getFrames())
             builder.withFrame(frame.withPixels(over(frame.pixels(), alphaMode)));
 
         return builder.build();
     }
 
     /**
-     * Returns a new buffer the size of {@code rendered} with this background filled underneath -
-     * premultiplied when {@code alphaMode} is {@link AlphaMode#PREMULTIPLIED} - and {@code rendered}
-     * laid on top with {@link BlendMode#PREMULTIPLIED}.
+     * Returns a new buffer the size of {@code rendered} with this background filled underneath and
+     * {@code rendered} laid on top, both in {@code alphaMode}: the fill premultiplied and the render
+     * laid with {@link BlendMode#PREMULTIPLIED} under {@link AlphaMode#PREMULTIPLIED}, the fill as given
+     * and the render laid with {@link BlendMode#STRAIGHT} under {@link AlphaMode#STRAIGHT}.
      *
-     * @param rendered the finished frame laid over the fill
+     * @param rendered the composed canvas laid over the fill
      * @param alphaMode the convention {@code rendered} is held in, which the fill is laid down in
      * @return a new buffer holding {@code rendered} over the fill
      */
@@ -116,10 +131,12 @@ public sealed interface Background permits Background.Solid, Background.Checkerb
         PixelBuffer out = PixelBuffer.create(rendered.width(), rendered.height());
         this.fill(out);
 
-        if (alphaMode == AlphaMode.PREMULTIPLIED)
+        if (alphaMode == AlphaMode.PREMULTIPLIED) {
             out.premultiplyAlpha();
+            out.blit(rendered, 0, 0, BlendMode.PREMULTIPLIED);
+        } else
+            out.blit(rendered, 0, 0, BlendMode.STRAIGHT);
 
-        out.blit(rendered, 0, 0, BlendMode.PREMULTIPLIED);
         return out;
     }
 

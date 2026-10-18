@@ -1,10 +1,13 @@
 package dev.simplified.image.codec.webp.vp8;
 
+import dev.simplified.annotations.UtilityClass;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 /**
- * Bilinear 4:2:0 chroma upsampling for VP8 decode, matching libwebp's fancy upsampler
- * ({@code src/dsp/upsampling.c} + {@code EmitFancyRGB} in {@code src/dec/io_dec.c}).
+ * Bilinear 4:2:0 chroma upsampling and YCbCr-to-RGB conversion for VP8 decode, matching
+ * libwebp's fancy upsampler ({@code src/dsp/upsampling.c} + {@code EmitFancyRGB} in
+ * {@code src/dec/io_dec.c}) and its {@code VP8YuvToRgb} ({@code src/dsp/yuv.h}) bit for bit.
  * <p>
  * Given chroma samples laid out as a 2x2 square
  * <pre>
@@ -21,9 +24,8 @@ import org.jetbrains.annotations.NotNull;
  *
  * @see <a href="https://chromium.googlesource.com/webm/libwebp/+/refs/heads/main/src/dsp/upsampling.c">libwebp upsampling.c</a>
  */
+@UtilityClass
 final class ChromaUpsampler {
-
-    private ChromaUpsampler() { }
 
     /**
      * Fancy-upsamples an entire frame. Output is written as ARGB {@code 0xFF000000 | ...}
@@ -55,7 +57,7 @@ final class ChromaUpsampler {
             planeU, planeV, 0,
             planeU, planeV, 0,
             out, 0, -1,
-            width, uvStride
+            width
         );
 
         // Main loop: emits output pairs (y, y+1) for y=1,3,5,..., using chroma rows (y-1)/2
@@ -75,7 +77,7 @@ final class ChromaUpsampler {
                 planeU, planeV, topChromaRow * uvStride,
                 planeU, planeV, curChromaRow * uvStride,
                 out, topDstRow * width, botDstRow * width,
-                width, uvStride
+                width
             );
             y += 2;
         }
@@ -91,7 +93,7 @@ final class ChromaUpsampler {
                 planeU, planeV, lastChromaRow * uvStride,
                 planeU, planeV, lastChromaRow * uvStride,
                 out, lastYRow * width, -1,
-                width, uvStride
+                width
             );
         }
     }
@@ -115,34 +117,32 @@ final class ChromaUpsampler {
      * @param topDstOff output offset for the top row
      * @param botDstOff output offset for the bottom row, or {@code -1} if no bottom row
      * @param len number of output columns (image width)
-     * @param uvStride chroma row stride (unused here since offsets are pre-computed; kept for
-     *                 symmetry with libwebp's signature)
      */
     private static void upsampleLinePair(
-        short[] topY, int topYOff,
-        short[] botY, int botYOff,
-        short[] topU, short[] topV, int topUvOff,
-        short[] curU, short[] curV, int curUvOff,
-        int[] out, int topDstOff, int botDstOff,
-        int len, int uvStride
+        short @NotNull [] topY, int topYOff,
+        short @Nullable [] botY, int botYOff,
+        short @NotNull [] topU, short @NotNull [] topV, int topUvOff,
+        short @NotNull [] curU, short @NotNull [] curV, int curUvOff,
+        int @NotNull [] out, int topDstOff, int botDstOff,
+        int len
     ) {
         int lastPixelPair = (len - 1) >> 1;
-        int tlU = topU[topUvOff + 0] & 0xFF;
-        int tlV = topV[topUvOff + 0] & 0xFF;
-        int lU = curU[curUvOff + 0] & 0xFF;
-        int lV = curV[curUvOff + 0] & 0xFF;
+        int tlU = topU[topUvOff] & 0xFF;
+        int tlV = topV[topUvOff] & 0xFF;
+        int lU = curU[curUvOff] & 0xFF;
+        int lV = curV[curUvOff] & 0xFF;
 
         // First output pixel: collapses the 4-tap bilinear to a 2-tap vertical (same chroma
         // column on both sides, so the horizontal component weight-sums to 0).
         {
             int u0 = (3 * tlU + lU + 2) >> 2;
             int v0 = (3 * tlV + lV + 2) >> 2;
-            out[topDstOff + 0] = yuvToArgb(topY[topYOff + 0] & 0xFF, u0, v0);
+            out[topDstOff] = yuvToArgb(topY[topYOff] & 0xFF, u0, v0);
         }
         if (botY != null) {
             int u0 = (3 * lU + tlU + 2) >> 2;
             int v0 = (3 * lV + tlV + 2) >> 2;
-            out[botDstOff + 0] = yuvToArgb(botY[botYOff + 0] & 0xFF, u0, v0);
+            out[botDstOff] = yuvToArgb(botY[botYOff] & 0xFF, u0, v0);
         }
 
         for (int x = 1; x <= lastPixelPair; x++) {
@@ -165,7 +165,7 @@ final class ChromaUpsampler {
             int u1 = (diag03U + tU) >> 1;
             int v1 = (diag03V + tV) >> 1;
             out[topDstOff + 2 * x - 1] = yuvToArgb(topY[topYOff + 2 * x - 1] & 0xFF, u0, v0);
-            out[topDstOff + 2 * x - 0] = yuvToArgb(topY[topYOff + 2 * x - 0] & 0xFF, u1, v1);
+            out[topDstOff + 2 * x] = yuvToArgb(topY[topYOff + 2 * x] & 0xFF, u1, v1);
 
             if (botY != null) {
                 int bu0 = (diag03U + lU) >> 1;
@@ -173,7 +173,7 @@ final class ChromaUpsampler {
                 int bu1 = (diag12U + cU) >> 1;
                 int bv1 = (diag12V + cV) >> 1;
                 out[botDstOff + 2 * x - 1] = yuvToArgb(botY[botYOff + 2 * x - 1] & 0xFF, bu0, bv0);
-                out[botDstOff + 2 * x - 0] = yuvToArgb(botY[botYOff + 2 * x - 0] & 0xFF, bu1, bv1);
+                out[botDstOff + 2 * x] = yuvToArgb(botY[botYOff + 2 * x] & 0xFF, bu1, bv1);
             }
 
             tlU = tU; tlV = tV;
@@ -195,20 +195,30 @@ final class ChromaUpsampler {
     }
 
     /**
-     * BT.601 YCbCr -> ARGB conversion for a single pixel. Keeps the same coefficients the
-     * prior nearest-neighbor decoder used: {@code y -= 16}, {@code u -= 128}, {@code v -= 128},
-     * {@code R = clamp((298y + 409v + 128) >> 8)} etc. Not bit-exact with libwebp's YUV->RGB
-     * (libwebp uses a different fixed-point layout), but the output differs by at most 1 LSB
-     * per channel, well below the upsampling drift this task was chasing.
+     * Converts one BT.601 YCbCr pixel to opaque ARGB as libwebp's {@code VP8YuvToRgb} does
+     * ({@code src/dsp/yuv.h}): each channel sums {@link #multHi} terms and an offset in 14-bit
+     * fixed point, then {@link #clip8} drops the six fraction bits.
      */
     private static int yuvToArgb(int y, int u, int v) {
-        int yy = y - 16;
-        int cb = u - 128;
-        int cr = v - 128;
-        int r = Math.clamp((298 * yy + 409 * cr + 128) >> 8, 0, 255);
-        int g = Math.clamp((298 * yy - 100 * cb - 208 * cr + 128) >> 8, 0, 255);
-        int b = Math.clamp((298 * yy + 516 * cb + 128) >> 8, 0, 255);
+        int r = clip8(multHi(y, 19077) + multHi(v, 26149) - 14234);
+        int g = clip8(multHi(y, 19077) - multHi(u, 6419) - multHi(v, 13320) + 8708);
+        int b = clip8(multHi(y, 19077) + multHi(u, 33050) - 17685);
         return 0xFF000000 | (r << 16) | (g << 8) | b;
+    }
+
+    /**
+     * Returns the high bits of a sample's product with a coefficient, libwebp's {@code MultHi}.
+     */
+    private static int multHi(int value, int coefficient) {
+        return (value * coefficient) >> 8;
+    }
+
+    /**
+     * Drops the six fraction bits of a 14-bit fixed-point channel, clamping it to {@code [0, 255]},
+     * libwebp's {@code VP8Clip8}.
+     */
+    private static int clip8(int value) {
+        return (value & ~0x3FFF) == 0 ? value >> 6 : value < 0 ? 0 : 255;
     }
 
 }

@@ -1,5 +1,6 @@
 package dev.simplified.image.codec.webp.vp8;
 
+import dev.simplified.annotations.UtilityClass;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -23,9 +24,8 @@ import org.jetbrains.annotations.Nullable;
  * The returned value (0 if the block is empty, 1 otherwise) is suitable for
  * carrying into the next block's context computation.
  */
+@UtilityClass
 final class VP8TokenEncoder {
-
-    private VP8TokenEncoder() { }
 
     /**
      * Emits a single 4x4 block's coefficients through the token tree. Optionally
@@ -56,7 +56,7 @@ final class VP8TokenEncoder {
         int ctx0,
         int coeffType,
         int @NotNull [] @NotNull [] @NotNull [] @NotNull [] probas,
-        int[] @Nullable [] @Nullable [] @Nullable [] @Nullable [] branches
+        int @Nullable [][][][][] branches
     ) {
         // Locate the last non-zero coefficient (or -1 if all zero).
         int last = -1;
@@ -153,7 +153,7 @@ final class VP8TokenEncoder {
      * Emits {@code p[idx]}-prob bit and, when {@code bctx} is non-null, bumps {@code bctx[idx][bit]}.
      */
     private static void writeBit(
-        @NotNull BooleanEncoder enc, int @NotNull [] p, int[] @Nullable [] bctx, int idx, int bit
+        @NotNull BooleanEncoder enc, int @NotNull [] p, int @Nullable [][] bctx, int idx, int bit
     ) {
         enc.encodeBit(p[idx], bit);
         if (bctx != null) bctx[idx][bit]++;
@@ -164,7 +164,7 @@ final class VP8TokenEncoder {
      * extra bits that identify a coefficient magnitude of 11 or greater.
      */
     private static void emitCategory(
-        @NotNull BooleanEncoder enc, int @NotNull [] p, int[] @Nullable [] bctx, int v
+        @NotNull BooleanEncoder enc, int @NotNull [] p, int @Nullable [][] bctx, int v
     ) {
         int residue;
         int mask;
@@ -172,7 +172,7 @@ final class VP8TokenEncoder {
         if (v < 3 + (8 << 1)) {                // Cat3: v in 11..18, 3 extra bits
             writeBit(enc, p, bctx, 8, 0);
             writeBit(enc, p, bctx, 9, 0);
-            residue = v - (3 + (8 << 0));
+            residue = v - (3 + 8);
             mask = 1 << 2;
             tab = VP8Tables.CAT3;
         } else if (v < 3 + (8 << 2)) {         // Cat4: v in 19..34, 4 extra bits
