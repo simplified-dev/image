@@ -42,10 +42,10 @@ public class PngImageWriter implements ImageWriter {
 
         ImageWriteParam param = writer.getDefaultWriteParam();
 
-        if (options instanceof PngWriteOptions pngOptions && param.canWriteCompressed()) {
+        if (options instanceof PngWriteOptions(int compressionLevel) && param.canWriteCompressed()) {
             param.setCompressionMode(ImageWriteParam.MODE_EXPLICIT);
             // PNG compression level 0-9 maps to quality 1.0-0.0 (inverted)
-            param.setCompressionQuality(1.0f - (pngOptions.compressionLevel() / 9.0f));
+            param.setCompressionQuality(1.0f - (compressionLevel / 9.0f));
         }
 
         writer.write(null, new IIOImage(image, null, null), param);

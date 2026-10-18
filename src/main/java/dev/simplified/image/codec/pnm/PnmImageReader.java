@@ -1,6 +1,5 @@
 package dev.simplified.image.codec.pnm;
 
-import dev.simplified.annotations.SilentThrows;
 import dev.simplified.image.ImageData;
 import dev.simplified.image.ImageFormat;
 import dev.simplified.image.PixelBuffer;
@@ -37,7 +36,6 @@ public class PnmImageReader implements ImageReader {
     }
 
     @Override
-    @SilentThrows
     public @NotNull ImageData read(byte @NotNull [] data, @Nullable ImageReadOptions options) {
         if (data.length < 2 || data[0] != 'P')
             throw new ImageDecodeException("Not a PNM file");

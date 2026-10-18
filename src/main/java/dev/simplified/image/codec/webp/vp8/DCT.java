@@ -1,5 +1,6 @@
 package dev.simplified.image.codec.webp.vp8;
 
+import dev.simplified.annotations.UtilityClass;
 import org.jetbrains.annotations.NotNull;
 
 /**
@@ -15,6 +16,7 @@ import org.jetbrains.annotations.NotNull;
  * error in the decoded image. The texture distortion ports {@code TTransform},
  * {@code Disto4x4_C} and {@code Disto16x16_C} from {@code src/dsp/enc.c}.
  */
+@UtilityClass
 final class DCT {
 
     /**
@@ -32,8 +34,6 @@ final class DCT {
      */
     private static final int C2 = 35468;
 
-    private DCT() { }
-
     /**
      * Forward 4x4 DCT matching libwebp's {@code FTransform_C}.
      *
@@ -46,7 +46,7 @@ final class DCT {
         // Horizontal pass (per row i).
         for (int i = 0; i < 4; i++) {
             int row = i * 4;
-            int d0 = input[row + 0];
+            int d0 = input[row];
             int d1 = input[row + 1];
             int d2 = input[row + 2];
             int d3 = input[row + 3];
@@ -54,7 +54,7 @@ final class DCT {
             int a1 = d1 + d2;
             int a2 = d1 - d2;
             int a3 = d0 - d3;
-            tmp[row + 0] = (a0 + a1) * 8;
+            tmp[row] = (a0 + a1) * 8;
             tmp[row + 1] = (a2 * 2217 + a3 * 5352 + 1812) >> 9;
             tmp[row + 2] = (a0 - a1) * 8;
             tmp[row + 3] = (a3 * 2217 - a2 * 5352 + 937) >> 9;
@@ -62,11 +62,11 @@ final class DCT {
 
         // Vertical pass (per column i).
         for (int i = 0; i < 4; i++) {
-            int a0 = tmp[i + 0] + tmp[i + 12];
+            int a0 = tmp[i] + tmp[i + 12];
             int a1 = tmp[i + 4] + tmp[i + 8];
             int a2 = tmp[i + 4] - tmp[i + 8];
-            int a3 = tmp[i + 0] - tmp[i + 12];
-            output[i +  0] = (short) ((a0 + a1 + 7) >> 4);
+            int a3 = tmp[i] - tmp[i + 12];
+            output[i] = (short) ((a0 + a1 + 7) >> 4);
             output[i +  4] = (short) (((a2 * 2217 + a3 * 5352 + 12000) >> 16) + (a3 != 0 ? 1 : 0));
             output[i +  8] = (short) ((a0 - a1 + 7) >> 4);
             output[i + 12] = (short) ((a3 * 2217 - a2 * 5352 + 51000) >> 16);
@@ -90,7 +90,7 @@ final class DCT {
             int c = mul2(input[col + 4]) - mul1(input[col + 12]);
             int d = mul1(input[col + 4]) + mul2(input[col + 12]);
             // Write transposed into tmp: column 'col' of input -> row 'col' of tmp.
-            tmp[col * 4 + 0] = a + d;
+            tmp[col * 4] = a + d;
             tmp[col * 4 + 1] = b + c;
             tmp[col * 4 + 2] = b - c;
             tmp[col * 4 + 3] = a - d;
@@ -98,12 +98,12 @@ final class DCT {
 
         // Horizontal pass (per row in original space, which is 'col' in tmp space).
         for (int row = 0; row < 4; row++) {
-            int dc = tmp[row + 0] + 4;                  // libwebp adds 4 here before any shift
+            int dc = tmp[row] + 4;                  // libwebp adds 4 here before any shift
             int a = dc + tmp[row + 8];
             int b = dc - tmp[row + 8];
             int c = mul2(tmp[row + 4]) - mul1(tmp[row + 12]);
             int d = mul1(tmp[row + 4]) + mul2(tmp[row + 12]);
-            output[row * 4 + 0] = (short) ((a + d) >> 3);
+            output[row * 4] = (short) ((a + d) >> 3);
             output[row * 4 + 1] = (short) ((b + c) >> 3);
             output[row * 4 + 2] = (short) ((b - c) >> 3);
             output[row * 4 + 3] = (short) ((a - d) >> 3);
@@ -137,11 +137,11 @@ final class DCT {
         // Horizontal pass: reads rows of input.
         for (int i = 0; i < 4; i++) {
             int row = i * 4;
-            int a0 = input[row + 0] + input[row + 2];
+            int a0 = input[row] + input[row + 2];
             int a1 = input[row + 1] + input[row + 3];
             int a2 = input[row + 1] - input[row + 3];
-            int a3 = input[row + 0] - input[row + 2];
-            tmp[row + 0] = a0 + a1;
+            int a3 = input[row] - input[row + 2];
+            tmp[row] = a0 + a1;
             tmp[row + 1] = a3 + a2;
             tmp[row + 2] = a3 - a2;
             tmp[row + 3] = a0 - a1;
@@ -149,11 +149,11 @@ final class DCT {
 
         // Vertical pass: reads columns of tmp.
         for (int i = 0; i < 4; i++) {
-            int a0 = tmp[i + 0] + tmp[i + 8];
+            int a0 = tmp[i] + tmp[i + 8];
             int a1 = tmp[i + 4] + tmp[i + 12];
             int a2 = tmp[i + 4] - tmp[i + 12];
-            int a3 = tmp[i + 0] - tmp[i + 8];
-            output[i +  0] = (short) ((a0 + a1) >> 1);
+            int a3 = tmp[i] - tmp[i + 8];
+            output[i] = (short) ((a0 + a1) >> 1);
             output[i +  4] = (short) ((a3 + a2) >> 1);
             output[i +  8] = (short) ((a3 - a2) >> 1);
             output[i + 12] = (short) ((a0 - a1) >> 1);
@@ -171,11 +171,11 @@ final class DCT {
 
         // Vertical pass: reads columns of input.
         for (int i = 0; i < 4; i++) {
-            int a0 = input[i + 0] + input[i + 12];
+            int a0 = input[i] + input[i + 12];
             int a1 = input[i + 4] + input[i + 8];
             int a2 = input[i + 4] - input[i + 8];
-            int a3 = input[i + 0] - input[i + 12];
-            tmp[i + 0] = a0 + a1;
+            int a3 = input[i] - input[i + 12];
+            tmp[i] = a0 + a1;
             tmp[i + 4] = a3 + a2;
             tmp[i + 8] = a0 - a1;
             tmp[i + 12] = a3 - a2;
@@ -184,12 +184,12 @@ final class DCT {
         // Horizontal pass: reads rows of tmp, with +3 rounder on the DC element.
         for (int i = 0; i < 4; i++) {
             int row = i * 4;
-            int dc = tmp[row + 0] + 3;
+            int dc = tmp[row] + 3;
             int a0 = dc + tmp[row + 3];
             int a1 = tmp[row + 1] + tmp[row + 2];
             int a2 = tmp[row + 1] - tmp[row + 2];
             int a3 = dc - tmp[row + 3];
-            output[row + 0] = (short) ((a0 + a1) >> 3);
+            output[row] = (short) ((a0 + a1) >> 3);
             output[row + 1] = (short) ((a3 + a2) >> 3);
             output[row + 2] = (short) ((a0 - a1) >> 3);
             output[row + 3] = (short) ((a3 - a2) >> 3);

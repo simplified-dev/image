@@ -170,7 +170,7 @@ public record GifWriteOptions(
          * @return this builder for chaining
          */
         public @NotNull Builder withAlphaThreshold(int threshold) {
-            this.alphaThreshold = Math.max(0, Math.min(255, threshold));
+            this.alphaThreshold = Math.clamp(threshold, 0, 255);
             return this;
         }
 

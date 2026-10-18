@@ -352,14 +352,6 @@ public class WebPImageReader implements ImageReader {
         return result;
     }
 
-    private @NotNull PixelBuffer decodeFrameBitstream(byte @NotNull [] bitstream) {
-        // Detect if frame is VP8L or VP8 based on signature
-        if (bitstream.length > 0 && bitstream[0] == 0x2F)
-            return VP8LDecoder.decode(bitstream);
-
-        return VP8Decoder.decode(bitstream);
-    }
-
     private static @Nullable WebPChunk findChunk(@NotNull ConcurrentList<WebPChunk> chunks, @NotNull WebPChunk.Type type) {
         return chunks.stream()
             .filter(chunk -> chunk.type() == type)

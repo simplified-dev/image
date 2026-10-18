@@ -1,6 +1,6 @@
 package dev.simplified.image.codec.webp;
 
-
+import dev.simplified.annotations.SilentThrows;
 import dev.simplified.collection.Concurrent;
 import dev.simplified.collection.ConcurrentList;
 import dev.simplified.image.AnimatedImageData;
@@ -26,6 +26,10 @@ import org.jetbrains.annotations.Nullable;
 
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.stream.IntStream;
 
 /**
  * Writes WebP images (static and animated) using a pure Java implementation
@@ -182,7 +186,7 @@ public class WebPImageWriter implements ImageWriter {
             // Frame 0: full canvas.
             bboxX[0] = 0; bboxY[0] = 0;
             bboxW[0] = canvasW; bboxH[0] = canvasH;
-            framePixels[0] = frames.get(0).pixels();
+            framePixels[0] = frames.getFirst().pixels();
             for (int i = 1; i < numFrames; i++) {
                 PixelBuffer prev = frames.get(i - 1).pixels();
                 PixelBuffer curr = frames.get(i).pixels();
@@ -230,28 +234,26 @@ public class WebPImageWriter implements ImageWriter {
                 alphaPayloads = null;
             }
         } else if (multithreaded) {
-            PixelBuffer[] fpForLambda = framePixels;
-            var futures = java.util.stream.IntStream.range(0, numFrames)
-                .mapToObj(i -> CompletableFuture.supplyAsync(
-                    () -> encodeFramePixels(fpForLambda[i], lossless, quality, autoSegment, nearLossless),
-                    java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()
-                ))
-                .collect(Concurrent.toList());
-            encodedPayloads = futures.stream()
-                .map(CompletableFuture::join)
-                .collect(Concurrent.toList());
-            if (perFrameAlpha) {
-                var alphaFutures = java.util.stream.IntStream.range(0, numFrames)
+            try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+                var futures = IntStream.range(0, numFrames)
                     .mapToObj(i -> CompletableFuture.supplyAsync(
-                        () -> encodeAlphaPlane(fpForLambda[i], true),
-                        java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()
+                        () -> encodeFramePixels(framePixels[i], lossless, quality, autoSegment, nearLossless),
+                        executor
                     ))
+                    .toList();
+                encodedPayloads = futures.stream()
+                    .map(WebPImageWriter::join)
                     .collect(Concurrent.toList());
-                alphaPayloads = alphaFutures.stream()
-                    .map(CompletableFuture::join)
-                    .collect(Concurrent.toList());
-            } else {
-                alphaPayloads = null;
+                if (perFrameAlpha) {
+                    var alphaFutures = IntStream.range(0, numFrames)
+                        .mapToObj(i -> CompletableFuture.supplyAsync(() -> encodeAlphaPlane(framePixels[i], true), executor))
+                        .toList();
+                    alphaPayloads = alphaFutures.stream()
+                        .map(WebPImageWriter::join)
+                        .collect(Concurrent.toList());
+                } else {
+                    alphaPayloads = null;
+                }
             }
         } else {
             encodedPayloads = Concurrent.newList();
@@ -391,7 +393,7 @@ public class WebPImageWriter implements ImageWriter {
         int flags,
         byte @NotNull [] frameBitstream,
         @NotNull WebPChunk.Type innerType,
-        byte @org.jetbrains.annotations.Nullable [] alphaPayload
+        byte @Nullable [] alphaPayload
     ) {
         int alphaSubSize = alphaPayload != null ? 8 + alphaPayload.length + (alphaPayload.length & 1) : 0;
         int innerPayloadLen = frameBitstream.length;
@@ -451,7 +453,7 @@ public class WebPImageWriter implements ImageWriter {
             // VP8L header (see VP8LDecodeAlphaHeader in src/dec/vp8l_dec.c) - dimensions
             // are inferred from the parent VP8 chunk instead.
             PixelBuffer alphaBuf = PixelBuffer.of(
-                java.util.stream.IntStream.range(0, data.length)
+                IntStream.range(0, data.length)
                     .map(i -> 0xFF000000 | ((rawAlpha[i] & 0xFF) << 8))
                     .toArray(),
                 pixels.width(), pixels.height()
@@ -494,6 +496,23 @@ public class WebPImageWriter implements ImageWriter {
             if (cand.length < best.length) best = cand;
         }
         return best;
+    }
+
+    /**
+     * Waits for an encode and returns its result, throwing what the encode threw rather than the
+     * {@link CompletionException} that wraps it.
+     *
+     * @param future the encode
+     * @param <R> the result type
+     * @return the encode's result
+     */
+    @SilentThrows
+    private static <R> R join(@NotNull CompletableFuture<R> future) {
+        try {
+            return future.join();
+        } catch (CompletionException ex) {
+            throw ex.getCause();
+        }
     }
 
 }

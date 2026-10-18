@@ -1,5 +1,8 @@
 package dev.simplified.image.codec.webp.vp8;
 
+import dev.simplified.annotations.AccessLevel;
+import dev.simplified.annotations.RequiredArgsConstructor;
+import dev.simplified.annotations.UtilityClass;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -22,6 +25,7 @@ import org.jetbrains.annotations.Nullable;
  *
  * @see <a href="https://datatracker.ietf.org/doc/html/rfc6386#section-15">RFC 6386 section 15</a>
  */
+@UtilityClass
 final class LoopFilter {
 
     // ── Reference-frame labels for per-MB loop-filter indexing (RFC 6386 section 15) ──
@@ -78,6 +82,7 @@ final class LoopFilter {
     /**
      * Precomputed per-MB filter strength (matches libwebp's {@code VP8FInfo}).
      */
+    @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
     static final class FInfo {
         /**
          * Edge-activity threshold {@code 2*level + ilevel}; {@code 0} means no filtering.
@@ -96,16 +101,7 @@ final class LoopFilter {
          * and SPLITMV; any other macroblock has them filtered when it carries a coefficient.
          */
         final boolean fInner;
-
-        FInfo(int limit, int ilevel, int hevThresh, boolean inner) {
-            this.fLimit = limit;
-            this.fIlevel = ilevel;
-            this.hevThresh = hevThresh;
-            this.fInner = inner;
-        }
     }
-
-    private LoopFilter() { }
 
     /**
      * Applies the VP8 loop filter to a decoded frame in place. Mirrors libwebp's per-MB
@@ -141,7 +137,7 @@ final class LoopFilter {
      * @param segmentFilterLevel per-segment base filter level, or {@code null} for one segment
      */
     static void filterFrame(
-        short @NotNull [] planeY, short[] planeU, short[] planeV,
+        short @NotNull [] planeY, short @NotNull [] planeU, short @NotNull [] planeV,
         int yStride, int uvStride, int mbCols, int mbRows,
         boolean simple, int filterLevel, int sharpness,
         int @NotNull [] mbRefFrame, int @NotNull [] mbModeLfIdx, boolean @NotNull [] mbHasCoeffs,
@@ -238,7 +234,7 @@ final class LoopFilter {
      * @param inner whether the three inner 4x4 sub-block edges are filtered too
      */
     private static void doFilter(
-        short[] planeY, short[] planeU, short[] planeV,
+        short @NotNull [] planeY, short @NotNull [] planeU, short @NotNull [] planeV,
         int yStride, int uvStride, int mbX, int mbY,
         @NotNull FInfo info, boolean inner, boolean simple
     ) {
@@ -255,24 +251,23 @@ final class LoopFilter {
             return;
         }
 
-        int uPtr = (mbY * 8) * uvStride + mbX * 8;
-        int vPtr = uPtr;
+        int uvPtr = (mbY * 8) * uvStride + mbX * 8;
 
         if (mbX > 0) {
             hFilter16(planeY, yPtr, yStride, limit + 4, ilevel, hevThresh);
-            hFilter8(planeU, planeV, uPtr, vPtr, uvStride, limit + 4, ilevel, hevThresh);
+            hFilter8(planeU, planeV, uvPtr, uvPtr, uvStride, limit + 4, ilevel, hevThresh);
         }
         if (inner) {
             hFilter16i(planeY, yPtr, yStride, limit, ilevel, hevThresh);
-            hFilter8i(planeU, planeV, uPtr, vPtr, uvStride, limit, ilevel, hevThresh);
+            hFilter8i(planeU, planeV, uvPtr, uvPtr, uvStride, limit, ilevel, hevThresh);
         }
         if (mbY > 0) {
             vFilter16(planeY, yPtr, yStride, limit + 4, ilevel, hevThresh);
-            vFilter8(planeU, planeV, uPtr, vPtr, uvStride, limit + 4, ilevel, hevThresh);
+            vFilter8(planeU, planeV, uvPtr, uvPtr, uvStride, limit + 4, ilevel, hevThresh);
         }
         if (inner) {
             vFilter16i(planeY, yPtr, yStride, limit, ilevel, hevThresh);
-            vFilter8i(planeU, planeV, uPtr, vPtr, uvStride, limit, ilevel, hevThresh);
+            vFilter8i(planeU, planeV, uvPtr, uvPtr, uvStride, limit, ilevel, hevThresh);
         }
     }
 
@@ -283,7 +278,7 @@ final class LoopFilter {
     /**
      * Simple filter on the horizontal edge between MB row {@code mbY-1} and {@code mbY}.
      */
-    private static void simpleVFilter16(short[] p, int ptr, int stride, int thresh) {
+    private static void simpleVFilter16(short @NotNull [] p, int ptr, int stride, int thresh) {
         int thresh2 = 2 * thresh + 1;
         for (int i = 0; i < 16; i++)
             if (needsFilter(p, ptr + i, stride, thresh2))
@@ -293,7 +288,7 @@ final class LoopFilter {
     /**
      * Simple filter on the vertical edge between MB col {@code mbX-1} and {@code mbX}.
      */
-    private static void simpleHFilter16(short[] p, int ptr, int stride, int thresh) {
+    private static void simpleHFilter16(short @NotNull [] p, int ptr, int stride, int thresh) {
         int thresh2 = 2 * thresh + 1;
         for (int i = 0; i < 16; i++)
             if (needsFilter(p, ptr + i * stride, 1, thresh2))
@@ -303,7 +298,7 @@ final class LoopFilter {
     /**
      * Simple filter on the three inner horizontal 4x4 edges at offsets 4, 8, 12 rows.
      */
-    private static void simpleVFilter16i(short[] p, int ptr, int stride, int thresh) {
+    private static void simpleVFilter16i(short @NotNull [] p, int ptr, int stride, int thresh) {
         for (int k = 3; k > 0; k--) {
             ptr += 4 * stride;
             simpleVFilter16(p, ptr, stride, thresh);
@@ -313,7 +308,7 @@ final class LoopFilter {
     /**
      * Simple filter on the three inner vertical 4x4 edges at offsets 4, 8, 12 columns.
      */
-    private static void simpleHFilter16i(short[] p, int ptr, int stride, int thresh) {
+    private static void simpleHFilter16i(short @NotNull [] p, int ptr, int stride, int thresh) {
         for (int k = 3; k > 0; k--) {
             ptr += 4;
             simpleHFilter16(p, ptr, stride, thresh);
@@ -331,7 +326,7 @@ final class LoopFilter {
      * which branches between {@code DoFilter2_C} (HEV path) and {@code DoFilter6_C}.
      */
     private static void filterLoop26(
-        short[] plane, int ptr, int hstride, int vstride, int size,
+        short @NotNull [] plane, int ptr, int hstride, int vstride, int size,
         int thresh, int ithresh, int hevThresh
     ) {
         int thresh2 = 2 * thresh + 1;
@@ -350,7 +345,7 @@ final class LoopFilter {
      * Same as {@link #filterLoop26} but uses {@code DoFilter4_C} (inner edges).
      */
     private static void filterLoop24(
-        short[] plane, int ptr, int hstride, int vstride, int size,
+        short @NotNull [] plane, int ptr, int hstride, int vstride, int size,
         int thresh, int ithresh, int hevThresh
     ) {
         int thresh2 = 2 * thresh + 1;
@@ -365,47 +360,47 @@ final class LoopFilter {
         }
     }
 
-    private static void vFilter16(short[] p, int ptr, int stride, int thresh, int ithresh, int hevThresh) {
+    private static void vFilter16(short @NotNull [] p, int ptr, int stride, int thresh, int ithresh, int hevThresh) {
         filterLoop26(p, ptr, stride, 1, 16, thresh, ithresh, hevThresh);
     }
 
-    private static void hFilter16(short[] p, int ptr, int stride, int thresh, int ithresh, int hevThresh) {
+    private static void hFilter16(short @NotNull [] p, int ptr, int stride, int thresh, int ithresh, int hevThresh) {
         filterLoop26(p, ptr, 1, stride, 16, thresh, ithresh, hevThresh);
     }
 
-    private static void vFilter16i(short[] p, int ptr, int stride, int thresh, int ithresh, int hevThresh) {
+    private static void vFilter16i(short @NotNull [] p, int ptr, int stride, int thresh, int ithresh, int hevThresh) {
         for (int k = 3; k > 0; k--) {
             ptr += 4 * stride;
             filterLoop24(p, ptr, stride, 1, 16, thresh, ithresh, hevThresh);
         }
     }
 
-    private static void hFilter16i(short[] p, int ptr, int stride, int thresh, int ithresh, int hevThresh) {
+    private static void hFilter16i(short @NotNull [] p, int ptr, int stride, int thresh, int ithresh, int hevThresh) {
         for (int k = 3; k > 0; k--) {
             ptr += 4;
             filterLoop24(p, ptr, 1, stride, 16, thresh, ithresh, hevThresh);
         }
     }
 
-    private static void vFilter8(short[] u, short[] v, int uPtr, int vPtr, int stride,
+    private static void vFilter8(short @NotNull [] u, short @NotNull [] v, int uPtr, int vPtr, int stride,
                                  int thresh, int ithresh, int hevThresh) {
         filterLoop26(u, uPtr, stride, 1, 8, thresh, ithresh, hevThresh);
         filterLoop26(v, vPtr, stride, 1, 8, thresh, ithresh, hevThresh);
     }
 
-    private static void hFilter8(short[] u, short[] v, int uPtr, int vPtr, int stride,
+    private static void hFilter8(short @NotNull [] u, short @NotNull [] v, int uPtr, int vPtr, int stride,
                                  int thresh, int ithresh, int hevThresh) {
         filterLoop26(u, uPtr, 1, stride, 8, thresh, ithresh, hevThresh);
         filterLoop26(v, vPtr, 1, stride, 8, thresh, ithresh, hevThresh);
     }
 
-    private static void vFilter8i(short[] u, short[] v, int uPtr, int vPtr, int stride,
+    private static void vFilter8i(short @NotNull [] u, short @NotNull [] v, int uPtr, int vPtr, int stride,
                                   int thresh, int ithresh, int hevThresh) {
         filterLoop24(u, uPtr + 4 * stride, stride, 1, 8, thresh, ithresh, hevThresh);
         filterLoop24(v, vPtr + 4 * stride, stride, 1, 8, thresh, ithresh, hevThresh);
     }
 
-    private static void hFilter8i(short[] u, short[] v, int uPtr, int vPtr, int stride,
+    private static void hFilter8i(short @NotNull [] u, short @NotNull [] v, int uPtr, int vPtr, int stride,
                                   int thresh, int ithresh, int hevThresh) {
         filterLoop24(u, uPtr + 4, 1, stride, 8, thresh, ithresh, hevThresh);
         filterLoop24(v, vPtr + 4, 1, stride, 8, thresh, ithresh, hevThresh);
@@ -418,7 +413,7 @@ final class LoopFilter {
     /**
      * 4 pixels in, 2 pixels out. Writes {@code p0} and {@code q0}.
      */
-    private static void doFilter2(short[] p, int ptr, int step) {
+    private static void doFilter2(short @NotNull [] p, int ptr, int step) {
         int p1 = p[ptr - 2 * step], p0 = p[ptr - step], q0 = p[ptr], q1 = p[ptr + step];
         int a = 3 * (q0 - p0) + sclip1(p1 - q1);
         int a1 = sclip2((a + 4) >> 3);
@@ -430,7 +425,7 @@ final class LoopFilter {
     /**
      * 4 pixels in, 4 pixels out. Used on inner sub-block edges (normal filter).
      */
-    private static void doFilter4(short[] p, int ptr, int step) {
+    private static void doFilter4(short @NotNull [] p, int ptr, int step) {
         int p1 = p[ptr - 2 * step], p0 = p[ptr - step], q0 = p[ptr], q1 = p[ptr + step];
         int a = 3 * (q0 - p0);
         int a1 = sclip2((a + 4) >> 3);
@@ -445,7 +440,7 @@ final class LoopFilter {
     /**
      * 6 pixels in, 6 pixels out. Used on MB-edge non-HEV transitions.
      */
-    private static void doFilter6(short[] p, int ptr, int step) {
+    private static void doFilter6(short @NotNull [] p, int ptr, int step) {
         int p2 = p[ptr - 3 * step], p1 = p[ptr - 2 * step], p0 = p[ptr - step];
         int q0 = p[ptr], q1 = p[ptr + step], q2 = p[ptr + 2 * step];
         int a = sclip1(3 * (q0 - p0) + sclip1(p1 - q1));
@@ -463,7 +458,7 @@ final class LoopFilter {
     /**
      * High-edge-variance detector: either {@code |p1-p0|} or {@code |q1-q0|} exceeds {@code thresh}.
      */
-    private static boolean hev(short[] p, int ptr, int step, int thresh) {
+    private static boolean hev(short @NotNull [] p, int ptr, int step, int thresh) {
         int p1 = p[ptr - 2 * step], p0 = p[ptr - step], q0 = p[ptr], q1 = p[ptr + step];
         return Math.abs(p1 - p0) > thresh || Math.abs(q1 - q0) > thresh;
     }
@@ -471,7 +466,7 @@ final class LoopFilter {
     /**
      * Simple filter edge-activity predicate: {@code 4|p0-q0| + |p1-q1| <= thresh}.
      */
-    private static boolean needsFilter(short[] p, int ptr, int step, int t) {
+    private static boolean needsFilter(short @NotNull [] p, int ptr, int step, int t) {
         int p1 = p[ptr - 2 * step], p0 = p[ptr - step], q0 = p[ptr], q1 = p[ptr + step];
         return (4 * Math.abs(p0 - q0) + Math.abs(p1 - q1)) <= t;
     }
@@ -479,7 +474,7 @@ final class LoopFilter {
     /**
      * 6-tap needs-filter predicate: simple check plus six inner-level smoothness tests.
      */
-    private static boolean needsFilter2(short[] p, int ptr, int step, int t, int it) {
+    private static boolean needsFilter2(short @NotNull [] p, int ptr, int step, int t, int it) {
         int p3 = p[ptr - 4 * step], p2 = p[ptr - 3 * step], p1 = p[ptr - 2 * step];
         int p0 = p[ptr - step], q0 = p[ptr];
         int q1 = p[ptr + step], q2 = p[ptr + 2 * step], q3 = p[ptr + 3 * step];

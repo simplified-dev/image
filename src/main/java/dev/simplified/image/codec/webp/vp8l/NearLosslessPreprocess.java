@@ -1,5 +1,6 @@
 package dev.simplified.image.codec.webp.vp8l;
 
+import dev.simplified.annotations.UtilityClass;
 import dev.simplified.image.option.WebPWriteOptions;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
@@ -43,6 +44,7 @@ import org.jetbrains.annotations.NotNull;
  *
  * @see <a href="https://chromium.googlesource.com/webm/libwebp/+/refs/heads/main/src/enc/near_lossless_enc.c">libwebp near_lossless_enc.c</a>
  */
+@UtilityClass
 @ApiStatus.Internal
 public final class NearLosslessPreprocess {
 
@@ -54,8 +56,6 @@ public final class NearLosslessPreprocess {
      * Maximum {@code limit_bits} derived from level 0.
      */
     private static final int MAX_LIMIT_BITS = 5;
-
-    private NearLosslessPreprocess() { }
 
     /**
      * Runs libwebp near-lossless preprocessing on {@code argb} and returns a

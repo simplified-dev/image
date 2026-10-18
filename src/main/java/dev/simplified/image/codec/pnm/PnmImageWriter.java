@@ -40,9 +40,9 @@ public class PnmImageWriter implements ImageWriter {
         PnmWriteOptions.Variant variant = PnmWriteOptions.Variant.PPM;
         boolean ascii = false;
 
-        if (options instanceof PnmWriteOptions pnm) {
-            variant = pnm.variant();
-            ascii = pnm.ascii();
+        if (options instanceof PnmWriteOptions(PnmWriteOptions.Variant declaredVariant, boolean declaredAscii)) {
+            variant = declaredVariant;
+            ascii = declaredAscii;
         }
 
         PixelBuffer buffer = data.toPixelBuffer(AlphaMode.STRAIGHT);

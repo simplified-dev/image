@@ -1,5 +1,6 @@
 package dev.simplified.image.codec.webp.vp8;
 
+import dev.simplified.annotations.UtilityClass;
 import dev.simplified.image.PixelBuffer;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -32,6 +33,7 @@ import java.util.Optional;
  * on four threads, which is the path that refuses a frame whose bool decoder reads past the end of a
  * partition rather than only marking it corrupt.
  */
+@UtilityClass
 final class LibvpxOracle {
 
     /** The system property naming the executable to try first. */
@@ -42,8 +44,6 @@ final class LibvpxOracle {
 
     /** The executables tried after the named one, in order. */
     private static final List<String> DEFAULTS = List.of("ffmpeg");
-
-    private LibvpxOracle() { }
 
     /**
      * One decoded frame's planes, each row-major at its own width.

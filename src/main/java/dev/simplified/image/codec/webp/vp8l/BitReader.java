@@ -96,15 +96,6 @@ final class BitReader {
         bitsInBuffer -= numBits;
     }
 
-    /**
-     * Returns the number of bits remaining in the stream.
-     *
-     * @return the remaining bit count
-     */
-    int remainingBits() {
-        return bitsInBuffer + (length - bytePos) * 8;
-    }
-
     private void fillBuffer() {
         while (bitsInBuffer <= 56 && bytePos < length) {
             buffer |= ((long) (data[bytePos++] & 0xFF)) << bitsInBuffer;

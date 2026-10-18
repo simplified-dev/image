@@ -1,5 +1,6 @@
 package dev.simplified.image.codec.webp.vp8;
 
+import dev.simplified.annotations.UtilityClass;
 import org.jetbrains.annotations.NotNull;
 
 /**
@@ -16,6 +17,7 @@ import org.jetbrains.annotations.NotNull;
  *
  * @see <a href="https://datatracker.ietf.org/doc/html/rfc6386#section-13">RFC 6386 section 13</a>
  */
+@UtilityClass
 final class VP8Costs {
 
     /**
@@ -30,8 +32,6 @@ final class VP8Costs {
      * Distortion multiplier applied in the R-D score ({@code score = R*lambda + DISTO_MULT*D}).
      */
     static final int RD_DISTO_MULT = 256;
-
-    private VP8Costs() { }
 
     /**
      * Cost of coding a single bit at probability {@code proba} in {@code 1/256} bit units.
@@ -425,7 +425,7 @@ final class VP8Costs {
             this.remapped = buildRemapped(proba);
         }
 
-        private static int[][][][] buildRemapped(int[][][][] proba) {
+        private static int @NotNull [][][][] buildRemapped(int @NotNull [][][][] proba) {
             int[][][][] levelCost =
                 new int[VP8Tables.NUM_TYPES][VP8Tables.NUM_BANDS][VP8Tables.NUM_CTX][MAX_VARIABLE_LEVEL + 1];
             for (int type = 0; type < VP8Tables.NUM_TYPES; type++) {
@@ -445,8 +445,7 @@ final class VP8Costs {
             for (int type = 0; type < VP8Tables.NUM_TYPES; type++) {
                 for (int n = 0; n < 16; n++) {
                     int band = VP8Tables.COEF_BANDS[n];
-                    for (int ctx = 0; ctx < VP8Tables.NUM_CTX; ctx++)
-                        out[type][n][ctx] = levelCost[type][band][ctx];
+                    System.arraycopy(levelCost[type][band], 0, out[type][n], 0, VP8Tables.NUM_CTX);
                 }
             }
             return out;
@@ -503,7 +502,7 @@ final class VP8Costs {
         return walkTreeCost(tree, 0, -leaf, probs);
     }
 
-    private static int walkTreeCost(int[] tree, int node, int targetLeaf, int[] probs) {
+    private static int walkTreeCost(int @NotNull [] tree, int node, int targetLeaf, int @NotNull [] probs) {
         for (int branch = 0; branch < 2; branch++) {
             int next = tree[node + branch];
             int step = bitCost(branch, probs[node >> 1]);
@@ -596,7 +595,7 @@ final class VP8Costs {
         int n;
         for (n = first; n < last; n++) {
             int v = Math.abs(zigZagCoeffs[n]);
-            int ctx = (v >= 2) ? 2 : v;
+            int ctx = Math.min(v, 2);
             cost += levelCost(t, v);
             t = remapped[coeffType][n + 1][ctx];
         }

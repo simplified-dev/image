@@ -1,5 +1,6 @@
 package dev.simplified.image.codec.gif;
 
+import dev.simplified.annotations.UtilityClass;
 import org.jetbrains.annotations.NotNull;
 
 import java.nio.charset.StandardCharsets;
@@ -11,13 +12,11 @@ import java.util.function.IntConsumer;
  * Walks the block structure of an encoded GIF, so a test reads what a writer declared out of the
  * bytes themselves rather than through a reader's interpretation of them.
  */
+@UtilityClass
 final class GifBlocks {
 
     /** The application identifier and authentication code of the extension that declares a loop count. */
     private static final String NETSCAPE = "NETSCAPE2.0";
-
-    private GifBlocks() {
-    }
 
     /**
      * Returns the byte offset of every graphic control extension's introducer, {@code 0x21}, in file

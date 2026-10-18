@@ -1,7 +1,9 @@
 package dev.simplified.image.codec.webp.vp8;
 
+import dev.simplified.annotations.UtilityClass;
 import dev.simplified.image.PixelBuffer;
 import dev.simplified.image.codec.webp.LibwebpOracle;
+import org.jetbrains.annotations.NotNull;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -15,6 +17,7 @@ import java.util.function.IntBinaryOperator;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.lessThan;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 /**
  * Package-private tests for the VP8 (lossy) codec internals: boolean range coder,
@@ -414,10 +417,10 @@ public class VP8CodecTest {
             Macroblock mb = new Macroblock();
             int mbX = 1, mbY = 1;
             for (int y = 0; y < 16; y++)
-                for (int x = 0; x < 16; x++)
-                    mb.y[y * 16 + x] = refY[(mbY * 16 + y) * W + (mbX * 16 + x)];
+                System.arraycopy(refY, (mbY * 16 + y) * W + mbX * 16, mb.y, y * 16, 16);
 
             int[] mv = VP8Encoder.computeBestSubBlockMv(state, mb, mbX, mbY, 0, 0, 16, 16);
+            assertNotNull(mv);
             assertThat("zero-shift wire row", mv[0], is(0));
             assertThat("zero-shift wire col", mv[1], is(0));
         }
@@ -436,6 +439,7 @@ public class VP8CodecTest {
                     mb.y[y * 16 + x] = refY[(mbY * 16 + y + dyShift) * W + (mbX * 16 + x + dxShift)];
 
             int[] mv = VP8Encoder.computeBestSubBlockMv(state, mb, mbX, mbY, 0, 0, 16, 16);
+            assertNotNull(mv);
             // Wire units = quarter-pel; integer-pel shift of K resolves to wire = K * 4.
             assertThat("wire row = dyShift * 4", mv[0], is(dyShift * 4));
             assertThat("wire col = dxShift * 4", mv[1], is(dxShift * 4));
@@ -459,6 +463,7 @@ public class VP8CodecTest {
                 for (int x = 0; x < 8; x++)
                     mb.y[y * 16 + x] = refY[(mbY * 16 + y) * W + (mbX * 16 + x + 1)];
             int[] mvTL = VP8Encoder.computeBestSubBlockMv(state, mb, mbX, mbY, 0, 0, 8, 8);
+            assertNotNull(mvTL);
             assertThat("top-left wire row = 0", mvTL[0], is(0));
             assertThat("top-left wire col = +4", mvTL[1], is(4));
 
@@ -467,6 +472,7 @@ public class VP8CodecTest {
                 for (int x = 0; x < 8; x++)
                     mb.y[(8 + y) * 16 + (8 + x)] = refY[(mbY * 16 + 8 + y - 1) * W + (mbX * 16 + 8 + x)];
             int[] mvBR = VP8Encoder.computeBestSubBlockMv(state, mb, mbX, mbY, 8, 8, 8, 8);
+            assertNotNull(mvBR);
             assertThat("bottom-right wire row = -4", mvBR[0], is(-4));
             assertThat("bottom-right wire col = 0", mvBR[1], is(0));
         }
@@ -489,6 +495,7 @@ public class VP8CodecTest {
                         refY[(mbY * 16 + 4 + y + dyShift) * W + (mbX * 16 + 4 + x + dxShift)];
 
             int[] mv = VP8Encoder.computeBestSubBlockMv(state, mb, mbX, mbY, 4, 4, 4, 4);
+            assertNotNull(mv);
             assertThat("4x4 wire row = dyShift * 4", mv[0], is(dyShift * 4));
             assertThat("4x4 wire col = dxShift * 4", mv[1], is(dxShift * 4));
         }
@@ -1993,9 +2000,8 @@ public class VP8CodecTest {
      * lambdas against libwebp reads, and shows which MBs take downstream-costly
      * SPLITMV-residual / MBSPLIT_EIGHTS picks.
      */
+    @UtilityClass
     private static final class GoldenReferenceHelper {
-
-        private GoldenReferenceHelper() { }
 
         /**
          * Per-MB comparison summary between two {@link VP8Decoder.FrameMetadata}
@@ -2023,9 +2029,9 @@ public class VP8CodecTest {
          * back through our decoder.
          */
         record Result(
-            @org.jetbrains.annotations.NotNull VP8Decoder.FrameMetadata ours,
-            @org.jetbrains.annotations.NotNull VP8Decoder.FrameMetadata libwebp,
-            @org.jetbrains.annotations.NotNull ModeDecisionDiff diff
+            @NotNull VP8Decoder.FrameMetadata ours,
+            @NotNull VP8Decoder.FrameMetadata libwebp,
+            @NotNull ModeDecisionDiff diff
         ) { }
 
         /**
@@ -2039,7 +2045,7 @@ public class VP8CodecTest {
          *                {@code WebPConfig.new(quality=...)} API; our encoder
          *                receives {@code quality / 100.0f}
          */
-        static @org.jetbrains.annotations.NotNull Result compare(PixelBuffer src, int quality) throws Exception {
+        static @NotNull Result compare(PixelBuffer src, int quality) throws Exception {
             byte[] oursVp8 = VP8Encoder.encode(src, quality / 100.0f);
             VP8Decoder.DecodedFrame ours = VP8Decoder.decodeWithMetadata(oursVp8);
 
@@ -2053,9 +2059,9 @@ public class VP8CodecTest {
                 buildDiff(ours.metadata(), theirs.metadata()));
         }
 
-        private static @org.jetbrains.annotations.NotNull ModeDecisionDiff buildDiff(
-            @org.jetbrains.annotations.NotNull VP8Decoder.FrameMetadata a,
-            @org.jetbrains.annotations.NotNull VP8Decoder.FrameMetadata b
+        private static @NotNull ModeDecisionDiff buildDiff(
+            @NotNull VP8Decoder.FrameMetadata a,
+            @NotNull VP8Decoder.FrameMetadata b
         ) {
             int mbCols = Math.min(a.mbCols(), b.mbCols());
             int mbRows = Math.min(a.mbRows(), b.mbRows());
@@ -2100,8 +2106,8 @@ public class VP8CodecTest {
         /**
          * Short human-readable summary of a diff - used by the demo test to log.
          */
-        static @org.jetbrains.annotations.NotNull String formatDiff(
-            @org.jetbrains.annotations.NotNull ModeDecisionDiff d
+        static @NotNull String formatDiff(
+            @NotNull ModeDecisionDiff d
         ) {
             return String.format(
                 "MBs=%d  typeAgree=%.1f%%  intra=%d (i4x4=%d i16x16=%d)  "
@@ -2346,7 +2352,7 @@ public class VP8CodecTest {
             assertThat("b1 is inter frame", b1[0] & 1, is(1));
 
             VP8DecoderSession decSess = new VP8DecoderSession();
-            PixelBuffer d0 = decSess.decode(b0);
+            decSess.decode(b0);
             PixelBuffer d1 = decSess.decode(b1);
 
             // Frame 1 decode must be close to its source in the interior (far from the
@@ -2432,15 +2438,15 @@ public class VP8CodecTest {
             // chroma sub-pel path on both encoder + decoder. Both must predict at the
             // fractional position rather than refuse it: one that threw on a sub-pel
             // MV fails here.
-            int w = 32, h = 32;
+            int w = 64, h = 32;
             PixelBuffer f0 = PixelBuffer.create(w, h);
             PixelBuffer f1 = PixelBuffer.create(w, h);
             for (int y = 0; y < h; y++) {
                 for (int x = 0; x < w; x++) {
-                    int color = 0xFF000000 | ((x * 8) << 16) | ((y * 8) << 8);
+                    int color = 0xFF000000 | ((x * 4) << 16) | ((y * 8) << 8);
                     f0.setPixel(x, y, color);
                     int srcX = (x - 1 + w) % w;
-                    int srcColor = 0xFF000000 | ((srcX * 8) << 16) | ((y * 8) << 8);
+                    int srcColor = 0xFF000000 | ((srcX * 4) << 16) | ((y * 8) << 8);
                     f1.setPixel(x, y, srcColor);
                 }
             }
@@ -2497,11 +2503,11 @@ public class VP8CodecTest {
             // encode/decode cycle. Encoder/decoder tree layout must match.
             int[] values = { 0, 1, 7, 8, 15, 16, 17, 64, -3, -64, -256 };
             BooleanEncoder enc = new BooleanEncoder(64);
-            for (int v : values)
+            for (int ignored : values)
                 enc.encodeBit(128, 0);  // dummy spacer to validate boundary
             byte[] out = enc.toByteArray();
             BooleanDecoder dec = new BooleanDecoder(out, 0, out.length);
-            for (int v : values)
+            for (int ignored : values)
                 assertThat("spacer bit", dec.decodeBit(128), is(0));
             // Real check: encode + decode via our internal helpers exposed through the
             // NEW_MV path - covered by pFrameTranslationRoundTrip.
@@ -2640,7 +2646,7 @@ public class VP8CodecTest {
         private static void assertRoundTrips(short[] coeffs, int first, int ctx0, int type) {
             byte[] bytes = encodeAndFinish(coeffs, first, ctx0, type);
             short[] decoded = new short[16];
-            for (int i = 0; i < first; i++) decoded[i] = coeffs[i];
+            System.arraycopy(coeffs, 0, decoded, 0, first);
             BooleanDecoder dec = new BooleanDecoder(bytes, 0, bytes.length);
             VP8TokenDecoder.decode(dec, decoded, first, ctx0, type, VP8Tables.COEFFS_PROBA_0);
             for (int i = 0; i < 16; i++)

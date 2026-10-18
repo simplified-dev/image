@@ -421,10 +421,8 @@ public class VP8LCodecTest {
             PixelBuffer buf = PixelBuffer.create(256, 256);
             for (int y = 0; y < 256; y++)
                 for (int x = 0; x < 256; x++) {
-                    int r = x;
-                    int g = y;
                     int b = (x + y) / 2;
-                    buf.setPixel(x, y, 0xFF000000 | (r << 16) | (g << 8) | b);
+                    buf.setPixel(x, y, 0xFF000000 | (x << 16) | (y << 8) | b);
                 }
             byte[] literalOnly = VP8LEncoder.encode(buf, VP8LEncoder.TransformMode.NONE, 0);
             byte[] predictor = VP8LEncoder.encode(buf, VP8LEncoder.TransformMode.PREDICTOR, 0);

@@ -1,5 +1,6 @@
 package dev.simplified.image.codec.webp.vp8;
 
+import dev.simplified.annotations.UtilityClass;
 import dev.simplified.image.PixelBuffer;
 import dev.simplified.image.codec.common.DecodeBudget;
 import dev.simplified.image.codec.common.LittleEndian;
@@ -30,10 +31,9 @@ import org.jetbrains.annotations.Nullable;
  *
  * @see <a href="https://datatracker.ietf.org/doc/html/rfc6386">RFC 6386</a>
  */
+@UtilityClass
 @ApiStatus.Internal
 public final class VP8Decoder {
-
-    private VP8Decoder() { }
 
     /**
      * Per-MB metadata captured from a completed decode pass. Exposes the per-MB
@@ -516,8 +516,7 @@ public final class VP8Decoder {
         // The layout following the first partition is:
         //   (numParts - 1) * 3 bytes of little-endian uint24 size prefixes for partitions 0..N-2;
         //   concatenated partition bodies, with the last partition's size implied by file length.
-        int partSizesOffset = partitionEnd;
-        int partBodiesOffset = partSizesOffset + (numTokenPartitions - 1) * 3;
+        int partBodiesOffset = partitionEnd + (numTokenPartitions - 1) * 3;
         if (partBodiesOffset > data.length)
             throw new ImageDecodeException("VP8 token partition size prefixes truncated");
         BooleanDecoder[] tokenDecoders = new BooleanDecoder[numTokenPartitions];
@@ -525,7 +524,7 @@ public final class VP8Decoder {
         for (int p = 0; p < numTokenPartitions; p++) {
             int partSize;
             if (p < numTokenPartitions - 1) {
-                int o = partSizesOffset + p * 3;
+                int o = partitionEnd + p * 3;
                 partSize = LittleEndian.readUint24(data, o);
             } else {
                 partSize = data.length - cursor;
@@ -673,7 +672,7 @@ public final class VP8Decoder {
                     subModes[by][bx] = br.decodeTree(VP8Tables.BMODE_TREE, VP8Tables.KF_BMODE_PROB[above][leftM]);
                 }
             }
-            for (int bx = 0; bx < 4; bx++) s.intraT[mbX * 4 + bx] = subModes[3][bx];
+            System.arraycopy(subModes[3], 0, s.intraT, mbX * 4, 4);
             for (int by = 0; by < 4; by++) s.intraL[by] = subModes[by][3];
         }
 
@@ -821,6 +820,7 @@ public final class VP8Decoder {
                 int gfBit = br.decodeBit(s.probGf);
                 refFrame = (gfBit == 0) ? LoopFilter.REF_GOLDEN : LoopFilter.REF_ALTREF;
             }
+            assert s.session != null;
             assertReferenceAvailable(s.session, refFrame);
 
             // MV-reference tree with context-dependent probabilities (libvpx parity).
@@ -886,7 +886,7 @@ public final class VP8Decoder {
                 return;
             }
 
-            decodeInterWithMv(s, br, td, mbX, mbY, skip, effInternalRow, effInternalCol, refFrame);
+            decodeInterWithMv(s, td, mbX, mbY, skip, effInternalRow, effInternalCol, refFrame);
             return;
         }
 
@@ -911,7 +911,7 @@ public final class VP8Decoder {
                     );
                 }
             }
-            for (int bx = 0; bx < 4; bx++) s.intraT[mbX * 4 + bx] = subModes[3][bx];
+            System.arraycopy(subModes[3], 0, s.intraT, mbX * 4, 4);
             for (int by = 0; by < 4; by++) s.intraL[by] = subModes[by][3];
         } else {
             int ctxMode = mb16ToSubMode(yMode);
@@ -1019,7 +1019,7 @@ public final class VP8Decoder {
      * @param effInternalCol effective MV col in 1/8-pel internal units
      */
     private static void decodeInterWithMv(
-        @NotNull State s, @NotNull BooleanDecoder br, @NotNull BooleanDecoder td,
+        @NotNull State s, @NotNull BooleanDecoder td,
         int mbX, int mbY, int skip, int effInternalRow, int effInternalCol, int refFrame
     ) {
         // buildInterPrediction takes wire (quarter-pel); convert from internal (>>1).
@@ -1277,6 +1277,7 @@ public final class VP8Decoder {
         int @NotNull [] slotRow, int @NotNull [] slotCol,
         short @NotNull [] predY, short @NotNull [] predU, short @NotNull [] predV
     ) {
+        assert s.session != null;
         int refStrideY = s.session.refLumaStride;
         int refH = s.session.refMbRows * 16;
         int refStrideC = s.session.refChromaStride;
@@ -1300,8 +1301,7 @@ public final class VP8Decoder {
                 SubpelPrediction.predict6tap(refY, refStrideY, refH,
                     refX, refYPos, subX, subY, tmp, 4, 4, 4);
                 for (int y = 0; y < 4; y++)
-                    for (int x = 0; x < 4; x++)
-                        predY[(by * 4 + y) * 16 + (bx * 4 + x)] = tmp[y * 4 + x];
+                    System.arraycopy(tmp, y * 4, predY, (by * 4 + y) * 16 + bx * 4, 4);
             }
         }
 
@@ -1355,6 +1355,7 @@ public final class VP8Decoder {
         @NotNull State s, int mbX, int mbY, int wireRow, int wireCol, int refFrame,
         short @NotNull [] predY, short @NotNull [] predU, short @NotNull [] predV
     ) {
+        assert s.session != null;
         int refStrideY = s.session.refLumaStride;
         int refH = s.session.refMbRows * 16;
         int refStrideC = s.session.refChromaStride;
@@ -1565,7 +1566,7 @@ public final class VP8Decoder {
         };
     }
 
-    private static short[] zigzagToRaster(short @NotNull [] zz) {
+    private static short @NotNull [] zigzagToRaster(short @NotNull [] zz) {
         short[] raster = new short[16];
         for (int i = 0; i < 16; i++) raster[VP8Tables.ZIGZAG[i]] = zz[i];
         return raster;
@@ -1678,13 +1679,13 @@ public final class VP8Decoder {
     // Neighbor extraction helpers
     // ──────────────────────────────────────────────────────────────────────
 
-    private static short[] extractRow(short[] plane, int startX, int rowOffset, int count) {
+    private static short @NotNull [] extractRow(short @NotNull [] plane, int startX, int rowOffset, int count) {
         short[] row = new short[count];
         System.arraycopy(plane, rowOffset + startX, row, 0, count);
         return row;
     }
 
-    private static short[] extractCol(short[] plane, int x, int startY, int stride, int count) {
+    private static short @NotNull [] extractCol(short @NotNull [] plane, int x, int startY, int stride, int count) {
         short[] col = new short[count];
         for (int i = 0; i < count; i++)
             col[i] = plane[(startY + i) * stride + x];
@@ -1700,7 +1701,7 @@ public final class VP8Decoder {
      * samples above and to the right of the MB instead, as the top-right sub-block does,
      * where RFC 6386 and libwebp take them: 127 on the frame's top row.
      */
-    private static short[] getAbove8(short[] plane, int blockX, int blockY, int stride) {
+    private static short @Nullable [] getAbove8(short @NotNull [] plane, int blockX, int blockY, int stride) {
         if (blockY == 0) return null;
         short[] above = new short[8];
         int mbRight = (blockX / 16) * 16 + 15;
@@ -1717,7 +1718,7 @@ public final class VP8Decoder {
         return above;
     }
 
-    private static short[] getLeft4(short[] plane, int blockX, int blockY, int stride) {
+    private static short @Nullable [] getLeft4(short @NotNull [] plane, int blockX, int blockY, int stride) {
         if (blockX == 0) return null;
         short[] left = new short[4];
         for (int i = 0; i < 4; i++)
@@ -1725,14 +1726,14 @@ public final class VP8Decoder {
         return left;
     }
 
-    private static short getAboveLeft(short[] plane, int blockX, int blockY, int stride) {
+    private static short getAboveLeft(short @NotNull [] plane, int blockX, int blockY, int stride) {
         return IntraPrediction.aboveLeft(plane, stride, blockX, blockY);
     }
 
     /**
      * Deep-copies a coefficient proba table so per-frame updates do not mutate the source.
      */
-    static int[][][][] cloneProba(int[][][][] src) {
+    static int @NotNull [][][][] cloneProba(int @NotNull [][][][] src) {
         int[][][][] out = new int[src.length][][][];
         for (int t = 0; t < src.length; t++) {
             out[t] = new int[src[t].length][][];

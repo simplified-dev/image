@@ -1,5 +1,7 @@
 package dev.simplified.image.codec.common;
 
+import dev.simplified.annotations.AccessLevel;
+import dev.simplified.annotations.RequiredArgsConstructor;
 import dev.simplified.image.exception.ImageTooLargeException;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
@@ -16,6 +18,7 @@ import org.jetbrains.annotations.NotNull;
  * the limit on its own, since whatever composes onto it later allocates it whole.
  */
 @ApiStatus.Internal
+@RequiredArgsConstructor(access = AccessLevel.PRIVATE)
 public final class DecodeBudget {
 
     /** The limit a read holds to until one is set: 8192 by 8192 pixels, 256 MiB of ARGB. */
@@ -32,11 +35,6 @@ public final class DecodeBudget {
 
     /** The pixels claimed so far. */
     private long held;
-
-    private DecodeBudget(@NotNull String format, long readLimit) {
-        this.format = format;
-        this.readLimit = readLimit;
-    }
 
     /**
      * Returns the limit every read opened from now on holds to.

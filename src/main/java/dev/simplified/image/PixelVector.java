@@ -1,6 +1,8 @@
 package dev.simplified.image;
 
+import dev.simplified.annotations.UtilityClass;
 import dev.simplified.image.pixel.ColorMath;
+import org.jetbrains.annotations.NotNull;
 
 /**
  * Dispatches per-pixel operations to a SIMD implementation when the JDK Vector API is resolvable
@@ -12,6 +14,7 @@ import dev.simplified.image.pixel.ColorMath;
  * is only loaded when the detection succeeds, so consumers whose JVM does not resolve the
  * incubator module never trigger an unresolved symbol.
  */
+@UtilityClass
 final class PixelVector {
 
     private static final boolean ENABLED = detectVectorApi();
@@ -25,9 +28,7 @@ final class PixelVector {
         }
     }
 
-    private PixelVector() {}
-
-    static void grayscale(int[] p, int off, int len) {
+    static void grayscale(int @NotNull [] p, int off, int len) {
         int start = ENABLED ? VectorOps.grayscale(p, off, len) : 0;
         int end = off + len;
         for (int i = off + start; i < end; i++) {
@@ -38,7 +39,7 @@ final class PixelVector {
         }
     }
 
-    static void multiplyAlpha(int[] p, int off, int len, float factor) {
+    static void multiplyAlpha(int @NotNull [] p, int off, int len, float factor) {
         int start = ENABLED ? VectorOps.multiplyAlpha(p, off, len, factor) : 0;
         int end = off + len;
         for (int i = off + start; i < end; i++) {
@@ -49,7 +50,7 @@ final class PixelVector {
         }
     }
 
-    static void premultiply(int[] p, int off, int len) {
+    static void premultiply(int @NotNull [] p, int off, int len) {
         int start = ENABLED ? VectorOps.premultiply(p, off, len) : 0;
         int end = off + len;
         for (int i = off + start; i < end; i++) {
@@ -67,7 +68,7 @@ final class PixelVector {
         }
     }
 
-    static void tint(int[] src, int[] dst, int off, int len, int tr, int tg, int tb) {
+    static void tint(int @NotNull [] src, int @NotNull [] dst, int off, int len, int tr, int tg, int tb) {
         int start = ENABLED ? VectorOps.tint(src, dst, off, len, tr, tg, tb) : 0;
         int end = off + len;
         for (int i = off + start; i < end; i++) {
@@ -84,7 +85,7 @@ final class PixelVector {
         }
     }
 
-    static void lerp(int[] a, int aOff, int[] b, int bOff, int[] out, int outOff,
+    static void lerp(int @NotNull [] a, int aOff, int @NotNull [] b, int bOff, int @NotNull [] out, int outOff,
                      int len, float blend, float inverse) {
         int start = ENABLED ? VectorOps.lerp(a, aOff, b, bOff, out, outOff, len, blend, inverse) : 0;
         for (int x = start; x < len; x++) {

@@ -116,17 +116,16 @@ public class IcoImageReader implements ImageReader {
         if (bpp != 32)
             throw new ImageDecodeException("ICO DIB with '%d' bpp is not supported", bpp);
 
-        int pixelOff = headerSize;
         int rowStride = width * 4;
 
-        if (pixelOff + rowStride * height > dib.length)
+        if (headerSize + rowStride * height > dib.length)
             throw new ImageDecodeException("ICO DIB pixel data truncated");
 
         DecodeBudget.open("ICO").claim(width, height);
         int[] pixels = new int[width * height];
 
         for (int y = 0; y < height; y++) {
-            int rowStart = pixelOff + (height - 1 - y) * rowStride;
+            int rowStart = headerSize + (height - 1 - y) * rowStride;
 
             for (int x = 0; x < width; x++) {
                 int p = rowStart + x * 4;

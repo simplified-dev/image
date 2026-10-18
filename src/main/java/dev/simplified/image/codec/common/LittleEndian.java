@@ -103,8 +103,7 @@ public class LittleEndian {
      * @param value the value whose low 24 bits are written
      */
     public static void writeUint24(byte @NotNull [] data, int offset, int value) {
-        data[offset] = (byte) value;
-        data[offset + 1] = (byte) (value >>> 8);
+        writeUint16(data, offset, value);
         data[offset + 2] = (byte) (value >>> 16);
     }
 
@@ -116,9 +115,7 @@ public class LittleEndian {
      * @param value the value to write
      */
     public static void writeUint32(byte @NotNull [] data, int offset, int value) {
-        data[offset] = (byte) value;
-        data[offset + 1] = (byte) (value >>> 8);
-        data[offset + 2] = (byte) (value >>> 16);
+        writeUint24(data, offset, value);
         data[offset + 3] = (byte) (value >>> 24);
     }
 

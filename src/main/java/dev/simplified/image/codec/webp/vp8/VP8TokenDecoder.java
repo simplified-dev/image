@@ -1,5 +1,6 @@
 package dev.simplified.image.codec.webp.vp8;
 
+import dev.simplified.annotations.UtilityClass;
 import org.jetbrains.annotations.NotNull;
 
 /**
@@ -12,9 +13,8 @@ import org.jetbrains.annotations.NotNull;
  * the four extra-bit categories from 11 up - mirroring the branching of libwebp's
  * {@code GetCoeffsFast} in {@code src/dec/vp8_dec.c}.
  */
+@UtilityClass
 final class VP8TokenDecoder {
-
-    private VP8TokenDecoder() { }
 
     /**
      * Decodes a 4x4 block's coefficients from the bit stream.
@@ -105,7 +105,7 @@ final class VP8TokenDecoder {
         int[] tab;
         if (dec.decodeBit(p[8]) == 0) {
             if (dec.decodeBit(p[9]) == 0) {           // Cat3
-                base = 3 + (8 << 0);
+                base = 3 + 8;
                 bits = 3;
                 tab = VP8Tables.CAT3;
             } else {                                   // Cat4

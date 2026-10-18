@@ -116,7 +116,7 @@ class PixelBufferRowScheduleTest {
         });
 
         assertThat("%d rows reached a pool worker".formatted(THRESHOLD),
-            threads.stream().anyMatch(thread -> thread instanceof ForkJoinWorkerThread), is(true));
+            threads.stream().anyMatch(ForkJoinWorkerThread.class::isInstance), is(true));
     }
 
     @Test

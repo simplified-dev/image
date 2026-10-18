@@ -1,5 +1,6 @@
 package dev.simplified.image.codec.webp;
 
+import dev.simplified.annotations.AccessLevel;
 import dev.simplified.annotations.EnumLookup;
 import dev.simplified.annotations.Getter;
 import dev.simplified.annotations.KeyField;
@@ -33,7 +34,7 @@ record WebPChunk(@Nullable Type type,
     /**
      * WebP RIFF chunk types identified by their four-character code (FourCC).
      */
-    @Getter
+    @Getter(AccessLevel.PACKAGE)
     @EnumLookup
     @RequiredArgsConstructor
     enum Type {

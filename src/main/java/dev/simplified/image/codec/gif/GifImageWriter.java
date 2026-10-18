@@ -1,6 +1,8 @@
 package dev.simplified.image.codec.gif;
 
+import dev.simplified.annotations.AccessLevel;
 import dev.simplified.annotations.Cleanup;
+import dev.simplified.annotations.RequiredArgsConstructor;
 import dev.simplified.annotations.SilentThrows;
 import dev.simplified.collection.ConcurrentList;
 import dev.simplified.image.AnimatedImageData;
@@ -357,13 +359,10 @@ public class GifImageWriter implements ImageWriter {
      * at the frequency-weighted median so large flat regions collapse into single palette
      * slots instead of being merged with nearby detail.
      */
+    @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
     private static final class Bucket {
 
         private final @NotNull List<int @NotNull []> rows;
-
-        Bucket(@NotNull List<int @NotNull []> rows) {
-            this.rows = rows;
-        }
 
         int maxChannelSpread() {
             if (this.rows.size() <= 1) return 0;
@@ -412,7 +411,7 @@ public class GifImageWriter implements ImageWriter {
             for (int i = 0; i < this.rows.size(); i++) {
                 cumulative += this.rows.get(i)[3];
                 if (cumulative >= midpoint) {
-                    splitIndex = Math.max(1, Math.min(this.rows.size() - 1, i + 1));
+                    splitIndex = Math.clamp(i + 1, 1, this.rows.size() - 1);
                     break;
                 }
             }

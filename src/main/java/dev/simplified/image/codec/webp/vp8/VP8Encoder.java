@@ -1,5 +1,8 @@
 package dev.simplified.image.codec.webp.vp8;
 
+import dev.simplified.annotations.AccessLevel;
+import dev.simplified.annotations.RequiredArgsConstructor;
+import dev.simplified.annotations.UtilityClass;
 import dev.simplified.image.PixelBuffer;
 import dev.simplified.image.codec.common.LittleEndian;
 import org.jetbrains.annotations.ApiStatus;
@@ -38,6 +41,7 @@ import org.jetbrains.annotations.Nullable;
  *
  * @see <a href="https://datatracker.ietf.org/doc/html/rfc6386">RFC 6386</a>
  */
+@UtilityClass
 @ApiStatus.Internal
 public final class VP8Encoder {
 
@@ -52,8 +56,6 @@ public final class VP8Encoder {
      * {@code log2(NUM_TOKEN_PARTITIONS)}; encoded into the 2-bit header field.
      */
     private static final int LOG2_NUM_TOKEN_PARTITIONS = 2;
-
-    private VP8Encoder() { }
 
     /**
      * Probability for the {@code prob_skip_false} header field in P-frames. 0x80 = 50/50,
@@ -528,7 +530,7 @@ public final class VP8Encoder {
     /**
      * Deep-copies the {@code [NUM_TYPES][NUM_BANDS][NUM_CTX][NUM_PROBAS]} proba table.
      */
-    private static int[][][][] deepCloneTokenProba(int @NotNull [][][][] src) {
+    private static int @NotNull [][][][] deepCloneTokenProba(int @NotNull [][][][] src) {
         int[][][][] out = new int[src.length][][][];
         for (int t = 0; t < src.length; t++) {
             out[t] = new int[src[t].length][][];
@@ -920,7 +922,7 @@ public final class VP8Encoder {
         // (mbCols*mbRows is bounded by ~8k for 1920x1080) so O(N log N) is fine.
         int[] sorted = variance.clone();
         java.util.Arrays.sort(sorted);
-        int q1Cut = sorted[(numMbs * 1) / 4];
+        int q1Cut = sorted[numMbs / 4];
         int q2Cut = sorted[(numMbs * 2) / 4];
         int q3Cut = sorted[(numMbs * 3) / 4];
 
@@ -1488,7 +1490,7 @@ public final class VP8Encoder {
      * @param prevBranches prior-frame observations (null when no data yet)
      */
     private static void emitIntraModeProbaUpdate(
-        @NotNull BooleanEncoder e, int @NotNull [] probs, int[] @Nullable [] prevBranches
+        @NotNull BooleanEncoder e, int @NotNull [] probs, int @Nullable [][] prevBranches
     ) {
         if (prevBranches == null) {
             e.encodeBool(0);
@@ -2289,7 +2291,7 @@ public final class VP8Encoder {
         }
 
         // --- NEW + residual (motion search; skip when (0,0) or coincides with NEAREST/NEAR) ---
-        int[] bestWireMv = findBestMv(s, mb, mbX, mbY);
+        int[] bestWireMv = findBestMv(s, mbX, mbY);
         if (bestWireMv != null && (bestWireMv[0] != 0 || bestWireMv[1] != 0)) {
             int wireRow = bestWireMv[0];
             int wireCol = bestWireMv[1];
@@ -2323,8 +2325,7 @@ public final class VP8Encoder {
         // doesn't fit; smooth content where ZEROMV / NEAREST / NEW already nail it
         // cannot benefit from the extra MV-tree bits.
         if (best.sse > SPLITMV_GATE_SSE) {
-            if (s.session != null)
-                s.session.splitMvSearches++;
+            s.session.splitMvSearches++;
             InterCandidate split = buildBestSplitMvCandidate(
                 s, mb, mbX, mbY, near, mvRefProbs, skipBit0, skipBit1, baseInterHeader, lambda
             );
@@ -2477,19 +2478,19 @@ public final class VP8Encoder {
      * {@code mbIdx * SUB_MV_SLOT_COUNT + subMvSlotBase(scheme) + j}.
      */
     private static int subMvSlotBase(int scheme) {
-        switch (scheme) {
-            case VP8Tables.MBSPLIT_TOP_BOTTOM: return 0;     // slots 0..1
-            case VP8Tables.MBSPLIT_LEFT_RIGHT: return 2;     // slots 2..3
-            case VP8Tables.MBSPLIT_QUARTERS:   return 4;     // slots 4..7
-            case VP8Tables.MBSPLIT_EIGHTS:     return 8;     // slots 8..23
-            default: throw new IllegalStateException("invalid SPLITMV scheme: " + scheme);
-        }
+        return switch (scheme) {
+            case VP8Tables.MBSPLIT_TOP_BOTTOM -> 0;     // slots 0..1
+            case VP8Tables.MBSPLIT_LEFT_RIGHT -> 2;     // slots 2..3
+            case VP8Tables.MBSPLIT_QUARTERS ->   4;     // slots 4..7
+            case VP8Tables.MBSPLIT_EIGHTS ->     8;     // slots 8..23
+            default -> throw new IllegalStateException("invalid SPLITMV scheme: " + scheme);
+        };
     }
 
     /**
      * Resolves the LEFT and ABOVE neighbour sub-MVs for slot {@code j} of SPLITMV
-     * scheme {@code scheme} of MB {@code (mbX, mbY)}. Mirrors VP8Decoder.decodeSplitMv
-     * (lines 1008-1049): intra-MB neighbour MVs come from {@code thisMbSlotRow} /
+     * scheme {@code scheme} of MB {@code (mbX, mbY)}. Mirrors VP8Decoder.decodeSplitMv:
+     * intra-MB neighbour MVs come from {@code thisMbSlotRow} /
      * {@code thisMbSlotCol} (already-resolved earlier slots in raster order); cross-MB
      * lookups read {@link State#bmiRow} / {@link State#bmiCol} when the neighbour MB is
      * SPLITMV ({@code mbSplitScheme[neighbour] >= 0}), else fall back to the MB-level
@@ -2558,6 +2559,7 @@ public final class VP8Encoder {
         int blockX0, int blockY0, int blockW, int blockH,
         int internalRow, int internalCol
     ) {
+        assert s.session != null;
         int refStrideY = s.session.refLumaStride;
         int refH = s.session.refMbRows * 16;
         int lumaY = mbY * 16 + blockY0 + (internalRow >> 3);
@@ -2590,6 +2592,7 @@ public final class VP8Encoder {
         int @NotNull [] slotRow, int @NotNull [] slotCol,
         short @NotNull [] predY, short @NotNull [] predU, short @NotNull [] predV
     ) {
+        assert s.session != null;
         int refStrideY = s.session.refLumaStride;
         int refH = s.session.refMbRows * 16;
         int refStrideC = s.session.refChromaStride;
@@ -2608,8 +2611,7 @@ public final class VP8Encoder {
                 SubpelPrediction.predict6tap(s.session.refY, refStrideY, refH,
                     refX, refYPos, subX, subY, tmp, 4, 4, 4);
                 for (int y = 0; y < 4; y++)
-                    for (int x = 0; x < 4; x++)
-                        predY[(by * 4 + y) * 16 + (bx * 4 + x)] = tmp[y * 4 + x];
+                    System.arraycopy(tmp, y * 4, predY, (by * 4 + y) * 16 + bx * 4, 4);
             }
         }
 
@@ -2657,11 +2659,11 @@ public final class VP8Encoder {
         int blockY0 = (firstK >> 2) * 4;
         int blockW, blockH;
         switch (scheme) {
-            case VP8Tables.MBSPLIT_TOP_BOTTOM: blockW = 16; blockH = 8; break;
-            case VP8Tables.MBSPLIT_LEFT_RIGHT: blockW = 8;  blockH = 16; break;
-            case VP8Tables.MBSPLIT_QUARTERS:   blockW = 8;  blockH = 8;  break;
-            case VP8Tables.MBSPLIT_EIGHTS:     blockW = 4;  blockH = 4;  break;
-            default: throw new IllegalStateException("invalid SPLITMV scheme: " + scheme);
+            case VP8Tables.MBSPLIT_TOP_BOTTOM -> { blockW = 16; blockH = 8; }
+            case VP8Tables.MBSPLIT_LEFT_RIGHT -> { blockW = 8;  blockH = 16; }
+            case VP8Tables.MBSPLIT_QUARTERS ->   { blockW = 8;  blockH = 8; }
+            case VP8Tables.MBSPLIT_EIGHTS ->     { blockW = 4;  blockH = 4; }
+            default -> throw new IllegalStateException("invalid SPLITMV scheme: " + scheme);
         }
         return (blockX0 & 0xFF) | ((blockY0 & 0xFF) << 8)
             | ((blockW & 0xFF) << 16) | ((blockH & 0xFF) << 24);
@@ -2688,7 +2690,7 @@ public final class VP8Encoder {
      * Returns {@code null} when none of the considered schemes produced a usable
      * prediction (e.g., all NEW searches clipped).
      */
-    private static @org.jetbrains.annotations.Nullable InterCandidate buildBestSplitMvCandidate(
+    private static @Nullable InterCandidate buildBestSplitMvCandidate(
         @NotNull State s, @NotNull Macroblock mb, int mbX, int mbY, @NotNull NearMvs.Result near,
         int @NotNull [] mvRefProbs, int skipBit0, int skipBit1, int baseInterHeader, int lambda
     ) {
@@ -2798,7 +2800,7 @@ public final class VP8Encoder {
                         + VP8Costs.mvWireBitCost(deltaRow, deltaCol, s.mvProba);
                     long score = sse * VP8Costs.RD_DISTO_MULT + (long) rate * lambda;
                     if (score < bestScore) {
-                        bestScore = score; bestRef = VP8Tables.SUB_MV_REF_NEW;
+                        bestRef = VP8Tables.SUB_MV_REF_NEW;
                         bestSse = sse; bestRate = rate;
                         bestInternalRow = newInternalRow; bestInternalCol = newInternalCol;
                         bestWireRow = deltaRow; bestWireCol = deltaCol;
@@ -3041,9 +3043,7 @@ public final class VP8Encoder {
      * Returns {@code null} when the prepass determined no valid NEW-MV exists for
      * this MB (all candidates fell outside the reference frame bounds).
      */
-    private static int @org.jetbrains.annotations.Nullable [] findBestMv(
-        @NotNull State s, @NotNull Macroblock mb, int mbX, int mbY
-    ) {
+    private static int @Nullable [] findBestMv(@NotNull State s, int mbX, int mbY) {
         int mbIdx = mbY * s.mbCols + mbX;
         if (!s.cachedMvFound[mbIdx]) return null;
         return new int[] { s.cachedMvWireRow[mbIdx], s.cachedMvWireCol[mbIdx] };
@@ -3100,9 +3100,7 @@ public final class VP8Encoder {
             return;
         }
 
-        java.util.concurrent.ForkJoinPool pool =
-            new java.util.concurrent.ForkJoinPool(s.motionSearchThreads);
-        try {
+        try (java.util.concurrent.ForkJoinPool pool = new java.util.concurrent.ForkJoinPool(s.motionSearchThreads)) {
             pool.submit(() ->
                 java.util.stream.IntStream.range(0, total).parallel().forEach(mvPass)
             ).get();
@@ -3111,8 +3109,6 @@ public final class VP8Encoder {
             throw new RuntimeException("motion-search prepass interrupted", ie);
         } catch (java.util.concurrent.ExecutionException ee) {
             throw new RuntimeException("motion-search prepass failed", ee.getCause());
-        } finally {
-            pool.shutdown();
         }
     }
 
@@ -3171,7 +3167,7 @@ public final class VP8Encoder {
      * @return 2-entry {@code [wireRow, wireCol]} array, or {@code null} if no
      *         valid MV exists for this slot (every candidate clipped)
      */
-    private static int @org.jetbrains.annotations.Nullable [] findBestSubBlockMv(
+    private static int @Nullable [] findBestSubBlockMv(
         @NotNull State s, @NotNull Macroblock mb, int mbX, int mbY,
         int scheme, int j,
         int blockX0, int blockY0, int blockW, int blockH
@@ -3201,11 +3197,12 @@ public final class VP8Encoder {
      * Called exactly once per MB from {@link #runMotionSearchPrepass}; the per-MB
      * serial R-D loop reads the cached result via {@link #findBestMv}.
      */
-    private static int @org.jetbrains.annotations.Nullable [] computeBestMv(
+    private static int @Nullable [] computeBestMv(
         @NotNull State s, @NotNull Macroblock mb, int mbX, int mbY
     ) {
         int baseX = mbX * 16;
         int baseY = mbY * 16;
+        assert s.session != null;
         int refStride = s.session.refLumaStride;
         int refH = s.session.refMbRows * 16;
 
@@ -3317,12 +3314,13 @@ public final class VP8Encoder {
      * @return wire MV in {@code [bestWireRow, bestWireCol]} (quarter-pel units), or
      *         {@code null} if every candidate clipped
      */
-    static int @org.jetbrains.annotations.Nullable [] computeBestSubBlockMv(
+    static int @Nullable [] computeBestSubBlockMv(
         @NotNull State s, @NotNull Macroblock mb, int mbX, int mbY,
         int blockX0, int blockY0, int blockW, int blockH
     ) {
         int baseX = mbX * 16 + blockX0;
         int baseY = mbY * 16 + blockY0;
+        assert s.session != null;
         int refStride = s.session.refLumaStride;
         int refH = s.session.refMbRows * 16;
 
@@ -3428,6 +3426,7 @@ public final class VP8Encoder {
         @NotNull State s, @NotNull Macroblock mb, int mbX, int mbY,
         int blockX0, int blockY0, int blockW, int blockH, int wireRow, int wireCol
     ) {
+        assert s.session != null;
         int refStrideY = s.session.refLumaStride;
         int refH = s.session.refMbRows * 16;
         int lumaIntRow = wireRow << 1;
@@ -3478,6 +3477,7 @@ public final class VP8Encoder {
         @NotNull State s, int mbX, int mbY, int wireRow, int wireCol,
         short @NotNull [] predY, short @NotNull [] predU, short @NotNull [] predV
     ) {
+        assert s.session != null;
         int refStrideY = s.session.refLumaStride;
         int refH = s.session.refMbRows * 16;
         int refStrideC = s.session.refChromaStride;
@@ -3567,7 +3567,7 @@ public final class VP8Encoder {
      * @param probs the 19-element probability vector for this component
      */
     private static void emitMvComponent(
-        @NotNull BooleanEncoder w, int v, int @NotNull [] probs, int[] @Nullable [] branches
+        @NotNull BooleanEncoder w, int v, int @NotNull [] probs, int @Nullable [][] branches
     ) {
         int x = Math.abs(v);
         if (x < VP8Tables.MV_SHORT_COUNT) {
@@ -3613,7 +3613,7 @@ public final class VP8Encoder {
      * Piggybacks on {@link #findTreePath} so the tree traversal logic lives in one place.
      */
     private static void emitSmallMvTreeLeaf(
-        @NotNull BooleanEncoder w, int value, int @NotNull [] smallProbs, int[] @Nullable [] branches
+        @NotNull BooleanEncoder w, int value, int @NotNull [] smallProbs, int @Nullable [][] branches
     ) {
         int[] pathBranches = new int[16];
         int[] pathNodes = new int[16];
@@ -3628,7 +3628,7 @@ public final class VP8Encoder {
     /**
      * Increments {@code branches[slot][outcome]} when {@code branches} is non-null.
      */
-    private static void countBranch(int[] @Nullable [] branches, int slot, int outcome) {
+    private static void countBranch(int @Nullable [][] branches, int slot, int outcome) {
         if (branches != null) branches[slot][outcome]++;
     }
 
@@ -3639,7 +3639,7 @@ public final class VP8Encoder {
      */
     private static void emitTreeLeafCounted(
         @NotNull BooleanEncoder h, int @NotNull [] tree, int mode,
-        int @NotNull [] probs, int[] @Nullable [] branches
+        int @NotNull [] probs, int @Nullable [][] branches
     ) {
         int[] pathBranches = new int[16];
         int[] pathNodes = new int[16];
@@ -3654,18 +3654,12 @@ public final class VP8Encoder {
     /**
      * Output of a per-MB luma encode: zig-zag coefficients for emit + reconstruction.
      */
+    @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
     private static final class I16Result {
-        final short[] y2ZigZag;              // Y2 block, zig-zag order (16 entries); null for SPLITMV
+        final short @Nullable [] y2ZigZag;   // Y2 block, zig-zag order (16 entries); null for SPLITMV
         final short[][] yAcZigZag;           // 16 Y blocks, zig-zag order; AC only behind a Y2 block
         final short[] recon;                 // 256-sample reconstructed MB
         final int rate;                      // sum of residual bit costs across Y2 + 16 Y AC blocks
-
-        I16Result(short[] y2ZigZag, short[][] yAcZigZag, short[] recon, int rate) {
-            this.y2ZigZag = y2ZigZag;
-            this.yAcZigZag = yAcZigZag;
-            this.recon = recon;
-            this.rate = rate;
-        }
     }
 
     /**
@@ -3803,17 +3797,12 @@ public final class VP8Encoder {
      * enumerate multiple prediction candidates without mutating {@link State#topNz}/
      * {@link State#leftNz} until a winner is picked.
      */
+    @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
     private static final class ChromaTrellisResult {
         final short[][] dequant;            // 4 sub-blocks of raster-order dequantized coefficients
         final short[][] zz;                 // 4 sub-blocks of zig-zag-order quantized levels
         final int[] nz;                     // 4 nz flags in layout {@code [by*2+bx]}
         final int rate;                     // token-emit bit cost in {@code 1/256} bits
-        ChromaTrellisResult(short[][] dequant, short[][] zz, int[] nz, int rate) {
-            this.dequant = dequant;
-            this.zz = zz;
-            this.nz = nz;
-            this.rate = rate;
-        }
     }
 
     /**
@@ -3921,20 +3910,13 @@ public final class VP8Encoder {
     /**
      * Output of the per-MB B_PRED evaluation path.
      */
+    @RequiredArgsConstructor(access = AccessLevel.PACKAGE)
     private static final class BPredResult {
         final int[] modes;          // 16 sub-block modes, raster order (by * 4 + bx)
         final short[][] yAc;        // 16 quantized coefficient blocks, <b>zig-zag order</b>
         final short[] recon;        // 256 reconstructed luma samples, MB-local raster
         final long sse;             // sum-of-squared-error vs source
         final long rdScore;         // the sub-blocks' lambda_mode scores plus the cost of signalling B_PRED
-
-        BPredResult(int[] modes, short[][] yAc, short[] recon, long sse, long rdScore) {
-            this.modes = modes;
-            this.yAc = yAc;
-            this.recon = recon;
-            this.sse = sse;
-            this.rdScore = rdScore;
-        }
     }
 
     /**
@@ -3969,14 +3951,14 @@ public final class VP8Encoder {
         // Sub-block mode neighbour context tracked locally (so we don't update s.intraT/L
         // until after we know B_PRED has won).
         int[] localTop = new int[4];
-        for (int bx = 0; bx < 4; bx++) localTop[bx] = s.intraT[mbX * 4 + bx];
+        System.arraycopy(s.intraT, mbX * 4, localTop, 0, 4);
         int[] localLeft = s.intraL.clone();
 
         // Non-zero sub-block contexts tracked locally so token-cost scoring sees the same
         // {@code top_nz + left_nz} values that libwebp's {@code PickBestIntra4} passes into
         // its {@code VP8Residual}. Mirror layout of {@link State#topNz} (rows 0..3 = luma).
         int[] localTopNz = new int[4];
-        for (int bx = 0; bx < 4; bx++) localTopNz[bx] = s.topNz[mbX][bx];
+        System.arraycopy(s.topNz[mbX], 0, localTopNz, 0, 4);
         int[] localLeftNz = { s.leftNz[0], s.leftNz[1], s.leftNz[2], s.leftNz[3] };
 
         for (int by = 0; by < 4; by++) {
@@ -4089,7 +4071,7 @@ public final class VP8Encoder {
      * does, where RFC 6386 and libwebp take it: 127 on the frame's top row, the last
      * sample of the MB above at the frame's right edge.
      */
-    private static short[] neighborAbove8(@NotNull State s, short @NotNull [] mbRecon, int mbX, int mbY, int bx, int by) {
+    private static short @Nullable [] neighborAbove8(@NotNull State s, short @NotNull [] mbRecon, int mbX, int mbY, int bx, int by) {
         if (by == 0 && mbY == 0) return null;
         short[] above = new short[8];
         for (int i = 0; i < 8; i++) {
@@ -4107,7 +4089,7 @@ public final class VP8Encoder {
     /**
      * Left-column 4 neighbours for sub-block ({@code by}, {@code bx}).
      */
-    private static short[] neighborLeft4(@NotNull State s, short @NotNull [] mbRecon, int mbX, int mbY, int bx, int by) {
+    private static short @Nullable [] neighborLeft4(@NotNull State s, short @NotNull [] mbRecon, int mbX, int mbY, int bx, int by) {
         if (bx == 0 && mbX == 0) return null;
         short[] left = new short[4];
         for (int i = 0; i < 4; i++) {
@@ -4216,6 +4198,7 @@ public final class VP8Encoder {
             // libvpx's has_y2_block, neither encoder nor decoder touches the Y2 nz context
             // bits (top[8]/left[8]) here.
         } else {
+            assert y2ZigZag != null;
             int ctx = top[8] + left[8];
             int nz = VP8TokenEncoder.emit(
                 t, y2ZigZag, 0, ctx, VP8Tables.TYPE_I16_DC, s.tokenProba, s.tokenBranches);
@@ -4245,8 +4228,7 @@ public final class VP8Encoder {
     private static void emitBPredModes(@NotNull State s, @NotNull BooleanEncoder h, int mbX, int @NotNull [] modes) {
         int[][] subModes = new int[4][4];
         for (int by = 0; by < 4; by++)
-            for (int bx = 0; bx < 4; bx++)
-                subModes[by][bx] = modes[by * 4 + bx];
+            System.arraycopy(modes, by * 4, subModes[by], 0, 4);
 
         for (int by = 0; by < 4; by++) {
             for (int bx = 0; bx < 4; bx++) {
@@ -4258,7 +4240,7 @@ public final class VP8Encoder {
         }
 
         // Update neighbour-mode context for later MBs.
-        for (int bx = 0; bx < 4; bx++) s.intraT[mbX * 4 + bx] = subModes[3][bx];
+        System.arraycopy(subModes[3], 0, s.intraT, mbX * 4, 4);
         for (int by = 0; by < 4; by++) s.intraL[by] = subModes[by][3];
     }
 
@@ -4279,7 +4261,7 @@ public final class VP8Encoder {
 
         // Populate cross-MB neighbour context from the bottom-row / right-column sub-blocks,
         // matching the keyframe emitBPredModes bookkeeping.
-        for (int bx = 0; bx < 4; bx++) s.intraT[mbX * 4 + bx] = modes[3 * 4 + bx];
+        System.arraycopy(modes, 3 * 4, s.intraT, mbX * 4, 4);
         for (int by = 0; by < 4; by++) s.intraL[by] = modes[by * 4 + 3];
     }
 
@@ -4290,7 +4272,6 @@ public final class VP8Encoder {
      */
     private static void emitBMode(@NotNull BooleanEncoder h, int mode, int @NotNull [] probs) {
         int[] tree = VP8Tables.BMODE_TREE;
-        int node = 0;
         // Trees can have at most ~9 internal-node hops for the bmode tree.
         int[] pathBranches = new int[9];
         int[] pathNodes = new int[9];
@@ -4301,8 +4282,8 @@ public final class VP8Encoder {
 
     /** Depth-first walks {@code tree} looking for {@code targetLeaf}, recording the branch
      *  bits taken to reach it. Returns the depth on success, 0 on failure. */
-    private static int findTreePath(int[] tree, int node, int targetLeaf,
-                                    int[] branches, int[] nodes, int depth) {
+    private static int findTreePath(int @NotNull [] tree, int node, int targetLeaf,
+                                    int @NotNull [] branches, int @NotNull [] nodes, int depth) {
         for (int branch = 0; branch < 2; branch++) {
             int next = tree[node + branch];
             branches[depth] = branch;
@@ -4554,7 +4535,7 @@ public final class VP8Encoder {
      * Extracts the bottom row of the MB above (length {@code n}, or {@code null}
      * when this is the top MB row).
      */
-    private static short[] extractAbove(short @NotNull [] plane, int stride, int x0, int y0, int n) {
+    private static short @Nullable [] extractAbove(short @NotNull [] plane, int stride, int x0, int y0, int n) {
         if (y0 == 0) return null;
         short[] row = new short[n];
         int off = (y0 - 1) * stride + x0;
@@ -4566,7 +4547,7 @@ public final class VP8Encoder {
      * Extracts the right column of the MB to the left (length {@code n}, or
      * {@code null} when this is the first MB in a row).
      */
-    private static short[] extractLeft(short @NotNull [] plane, int stride, int x0, int y0, int n) {
+    private static short @Nullable [] extractLeft(short @NotNull [] plane, int stride, int x0, int y0, int n) {
         if (x0 == 0) return null;
         short[] col = new short[n];
         for (int i = 0; i < n; i++) col[i] = plane[(y0 + i) * stride + x0 - 1];

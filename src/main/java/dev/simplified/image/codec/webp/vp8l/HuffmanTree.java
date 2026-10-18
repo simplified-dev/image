@@ -1,5 +1,7 @@
 package dev.simplified.image.codec.webp.vp8l;
 
+import dev.simplified.annotations.AccessLevel;
+import dev.simplified.annotations.NoArgsConstructor;
 import dev.simplified.image.exception.ImageDecodeException;
 import org.jetbrains.annotations.NotNull;
 
@@ -10,6 +12,7 @@ import org.jetbrains.annotations.NotNull;
  * (encoding). Uses a flat lookup table for codes up to 8 bits for fast
  * single-lookup decoding, with tree-walk fallback for longer codes.
  */
+@NoArgsConstructor(access = AccessLevel.PRIVATE)
 final class HuffmanTree {
 
     private static final int TABLE_BITS = 8;
@@ -17,11 +20,10 @@ final class HuffmanTree {
 
     // Flat table: low 16 bits = symbol, high 16 bits = code length
     // For codes > TABLE_BITS, entry points to secondary table offset
-    private final int[] table;
-    private final int numSymbols;
+    private final int @NotNull [] table = new int[TABLE_SIZE];
 
     // For longer codes: tree nodes [left, right] indexed by offset
-    private int[] tree;
+    private int @NotNull [] tree = new int[64];
     private int treeSize;
 
     // Degenerate "single symbol" tree: VP8L prefix codes with one used symbol consume
@@ -29,13 +31,6 @@ final class HuffmanTree {
     // normal flat-table lookup relies on len>0 to signal a valid entry.
     private boolean degenerate;
     private int degenerateSymbol;
-
-    private HuffmanTree(int numSymbols) {
-        this.numSymbols = numSymbols;
-        this.table = new int[TABLE_SIZE];
-        this.tree = new int[64];
-        this.treeSize = 0;
-    }
 
     /**
      * Builds a Huffman tree from an array of code lengths.
@@ -47,7 +42,7 @@ final class HuffmanTree {
      */
     static @NotNull HuffmanTree fromCodeLengths(int @NotNull [] codeLengths) {
         int numSymbols = codeLengths.length;
-        HuffmanTree tree = new HuffmanTree(numSymbols);
+        HuffmanTree tree = new HuffmanTree();
 
         // Find max code length and count non-zero entries
         int maxLen = 0;
@@ -118,7 +113,7 @@ final class HuffmanTree {
      * @return a tree that always decodes to this symbol
      */
     static @NotNull HuffmanTree singleSymbol(int symbol) {
-        HuffmanTree tree = new HuffmanTree(symbol + 1);
+        HuffmanTree tree = new HuffmanTree();
         tree.degenerate = true;
         tree.degenerateSymbol = symbol;
         return tree;
@@ -145,51 +140,6 @@ final class HuffmanTree {
 
         // Long code - walk overflow tree
         return readLongCode(reader);
-    }
-
-    /**
-     * Builds optimal code lengths from symbol frequencies for encoding.
-     *
-     * @param frequencies the frequency count of each symbol
-     * @param maxBits the maximum allowed code length
-     * @return an array of code lengths indexed by symbol
-     */
-    static int @NotNull [] buildCodeLengths(int @NotNull [] frequencies, int maxBits) {
-        int n = frequencies.length;
-        int[] codeLengths = new int[n];
-
-        // Count non-zero symbols
-        int nonZero = 0;
-        int lastSymbol = 0;
-        for (int i = 0; i < n; i++) {
-            if (frequencies[i] > 0) {
-                nonZero++;
-                lastSymbol = i;
-            }
-        }
-
-        if (nonZero == 0) return codeLengths;
-        if (nonZero == 1) {
-            codeLengths[lastSymbol] = 1;
-            return codeLengths;
-        }
-
-        // Simple length-limited Huffman using package-merge is complex;
-        // use a simpler heuristic: frequency-proportional bit allocation
-        // capped at maxBits
-        long totalFreq = 0;
-        for (int f : frequencies)
-            totalFreq += f;
-
-        for (int i = 0; i < n; i++) {
-            if (frequencies[i] > 0) {
-                double prob = (double) frequencies[i] / totalFreq;
-                int bits = Math.max(1, Math.min(maxBits, (int) Math.ceil(-Math.log(prob) / Math.log(2))));
-                codeLengths[i] = bits;
-            }
-        }
-
-        return codeLengths;
     }
 
     private void addLongCode(int reversed, int len, int symbol) {

@@ -1,6 +1,5 @@
 package dev.simplified.image.codec.tga;
 
-import dev.simplified.annotations.SilentThrows;
 import dev.simplified.image.ImageData;
 import dev.simplified.image.ImageFormat;
 import dev.simplified.image.PixelBuffer;
@@ -37,7 +36,6 @@ public class TgaImageReader implements ImageReader {
     }
 
     @Override
-    @SilentThrows
     public @NotNull ImageData read(byte @NotNull [] data, @Nullable ImageReadOptions options) {
         if (data.length < 18)
             throw new ImageDecodeException("TGA data too short: '%d' bytes", data.length);
@@ -83,7 +81,7 @@ public class TgaImageReader implements ImageReader {
         int total = width * height;
 
         for (int i = 0; i < total; i++) {
-            int argb = readPixel(data, pos, bpp, hasAlpha);
+            int argb = readPixel(data, pos, hasAlpha);
             pixels[destIndex(i, width, height, topDown)] = argb;
             pos += bpp;
         }
@@ -98,7 +96,7 @@ public class TgaImageReader implements ImageReader {
             int count = (header & 0x7F) + 1;
 
             if ((header & 0x80) != 0) {
-                int argb = readPixel(data, pos, bpp, hasAlpha);
+                int argb = readPixel(data, pos, hasAlpha);
                 pos += bpp;
 
                 for (int j = 0; j < count; j++) {
@@ -113,7 +111,7 @@ public class TgaImageReader implements ImageReader {
                     if (i >= total)
                         throw new ImageDecodeException("TGA raw packet overflows pixel count");
 
-                    pixels[destIndex(i, width, height, topDown)] = readPixel(data, pos, bpp, hasAlpha);
+                    pixels[destIndex(i, width, height, topDown)] = readPixel(data, pos, hasAlpha);
                     pos += bpp;
                     i++;
                 }
@@ -121,7 +119,7 @@ public class TgaImageReader implements ImageReader {
         }
     }
 
-    private static int readPixel(byte @NotNull [] data, int pos, int bpp, boolean hasAlpha) {
+    private static int readPixel(byte @NotNull [] data, int pos, boolean hasAlpha) {
         int b = data[pos] & 0xFF;
         int g = data[pos + 1] & 0xFF;
         int r = data[pos + 2] & 0xFF;

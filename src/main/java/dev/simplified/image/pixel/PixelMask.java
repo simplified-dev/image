@@ -1,5 +1,7 @@
 package dev.simplified.image.pixel;
 
+import dev.simplified.annotations.Getter;
+import dev.simplified.annotations.NamingStyle;
 import org.jetbrains.annotations.NotNull;
 
 /**
@@ -21,11 +23,13 @@ public final class PixelMask {
     /**
      * Mask width in pixels.
      */
+    @Getter(style = NamingStyle.FLUENT)
     private final int width;
 
     /**
      * Mask height in pixels.
      */
+    @Getter(style = NamingStyle.FLUENT)
     private final int height;
 
     /**
@@ -38,20 +42,6 @@ public final class PixelMask {
         this.width = width;
         this.height = height;
         this.data = new byte[Math.max(0, width * height)];
-    }
-
-    /**
-     * Mask width in pixels.
-     */
-    public int width() {
-        return this.width;
-    }
-
-    /**
-     * Mask height in pixels.
-     */
-    public int height() {
-        return this.height;
     }
 
     /**

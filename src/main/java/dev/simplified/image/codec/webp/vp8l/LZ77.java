@@ -1,5 +1,6 @@
 package dev.simplified.image.codec.webp.vp8l;
 
+import dev.simplified.annotations.UtilityClass;
 import org.jetbrains.annotations.NotNull;
 
 /**
@@ -10,6 +11,7 @@ import org.jetbrains.annotations.NotNull;
  * at a match as long as asked for. The decoder side turns length and distance symbols
  * back into a pixel count and a linear distance, which {@link VP8LDecoder} copies from.
  */
+@UtilityClass
 final class LZ77 {
 
     /**
@@ -99,8 +101,6 @@ final class LZ77 {
         }
         return dist + 120;
     }
-
-    private LZ77() { }
 
     /**
      * Decodes an LZ77 match length from a VP8L length symbol.
@@ -252,7 +252,7 @@ final class LZ77 {
         return table;
     }
 
-    private static int hashPixel(int[] pixels, int pos) {
+    private static int hashPixel(int @NotNull [] pixels, int pos) {
         return (pixels[pos] * 0x1E35A7BD) >>> (32 - HASH_BITS);
     }
 
@@ -288,7 +288,7 @@ final class LZ77 {
         return new int[] { symbol, extraBits, extraValue };
     }
 
-    private static int matchLength(int[] pixels, int a, int b, int maxLen) {
+    private static int matchLength(int @NotNull [] pixels, int a, int b, int maxLen) {
         int len = 0;
         while (len < maxLen && pixels[a + len] == pixels[b + len])
             len++;

@@ -1,5 +1,6 @@
 package dev.simplified.image.codec.webp;
 
+import dev.simplified.annotations.UtilityClass;
 import dev.simplified.image.PixelBuffer;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -29,6 +30,7 @@ import java.util.Optional;
  * Scripts take file paths and numbers as arguments, read from {@code sys.argv}, and never have them
  * spliced into their source.
  */
+@UtilityClass
 public final class LibwebpOracle {
 
     /** The system property naming the interpreter to try first. */
@@ -122,8 +124,6 @@ public final class LibwebpOracle {
                 print(f'A {pixels[i]}')
         _webp.lib.WebPAnimDecoderDelete(dec)
         """;
-
-    private LibwebpOracle() { }
 
     /**
      * The outcome of trying each candidate in turn.

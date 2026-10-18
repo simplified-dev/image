@@ -1,8 +1,10 @@
 package dev.simplified.image.codec.webp.vp8;
 
+import dev.simplified.annotations.NoArgsConstructor;
 import dev.simplified.image.PixelBuffer;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 /**
  * Stateful VP8 decoder carrying the three VP8 reference-frame slots - {@code LAST},
@@ -24,6 +26,7 @@ import org.jetbrains.annotations.NotNull;
  * @see <a href="https://datatracker.ietf.org/doc/html/rfc6386#section-9.7">RFC 6386 section 9.7</a>
  */
 @ApiStatus.Internal
+@NoArgsConstructor
 public final class VP8DecoderSession {
 
     // ── LAST reference ──
@@ -115,11 +118,6 @@ public final class VP8DecoderSession {
      * {@link #tokenProba}.
      */
     int[] @NotNull [] mvProba = cloneMvProba();
-
-    /**
-     * Constructs a new {@code VP8DecoderSession} with no cached references.
-     */
-    public VP8DecoderSession() { }
 
     /**
      * Makes a frame's probabilities the context the next frame starts from, as libvpx keeps them
@@ -363,7 +361,7 @@ public final class VP8DecoderSession {
         System.arraycopy(goldenV, 0, altrefV, 0, goldenV.length);
     }
 
-    private static short[] ensureLen(short[] arr, int len) {
+    private static short @NotNull [] ensureLen(short @Nullable [] arr, int len) {
         return (arr == null || arr.length != len) ? new short[len] : arr;
     }
 

@@ -87,15 +87,6 @@ final class BitWriter {
         return result;
     }
 
-    /**
-     * Returns the current number of bytes written (excluding unflushed bits).
-     *
-     * @return the byte count
-     */
-    int size() {
-        return bytePos;
-    }
-
     private void ensureCapacity(int additional) {
         if (bytePos + additional > data.length) {
             int newCapacity = Math.max(data.length * 2, bytePos + additional);

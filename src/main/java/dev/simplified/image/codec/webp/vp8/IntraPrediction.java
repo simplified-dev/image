@@ -1,6 +1,8 @@
 package dev.simplified.image.codec.webp.vp8;
 
+import dev.simplified.annotations.UtilityClass;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 /**
  * VP8 intra-frame spatial prediction for luma and chroma blocks.
@@ -8,6 +10,7 @@ import org.jetbrains.annotations.NotNull;
  * Supports 5 luma macroblock modes (4 whole-block 16x16 modes plus B_PRED),
  * 10 luma 4x4 sub-block modes, and 4 chroma 8x8 modes.
  */
+@UtilityClass
 final class IntraPrediction {
 
     /**
@@ -44,8 +47,6 @@ final class IntraPrediction {
      */
     static final int NUM_4x4_MODES = 10;
 
-    private IntraPrediction() { }
-
     /**
      * Fills a 4x4 block with predicted values using a B_PRED sub-block mode.
      *
@@ -57,8 +58,8 @@ final class IntraPrediction {
      */
     static void predict4x4(
         short @NotNull [] predicted,
-        short[] above,
-        short[] left,
+        short @Nullable [] above,
+        short @Nullable [] left,
         short aboveLeft,
         int mode
     ) {
@@ -76,7 +77,6 @@ final class IntraPrediction {
             lt = new short[4];
             java.util.Arrays.fill(lt, (short) 129);
         }
-        final int P = aboveLeft;
         final int A = top[0], B = top[1], C = top[2], D = top[3];
         final int E = top[4], F = top[5], G = top[6], H = top[7];
         final int I = lt[0], J = lt[1], K = lt[2], L = lt[3];
@@ -90,10 +90,10 @@ final class IntraPrediction {
             case B_TM_PRED -> {
                 for (int y = 0; y < 4; y++)
                     for (int x = 0; x < 4; x++)
-                        predicted[y * 4 + x] = (short) clamp(top[x] + lt[y] - P);
+                        predicted[y * 4 + x] = (short) clamp(top[x] + lt[y] - aboveLeft);
             }
             case B_VE_PRED -> {
-                short c0 = avg3((short) P, (short) A, (short) B);
+                short c0 = avg3(aboveLeft, (short) A, (short) B);
                 short c1 = avg3((short) A, (short) B, (short) C);
                 short c2 = avg3((short) B, (short) C, (short) D);
                 short c3 = avg3((short) C, (short) D, (short) E);
@@ -105,7 +105,7 @@ final class IntraPrediction {
                 }
             }
             case B_HE_PRED -> {
-                short r0 = avg3((short) P, (short) I, (short) J);
+                short r0 = avg3(aboveLeft, (short) I, (short) J);
                 short r1 = avg3((short) I, (short) J, (short) K);
                 short r2 = avg3((short) J, (short) K, (short) L);
                 short r3 = avg3((short) K, (short) L, (short) L);
@@ -128,18 +128,18 @@ final class IntraPrediction {
             case B_RD_PRED -> {
                 predicted[12] = avg3((short) J, (short) K, (short) L);
                 predicted[8] = predicted[13] = avg3((short) I, (short) J, (short) K);
-                predicted[4] = predicted[9] = predicted[14] = avg3((short) P, (short) I, (short) J);
-                predicted[0] = predicted[5] = predicted[10] = predicted[15] = avg3((short) I, (short) P, (short) A);
-                predicted[1] = predicted[6] = predicted[11] = avg3((short) P, (short) A, (short) B);
+                predicted[4] = predicted[9] = predicted[14] = avg3(aboveLeft, (short) I, (short) J);
+                predicted[0] = predicted[5] = predicted[10] = predicted[15] = avg3((short) I, aboveLeft, (short) A);
+                predicted[1] = predicted[6] = predicted[11] = avg3(aboveLeft, (short) A, (short) B);
                 predicted[2] = predicted[7] = avg3((short) A, (short) B, (short) C);
                 predicted[3] = avg3((short) B, (short) C, (short) D);
             }
             case B_VR_PRED -> {
                 predicted[12] = avg3((short) K, (short) J, (short) I);
-                predicted[8] = avg3((short) J, (short) I, (short) P);
-                predicted[4] = predicted[13] = avg3((short) I, (short) P, (short) A);
-                predicted[0] = predicted[9] = avg2((short) P, (short) A);
-                predicted[5] = predicted[14] = avg3((short) P, (short) A, (short) B);
+                predicted[8] = avg3((short) J, (short) I, aboveLeft);
+                predicted[4] = predicted[13] = avg3((short) I, aboveLeft, (short) A);
+                predicted[0] = predicted[9] = avg2(aboveLeft, (short) A);
+                predicted[5] = predicted[14] = avg3(aboveLeft, (short) A, (short) B);
                 predicted[1] = predicted[10] = avg2((short) A, (short) B);
                 predicted[6] = predicted[15] = avg3((short) A, (short) B, (short) C);
                 predicted[2] = predicted[11] = avg2((short) B, (short) C);
@@ -165,10 +165,10 @@ final class IntraPrediction {
                 predicted[8] = predicted[14] = avg2((short) K, (short) J);
                 predicted[9] = predicted[15] = avg3((short) K, (short) J, (short) I);
                 predicted[4] = predicted[10] = avg2((short) J, (short) I);
-                predicted[5] = predicted[11] = avg3((short) J, (short) I, (short) P);
-                predicted[0] = predicted[6] = avg2((short) I, (short) P);
-                predicted[1] = predicted[7] = avg3((short) I, (short) P, (short) A);
-                predicted[2] = avg3((short) P, (short) A, (short) B);
+                predicted[5] = predicted[11] = avg3((short) J, (short) I, aboveLeft);
+                predicted[0] = predicted[6] = avg2((short) I, aboveLeft);
+                predicted[1] = predicted[7] = avg3((short) I, aboveLeft, (short) A);
+                predicted[2] = avg3(aboveLeft, (short) A, (short) B);
                 predicted[3] = avg3((short) A, (short) B, (short) C);
             }
             case B_HU_PRED -> {
@@ -196,8 +196,8 @@ final class IntraPrediction {
      */
     static void predict8x8(
         short @NotNull [] predicted,
-        short[] above,
-        short[] left,
+        short @Nullable [] above,
+        short @Nullable [] left,
         short aboveLeft,
         int mode
     ) {
@@ -244,8 +244,8 @@ final class IntraPrediction {
      */
     static void predict16x16(
         short @NotNull [] predicted,
-        short[] above,
-        short[] left,
+        short @Nullable [] above,
+        short @Nullable [] left,
         short aboveLeft,
         int mode
     ) {

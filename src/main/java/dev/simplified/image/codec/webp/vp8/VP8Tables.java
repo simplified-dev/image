@@ -1,5 +1,7 @@
 package dev.simplified.image.codec.webp.vp8;
 
+import dev.simplified.annotations.UtilityClass;
+
 /**
  * Constant tables of the VP8 bitstream, shared by the encoder and the decoder, for
  * keyframes and inter frames alike: coefficient bands, zig-zag order and token
@@ -13,6 +15,7 @@ package dev.simplified.image.codec.webp.vp8;
  *
  * @see <a href="https://datatracker.ietf.org/doc/html/rfc6386#section-13">RFC 6386 section 13</a>
  */
+@UtilityClass
 final class VP8Tables {
 
     /**
@@ -767,7 +770,5 @@ final class VP8Tables {
           {255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255}}}
     };
     // @formatter:on
-
-    private VP8Tables() { }
 
 }

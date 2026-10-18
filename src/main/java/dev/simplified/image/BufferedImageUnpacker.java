@@ -193,8 +193,7 @@ class BufferedImageUnpacker {
             g.dispose();
         }
 
-        int[] data = ((DataBufferInt) argb.getRaster().getDataBuffer()).getData();
-        return PixelBuffer.of(data, w, h, alpha);
+        return intArgb(argb, w, h, alpha);
     }
 
 }

@@ -594,7 +594,7 @@ public class ImagePipelineTest {
 
             assertThat(data.isAnimated(), is(true));
             assertThat(data.getFrames(), hasSize(2));
-            assertThat(data.getFrames().get(0).delayMs(), is(100));
+            assertThat(data.getFrames().getFirst().delayMs(), is(100));
         }
 
         @Test
@@ -628,6 +628,26 @@ public class ImagePipelineTest {
 
             assertThat(decoded.getWidth(), is(4));
             assertThat(decoded.getHeight(), is(4));
+        }
+
+        @Test
+        void fromByteArraysDecodesInInputOrder() {
+            ConcurrentList<byte[]> arrays = Concurrent.newList();
+            for (int side : new int[] { 3, 5, 7 })
+                arrays.add(ImageFactory.toByteArray(StaticImageData.of(createRgbTestImage(side, side, Color.RED)), ImageFormat.PNG));
+
+            ConcurrentList<ImageData> decoded = ImageFactory.fromByteArrays(arrays);
+
+            assertThat(decoded.stream().map(ImageData::getWidth).toList(), contains(3, 5, 7));
+        }
+
+        @Test
+        void fromByteArraysThrowsWhatTheFailingReadThrows() {
+            ConcurrentList<byte[]> arrays = Concurrent.newList();
+            arrays.add(ImageFactory.toByteArray(StaticImageData.of(createRgbTestImage(4, 4, Color.RED)), ImageFormat.PNG));
+            arrays.add("not an image".getBytes(StandardCharsets.US_ASCII));
+
+            assertThrows(UnsupportedFormatException.class, () -> ImageFactory.fromByteArrays(arrays));
         }
 
     }

@@ -1,9 +1,11 @@
 package dev.simplified.image;
 
+import dev.simplified.annotations.UtilityClass;
 import jdk.incubator.vector.FloatVector;
 import jdk.incubator.vector.IntVector;
 import jdk.incubator.vector.VectorMask;
 import jdk.incubator.vector.VectorSpecies;
+import org.jetbrains.annotations.NotNull;
 
 import static jdk.incubator.vector.VectorOperators.AND;
 import static jdk.incubator.vector.VectorOperators.DIV;
@@ -20,13 +22,12 @@ import static jdk.incubator.vector.VectorOperators.OR;
  * at runtime. Each method processes the SIMD-aligned prefix of its input range and returns the
  * number of elements consumed; the caller handles the scalar tail.
  */
+@UtilityClass
 final class VectorOps {
 
     private static final VectorSpecies<Integer> I = IntVector.SPECIES_PREFERRED;
 
-    private VectorOps() {}
-
-    static int grayscale(int[] p, int off, int len) {
+    static int grayscale(int @NotNull [] p, int off, int len) {
         int bound = I.loopBound(len);
         for (int i = 0; i < bound; i += I.length()) {
             int at = off + i;
@@ -51,7 +52,7 @@ final class VectorOps {
         return bound;
     }
 
-    static int multiplyAlpha(int[] p, int off, int len, float factor) {
+    static int multiplyAlpha(int @NotNull [] p, int off, int len, float factor) {
         int bound = I.loopBound(len);
         for (int i = 0; i < bound; i += I.length()) {
             int at = off + i;
@@ -66,7 +67,7 @@ final class VectorOps {
         return bound;
     }
 
-    static int premultiply(int[] p, int off, int len) {
+    static int premultiply(int @NotNull [] p, int off, int len) {
         int bound = I.loopBound(len);
         for (int i = 0; i < bound; i += I.length()) {
             int at = off + i;
@@ -85,7 +86,7 @@ final class VectorOps {
         return bound;
     }
 
-    static int tint(int[] src, int[] dst, int off, int len, int tr, int tg, int tb) {
+    static int tint(int @NotNull [] src, int @NotNull [] dst, int off, int len, int tr, int tg, int tb) {
         int bound = I.loopBound(len);
         for (int i = 0; i < bound; i += I.length()) {
             int at = off + i;
@@ -105,7 +106,7 @@ final class VectorOps {
         return bound;
     }
 
-    static int lerp(int[] a, int aOff, int[] b, int bOff, int[] out, int outOff,
+    static int lerp(int @NotNull [] a, int aOff, int @NotNull [] b, int bOff, int @NotNull [] out, int outOff,
                     int len, float blend, float inverse) {
         int bound = I.loopBound(len);
         for (int i = 0; i < bound; i += I.length()) {
@@ -124,7 +125,7 @@ final class VectorOps {
         return bound;
     }
 
-    private static IntVector blendChannel(IntVector s, IntVector d, int shift, float blend, float inverse) {
+    private static @NotNull IntVector blendChannel(@NotNull IntVector s, @NotNull IntVector d, int shift, float blend, float inverse) {
         IntVector sc = s.lanewise(LSHR, shift).lanewise(AND, 0xFF);
         IntVector dc = d.lanewise(LSHR, shift).lanewise(AND, 0xFF);
         FloatVector f = ((FloatVector) sc.convert(I2F, 0)).mul(inverse)

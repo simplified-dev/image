@@ -1,5 +1,6 @@
 package dev.simplified.image.codec.webp.vp8;
 
+import dev.simplified.annotations.UtilityClass;
 import org.jetbrains.annotations.NotNull;
 
 /**
@@ -19,6 +20,7 @@ import org.jetbrains.annotations.NotNull;
  * the decoder has no wire MV to fall back on. All MV values are in libvpx's
  * 1/8-pel internal representation (wire quarter-pel shifted left by one).
  */
+@UtilityClass
 final class NearMvs {
 
     /**
@@ -70,8 +72,6 @@ final class NearMvs {
          */
         final int[] cnt = new int[4];
     }
-
-    private NearMvs() { }
 
     /**
      * Returns the RFC 6386 section 18.3 sign-bias flag for a reference frame. INTRA and

@@ -1,5 +1,6 @@
 package dev.simplified.image.codec.webp.vp8;
 
+import dev.simplified.annotations.UtilityClass;
 import org.jetbrains.annotations.NotNull;
 
 /**
@@ -14,6 +15,7 @@ import org.jetbrains.annotations.NotNull;
  * update); distortion is the weighted squared error between the dequantized level and
  * the original coefficient.
  */
+@UtilityClass
 final class TrellisQuantizer {
 
     /**
@@ -53,8 +55,6 @@ final class TrellisQuantizer {
      * Sentinel for an unreachable trellis node.
      */
     private static final long MAX_COST = 0x7fffffffffffffL;
-
-    private TrellisQuantizer() { }
 
     /**
      * Emulates libwebp's {@code QUANTDIV(n, iQ, B) = (n * iQ + B) >> QFIX}. All inputs are
@@ -143,7 +143,7 @@ final class TrellisQuantizer {
 
             for (int m = -MIN_DELTA; m <= MAX_DELTA; m++) {
                 int level = level0 + m;
-                int ctx = (level > 2) ? 2 : level;
+                int ctx = Math.min(level, 2);
                 int band = VP8Tables.COEF_BANDS[n + 1];
 
                 int idx = curPhase * NUM_NODES + (m + MIN_DELTA);
@@ -163,7 +163,7 @@ final class TrellisQuantizer {
                 int bestPrev = -MIN_DELTA;
                 long bestCur;
                 {
-                    int prevIdx0 = prevPhase * NUM_NODES + 0;
+                    int prevIdx0 = prevPhase * NUM_NODES;
                     int cost = VP8Costs.levelCost(scoreCosts[prevIdx0], level);
                     bestCur = scoreScore[prevIdx0] + rdScore(lambda, cost, 0);
                 }

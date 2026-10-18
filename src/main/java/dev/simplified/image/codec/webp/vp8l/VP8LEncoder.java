@@ -1,8 +1,12 @@
 package dev.simplified.image.codec.webp.vp8l;
 
+import dev.simplified.annotations.AccessLevel;
+import dev.simplified.annotations.RequiredArgsConstructor;
+import dev.simplified.annotations.UtilityClass;
 import dev.simplified.image.PixelBuffer;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 /**
  * Pure Java VP8L (WebP lossless) encoder.
@@ -38,6 +42,7 @@ import org.jetbrains.annotations.NotNull;
  * @see <a href="https://developers.google.com/speed/webp/docs/webp_lossless_bitstream_specification">
  *     WebP Lossless Bitstream Specification</a>
  */
+@UtilityClass
 @ApiStatus.Internal
 public final class VP8LEncoder {
 
@@ -71,8 +76,6 @@ public final class VP8LEncoder {
     private static final int[] CODE_LENGTH_ORDER = {
         17, 18, 0, 1, 2, 3, 4, 5, 16, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15
     };
-
-    private VP8LEncoder() { }
 
     /**
      * Color-cache trial sizes, in bits. 0 = cache disabled.
@@ -332,7 +335,7 @@ public final class VP8LEncoder {
      * the VP8L 256-entry palette limit, or {@code null} when the image has more than 256
      * unique colors (in which case the caller should skip the color-indexing transform).
      */
-    private static int @org.jetbrains.annotations.Nullable [] detectPalette(int @NotNull [] pixels) {
+    private static int @Nullable [] detectPalette(int @NotNull [] pixels) {
         java.util.HashSet<Integer> set = new java.util.HashSet<>();
         for (int px : pixels) {
             set.add(px);
@@ -505,7 +508,7 @@ public final class VP8LEncoder {
     // ---------------------------------------------------------------------
 
     /**
-     * Predictor tile-size exponents that {@link #applyPredictorBestTile} tries when
+     * Predictor tile-size exponents that {@link #applyPredictor} tries when
      * picking a block size for a given image. Smaller tiles (3 = 8x8) give finer-grained
      * per-region mode selection but more mode-image overhead; larger tiles (5 = 32x32)
      * cost less header bytes but predict worse on mixed content. Spanning a couple of
@@ -545,6 +548,7 @@ public final class VP8LEncoder {
                 best = candidate;
             }
         }
+        assert best != null;
         return best;
     }
 
@@ -1543,13 +1547,11 @@ public final class VP8LEncoder {
         int maxNodes = used * 2 - 1;
         long[] nodeFreq = new long[maxNodes];
         int[] parent = new int[maxNodes];
-        int[] leafIndex = new int[used];
         int[] leafSymbol = new int[used];
         int li = 0;
         for (int i = 0; i < n; i++) {
             if (freq[i] > 0) {
                 nodeFreq[li] = freq[i];
-                leafIndex[li] = li;
                 leafSymbol[li] = i;
                 parent[li] = -1;
                 li++;
@@ -1744,19 +1746,13 @@ public final class VP8LEncoder {
      * code with per-symbol lengths and codes. libwebp's decoder strictly validates the
      * Huffman tree as complete, so single-symbol alphabets must use the simple variant.
      */
+    @RequiredArgsConstructor(access = AccessLevel.PRIVATE)
     private static final class PrefixCode {
 
         final boolean isSimple;
         final int @NotNull [] simpleSymbols;
         final int @NotNull [] normalLengths;
         final int @NotNull [] normalCodes;
-
-        private PrefixCode(boolean isSimple, int @NotNull [] simpleSymbols, int @NotNull [] normalLengths, int @NotNull [] normalCodes) {
-            this.isSimple = isSimple;
-            this.simpleSymbols = simpleSymbols;
-            this.normalLengths = normalLengths;
-            this.normalCodes = normalCodes;
-        }
 
         static @NotNull PrefixCode simple(int @NotNull [] symbols) {
             return new PrefixCode(true, symbols, new int[0], new int[0]);

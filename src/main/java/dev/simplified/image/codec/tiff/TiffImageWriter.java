@@ -44,8 +44,8 @@ public class TiffImageWriter implements ImageWriter {
     public byte @NotNull [] write(@NotNull ImageData data, @Nullable ImageWriteOptions options) {
         TiffWriteOptions.Compression compression = TiffWriteOptions.Compression.DEFLATE;
 
-        if (options instanceof TiffWriteOptions tiff)
-            compression = tiff.compression();
+        if (options instanceof TiffWriteOptions(TiffWriteOptions.Compression declaredCompression))
+            compression = declaredCompression;
 
         var writers = ImageIO.getImageWritersByFormatName("tiff");
 

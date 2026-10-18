@@ -48,6 +48,11 @@ import java.net.URL;
 import java.nio.file.Files;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.function.Function;
+import java.util.stream.IntStream;
 
 /**
  * Central facade for reading and writing images across all supported formats.
@@ -381,15 +386,8 @@ public class ImageFactory {
      * @return a list of decoded image data in the same order as the input files
      * @throws ImageException if any file fails to decode
      */
-    @SilentThrows
     public static @NotNull ConcurrentList<ImageData> fromFiles(@NotNull ConcurrentList<File> files) {
-        var futures = files.stream()
-            .map(file -> CompletableFuture.supplyAsync(() -> fromFile(file), java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()))
-            .collect(Concurrent.toList());
-
-        return futures.stream()
-            .map(CompletableFuture::join)
-            .collect(Concurrent.toList());
+        return inParallel(files, ImageFactory::fromFile);
     }
 
     /**
@@ -400,13 +398,7 @@ public class ImageFactory {
      * @throws ImageException if any array fails to decode
      */
     public static @NotNull ConcurrentList<ImageData> fromByteArrays(@NotNull ConcurrentList<byte[]> arrays) {
-        var futures = arrays.stream()
-            .map(bytes -> CompletableFuture.supplyAsync(() -> fromByteArray(bytes), java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()))
-            .collect(Concurrent.toList());
-
-        return futures.stream()
-            .map(CompletableFuture::join)
-            .collect(Concurrent.toList());
+        return inParallel(arrays, ImageFactory::fromByteArray);
     }
 
     /**
@@ -435,13 +427,7 @@ public class ImageFactory {
         @NotNull ImageFormat format,
         @Nullable ImageWriteOptions options
     ) {
-        var futures = data.stream()
-            .map(img -> CompletableFuture.supplyAsync(() -> toByteArray(img, format, options), java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()))
-            .collect(Concurrent.toList());
-
-        return futures.stream()
-            .map(CompletableFuture::join)
-            .collect(Concurrent.toList());
+        return inParallel(data, image -> toByteArray(image, format, options));
     }
 
     /**
@@ -457,17 +443,50 @@ public class ImageFactory {
         if (data.size() != files.size())
             throw new IllegalArgumentException("Data and file lists must have the same size");
 
-        var futures = Concurrent.<CompletableFuture<Void>>newList();
+        inParallel(IntStream.range(0, data.size()).boxed().toList(), index -> {
+            toFile(data.get(index), format, files.get(index));
+            return files.get(index);
+        });
+    }
 
-        for (int i = 0; i < data.size(); i++) {
-            int index = i;
-            futures.add(CompletableFuture.runAsync(
-                () -> toFile(data.get(index), format, files.get(index)),
-                java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()
-            ));
+    /**
+     * Runs a task on every item, each on a virtual thread of its own, and gathers the results in
+     * the order of the items.
+     *
+     * @param items the inputs
+     * @param task what each input becomes
+     * @param <T> the input type
+     * @param <R> the result type
+     * @return the results, in the order of {@code items}
+     * @throws ImageException the first failure in the order of {@code items}, as the task threw it
+     */
+    private static <T, R> @NotNull ConcurrentList<R> inParallel(@NotNull List<T> items, @NotNull Function<T, R> task) {
+        try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            List<CompletableFuture<R>> futures = items.stream()
+                .map(item -> CompletableFuture.supplyAsync(() -> task.apply(item), executor))
+                .toList();
+
+            return futures.stream()
+                .map(ImageFactory::join)
+                .collect(Concurrent.toList());
         }
+    }
 
-        futures.forEach(CompletableFuture::join);
+    /**
+     * Waits for a task and returns its result, throwing what the task threw rather than the
+     * {@link CompletionException} that wraps it.
+     *
+     * @param future the task
+     * @param <R> the result type
+     * @return the task's result
+     */
+    @SilentThrows
+    private static <R> R join(@NotNull CompletableFuture<R> future) {
+        try {
+            return future.join();
+        } catch (CompletionException ex) {
+            throw ex.getCause();
+        }
     }
 
     // === Format Detection ===

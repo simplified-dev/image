@@ -37,8 +37,8 @@ public class JpegImageWriter implements ImageWriter {
     public byte @NotNull [] write(@NotNull ImageData data, @Nullable ImageWriteOptions options) {
         float quality = 0.75f;
 
-        if (options instanceof JpegWriteOptions jpegOptions)
-            quality = jpegOptions.quality();
+        if (options instanceof JpegWriteOptions(float declaredQuality))
+            quality = declaredQuality;
 
         // JPEG does not support alpha - always convert to RGB
         PixelBuffer pixels = data.toPixelBuffer(AlphaMode.STRAIGHT);

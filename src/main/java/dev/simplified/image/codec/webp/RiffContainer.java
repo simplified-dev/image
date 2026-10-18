@@ -1,5 +1,6 @@
 package dev.simplified.image.codec.webp;
 
+import dev.simplified.annotations.UtilityClass;
 import dev.simplified.collection.Concurrent;
 import dev.simplified.collection.ConcurrentList;
 import dev.simplified.image.codec.common.LittleEndian;
@@ -14,9 +15,8 @@ import org.jetbrains.annotations.NotNull;
  * Each chunk is {@code [4-byte FourCC] [4-byte LE size] [payload] [padding]}.
  * Chunks are word-aligned (padded to even byte boundaries).
  */
+@UtilityClass
 final class RiffContainer {
-
-    private RiffContainer() { }
 
     /**
      * Parses a WebP byte array into its constituent RIFF chunks.
