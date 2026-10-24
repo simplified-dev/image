@@ -134,7 +134,8 @@ public class PixelBuffer {
     }
 
     /**
-     * Wraps the pixel data of a {@link BufferedImage}.
+     * Wraps the pixel data of a {@link BufferedImage}, holding straight colour whatever the source's
+     * layout.
      * <p>
      * {@link BufferedImage#TYPE_INT_ARGB} is the only layout that shares memory with this buffer's
      * {@code int[]} ARGB store; for that type the backing array is referenced directly (zero-copy).
@@ -142,6 +143,12 @@ public class PixelBuffer {
      * {@link BufferedImage#TYPE_INT_BGR TYPE_INT_BGR}, {@link BufferedImage#TYPE_4BYTE_ABGR
      * TYPE_4BYTE_ABGR}, {@link BufferedImage#TYPE_3BYTE_BGR TYPE_3BYTE_BGR} - is repacked into
      * ARGB with no colour-space transform, giving a bit-perfect copy of every channel.
+     * <p>
+     * The two premultiplied layouts, {@link BufferedImage#TYPE_INT_ARGB_PRE TYPE_INT_ARGB_PRE} and
+     * {@link BufferedImage#TYPE_4BYTE_ABGR_PRE TYPE_4BYTE_ABGR_PRE}, hold each colour already scaled
+     * by its alpha. They are copied - the straight colour cannot share the source's array - and each
+     * channel is divided back by its alpha as {@link #unpremultiplyAlpha()} divides it, so
+     * {@link #premultiplyAlpha()} takes every pixel back to the source's sample exactly.
      * <p>
      * Indexed and grayscale layouts - {@link BufferedImage#TYPE_BYTE_INDEXED TYPE_BYTE_INDEXED},
      * {@link BufferedImage#TYPE_BYTE_GRAY TYPE_BYTE_GRAY}, plus the 2-band gray+alpha
@@ -154,7 +161,7 @@ public class PixelBuffer {
      * {@link BufferedImage#getRGB(int, int) getRGB}); bypassing the compositor preserves the
      * raw byte exactly, which is what a GL texture sampler reads from the source PNG.
      * <p>
-     * All other types (alpha-premultiplied, 16-bit RGB, custom 4-band colour models, ...) fall
+     * All other types (16-bit RGB, custom colour models, premultiplied ones included, ...) fall
      * back to {@code Graphics2D.drawImage} for an sRGB conversion and may lose up to one
      * least-significant bit per channel at partial alpha due to the compositor's
      * premultiply/un-premultiply roundtrip.
@@ -168,14 +175,16 @@ public class PixelBuffer {
         boolean alpha = image.getColorModel().hasAlpha();
 
         return switch (image.getType()) {
-            case BufferedImage.TYPE_INT_ARGB     -> BufferedImageUnpacker.intArgb(image, w, h, alpha);
-            case BufferedImage.TYPE_INT_RGB      -> BufferedImageUnpacker.intRgb(image, w, h, alpha);
-            case BufferedImage.TYPE_INT_BGR      -> BufferedImageUnpacker.intBgr(image, w, h, alpha);
-            case BufferedImage.TYPE_4BYTE_ABGR   -> BufferedImageUnpacker.fourByteAbgr(image, w, h, alpha);
-            case BufferedImage.TYPE_3BYTE_BGR    -> BufferedImageUnpacker.threeByteBgr(image, w, h, alpha);
-            case BufferedImage.TYPE_BYTE_INDEXED -> BufferedImageUnpacker.indexed(image, w, h, alpha);
-            case BufferedImage.TYPE_BYTE_GRAY    -> BufferedImageUnpacker.grayscale(image, w, h, alpha);
-            default                              -> BufferedImageUnpacker.byColorModel(image, w, h, alpha);
+            case BufferedImage.TYPE_INT_ARGB       -> BufferedImageUnpacker.intArgb(image, w, h, alpha);
+            case BufferedImage.TYPE_INT_ARGB_PRE   -> BufferedImageUnpacker.intArgbPre(image, w, h, alpha);
+            case BufferedImage.TYPE_INT_RGB        -> BufferedImageUnpacker.intRgb(image, w, h, alpha);
+            case BufferedImage.TYPE_INT_BGR        -> BufferedImageUnpacker.intBgr(image, w, h, alpha);
+            case BufferedImage.TYPE_4BYTE_ABGR     -> BufferedImageUnpacker.fourByteAbgr(image, w, h, alpha);
+            case BufferedImage.TYPE_4BYTE_ABGR_PRE -> BufferedImageUnpacker.fourByteAbgrPre(image, w, h, alpha);
+            case BufferedImage.TYPE_3BYTE_BGR      -> BufferedImageUnpacker.threeByteBgr(image, w, h, alpha);
+            case BufferedImage.TYPE_BYTE_INDEXED   -> BufferedImageUnpacker.indexed(image, w, h, alpha);
+            case BufferedImage.TYPE_BYTE_GRAY      -> BufferedImageUnpacker.grayscale(image, w, h, alpha);
+            default                                -> BufferedImageUnpacker.byColorModel(image, w, h, alpha);
         };
     }
 

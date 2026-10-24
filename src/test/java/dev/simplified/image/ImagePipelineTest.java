@@ -36,6 +36,8 @@ import org.junit.jupiter.api.Test;
 
 import java.awt.*;
 import java.awt.image.BufferedImage;
+import java.awt.image.DataBufferByte;
+import java.awt.image.DataBufferInt;
 import java.nio.charset.StandardCharsets;
 
 import static org.hamcrest.MatcherAssert.assertThat;
@@ -243,6 +245,66 @@ public class ImagePipelineTest {
 
             PixelBuffer buffer = PixelBuffer.wrap(image);
             assertThat(buffer.getPixel(0, 0), is(0xFF112233));
+        }
+
+        @Test
+        void wrapIntArgbPreUnpremultipliesExactly() {
+            BufferedImage image = new BufferedImage(256, 256, BufferedImage.TYPE_INT_ARGB_PRE);
+            int[] raw = ((DataBufferInt) image.getRaster().getDataBuffer()).getData();
+            for (int i = 0; i < raw.length; i++)
+                raw[i] = premultipliedSample(i);
+
+            int[] before = raw.clone();
+            assertUnpremultipliedExactly(PixelBuffer.wrap(image), before);
+            assertThat("the source raster is left as it was", raw, is(before));
+        }
+
+        @Test
+        void wrap4ByteAbgrPreUnpremultipliesExactly() {
+            BufferedImage image = new BufferedImage(256, 256, BufferedImage.TYPE_4BYTE_ABGR_PRE);
+            byte[] raw = ((DataBufferByte) image.getRaster().getDataBuffer()).getData();
+            int[] samples = new int[256 * 256];
+            for (int i = 0, j = 0; i < samples.length; i++, j += 4) {
+                int p = samples[i] = premultipliedSample(i);
+                raw[j] = (byte) (p >>> 24);
+                raw[j + 1] = (byte) p;
+                raw[j + 2] = (byte) (p >>> 8);
+                raw[j + 3] = (byte) (p >>> 16);
+            }
+
+            byte[] before = raw.clone();
+            assertUnpremultipliedExactly(PixelBuffer.wrap(image), samples);
+            assertThat("the source raster is left as it was", raw, is(before));
+        }
+
+        /**
+         * The premultiplied pixel at index {@code i} of a 256x256 sweep - alpha the row, red the
+         * column held at or below that alpha, green and blue a half and a quarter of the red - so
+         * every alpha meets every channel value a premultiplied pixel can hold.
+         */
+        private static int premultipliedSample(int i) {
+            int a = i >>> 8;
+            int r = Math.min(i & 0xFF, a);
+            return (a << 24) | (r << 16) | ((r >>> 1) << 8) | (r >>> 2);
+        }
+
+        /**
+         * Asserts that a wrapped buffer holds each premultiplied sample un-premultiplied exactly as
+         * {@link PixelBuffer#unpremultiplyAlpha()} takes it, naming the first pixel that differs.
+         */
+        private static void assertUnpremultipliedExactly(PixelBuffer buffer, int[] samples) {
+            PixelBuffer expected = PixelBuffer.of(samples.clone(), 256, 256);
+            expected.unpremultiplyAlpha();
+
+            String firstDifference = "none";
+            for (int i = 0; i < samples.length; i++) {
+                if (buffer.data()[i] != expected.data()[i]) {
+                    firstDifference = "%08X wrapped to %08X, not %08X".formatted(samples[i], buffer.data()[i], expected.data()[i]);
+                    break;
+                }
+            }
+
+            assertThat(firstDifference, is("none"));
         }
 
         @Test

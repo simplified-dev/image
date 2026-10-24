@@ -38,6 +38,18 @@ class BufferedImageUnpacker {
     }
 
     /**
+     * Source is {@code 0xAARRGGBB} packed ints holding each colour already scaled by its alpha.
+     * Copy them, since the straight colour cannot share the source's array, and divide each
+     * channel back by its alpha with {@link PixelBuffer#unpremultiplyAlpha()}.
+     */
+    static @NotNull PixelBuffer intArgbPre(@NotNull BufferedImage image, int w, int h, boolean alpha) {
+        int[] src = ((DataBufferInt) image.getRaster().getDataBuffer()).getData();
+        PixelBuffer buffer = PixelBuffer.of(src.clone(), w, h, alpha);
+        buffer.unpremultiplyAlpha();
+        return buffer;
+    }
+
+    /**
      * Source is {@code 0x__RRGGBB} packed ints (alpha byte unused). Force the alpha byte to
      * {@code 0xFF} so the result is a valid {@code 0xFFRRGGBB} ARGB pixel.
      */
@@ -87,6 +99,17 @@ class BufferedImageUnpacker {
         }
 
         return PixelBuffer.of(dst, w, h, alpha);
+    }
+
+    /**
+     * Source is a flat {@code byte[]} with 4 bytes per pixel in A, B, G, R order, each colour
+     * already scaled by its alpha. Repack them as {@link #fourByteAbgr} does, then divide each
+     * channel back by its alpha with {@link PixelBuffer#unpremultiplyAlpha()}.
+     */
+    static @NotNull PixelBuffer fourByteAbgrPre(@NotNull BufferedImage image, int w, int h, boolean alpha) {
+        PixelBuffer buffer = fourByteAbgr(image, w, h, alpha);
+        buffer.unpremultiplyAlpha();
+        return buffer;
     }
 
     /**
@@ -176,8 +199,8 @@ class BufferedImageUnpacker {
     }
 
     /**
-     * Final fallback for uncommon layouts (alpha-premultiplied, 16-bit colour, custom 4-band
-     * colour models, ...): rely on the AWT compositor to convert into a fresh
+     * Final fallback for uncommon layouts (16-bit colour, custom colour models, premultiplied ones
+     * included, ...): rely on the AWT compositor to convert into a fresh
      * {@link BufferedImage#TYPE_INT_ARGB} scratch image via
      * {@link Graphics2D#drawImage(Image, int, int, ImageObserver) drawImage}. The
      * premultiply/un-premultiply roundtrip can drop one LSB per channel at partial alpha but
