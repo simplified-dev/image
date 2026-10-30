@@ -210,6 +210,7 @@ class PixelBufferRowScheduleTest {
         operations.put("tint", buffer -> buffer.tint(0xFF80C0E0));
 
         for (BlendMode mode : BlendMode.values()) {
+            operations.put("fillRect " + mode, inPlace(buffer -> buffer.fillRect(-4, 7, 60, 120, 0x80C04020, mode)));
             operations.put("blit " + mode, inPlace(buffer -> buffer.blit(source, -5, 30, mode)));
             operations.put("blit without alpha " + mode, inPlace(buffer -> buffer.blit(opaqueSource, -5, 30, mode)));
             operations.put("blitTinted " + mode, inPlace(buffer -> buffer.blitTinted(source, -5, 30, 0xFF60A0F0, mode)));

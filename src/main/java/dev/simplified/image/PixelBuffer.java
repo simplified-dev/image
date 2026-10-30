@@ -672,6 +672,59 @@ public class PixelBuffer {
     }
 
     /**
+     * Composites a rectangle of one colour onto this buffer with the given blend mode. Out-of-bounds
+     * areas are silently clipped, as {@link #fillRect(int, int, int, int, int)} clips them, and a
+     * rectangle of no width or height lays nothing.
+     * <p>
+     * Each covered pixel becomes {@link ColorMath#blend(int, int, BlendMode)} of {@code argb} over it,
+     * the blend {@link #blit(PixelBuffer, int, int, BlendMode)} lays each pixel of an image with, so
+     * the rectangle lays what a blit of a one-pixel image holding {@code argb}, its alpha carrying
+     * data, lays at each pixel it covers. {@link BlendMode#REPLACE} is the one mode the two part on:
+     * it writes {@code argb} whatever its alpha, as {@link #fillRect(int, int, int, int, int)} does,
+     * where a blit discards a source pixel of alpha {@code 0}.
+     * <p>
+     * Fast paths are taken where they lay what the blend lays: under {@link BlendMode#REPLACE}, and
+     * for an opaque colour under a source-over mode, one whose {@code isSourceOver()} answers
+     * {@code true}, each row is written via {@link Arrays#fill}; under every other mode a colour of
+     * alpha {@code 0} returns at once.
+     * <p>
+     * The buffer carries no alpha convention and this reads none, as a blit reads none: the mode
+     * states how the colour and each pixel are read. On a buffer holding premultiplied colour,
+     * {@link BlendMode#NORMAL} lays a straight colour and leaves premultiplied colour - over a
+     * transparent pixel, {@code F0100010} becomes {@code F00F000F} - and
+     * {@link BlendMode#PREMULTIPLIED} lays a colour already premultiplied. On a buffer holding
+     * straight colour, {@link BlendMode#STRAIGHT} lays a straight colour and leaves straight colour.
+     *
+     * @param x the left edge
+     * @param y the top edge
+     * @param w the rectangle width
+     * @param h the rectangle height
+     * @param argb the fill colour
+     * @param mode the blend mode to composite the colour with
+     */
+    public void fillRect(int x, int y, int w, int h, int argb, @NotNull BlendMode mode) {
+        int alpha = ColorMath.alpha(argb);
+        if (mode == BlendMode.REPLACE || alpha == 0xFF && mode.isSourceOver()) {
+            fillRect(x, y, w, h, argb);
+            return;
+        }
+        if (alpha == 0) return;
+
+        int x0 = Math.max(0, x);
+        int y0 = Math.max(0, y);
+        int x1 = Math.min(this.width, x + w);
+        int y1 = Math.min(this.height, y + h);
+
+        if (x0 >= x1 || y0 >= y1) return;
+
+        forEachRow(y0, y1, row -> {
+            int offset = row * this.width;
+            for (int i = offset + x0; i < offset + x1; i++)
+                this.data[i] = ColorMath.blend(argb, this.data[i], mode);
+        });
+    }
+
+    /**
      * Converts every pixel to its luma-weighted grayscale equivalent in place, preserving alpha.
      */
     public void grayscale() {

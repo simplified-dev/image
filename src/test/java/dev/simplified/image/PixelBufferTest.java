@@ -105,6 +105,137 @@ class PixelBufferTest {
     }
 
     @Test
+    @DisplayName("fillRect NORMAL lays F0100010 onto a clear pixel as F00F000F, and 505000FF over that as F523005A")
+    void fillRectNormalBlendsTheColour() {
+        PixelBuffer buffer = PixelBuffer.create(3, 2);
+        buffer.fillRect(0, 0, 3, 2, 0xF0100010, BlendMode.NORMAL);
+        for (int pixel : buffer.data())
+            assertThat(Integer.toHexString(pixel), pixel, equalTo(0xF00F000F));
+
+        buffer.fillRect(1, 0, 2, 1, 0x505000FF, BlendMode.NORMAL);
+        assertArrayEquals(
+            new int[]{ 0xF00F000F, 0xF523005A, 0xF523005A, 0xF00F000F, 0xF00F000F, 0xF00F000F },
+            buffer.data()
+        );
+    }
+
+    @Test
+    @DisplayName("fillRect with a blend lays a colour of alpha 0 nowhere under every mode but REPLACE")
+    void fillRectOfNoAlphaLaysNothing() {
+        int[] backdrop = texels(9, 70, 6);
+
+        for (BlendMode mode : BlendMode.values()) {
+            if (mode == BlendMode.REPLACE) continue;
+
+            for (int colour : new int[]{ 0x00000000, 0x00FFFFFF, 0x00123456 }) {
+                PixelBuffer buffer = PixelBuffer.of(backdrop.clone(), 9, 70);
+                buffer.fillRect(-1, -1, 11, 72, colour, mode);
+                assertArrayEquals(backdrop, buffer.data(), "%08X, %s".formatted(colour, mode));
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("fillRect with a blend covers exactly the pixels the overwriting fillRect covers")
+    void fillRectWithABlendClipsAsFillRectClips() {
+        // A 2x2 rectangle from (-1, -1) lays only (0, 0), and one overhanging the right and bottom
+        // edges only the pixels inside them.
+        PixelBuffer corner = PixelBuffer.create(4, 3);
+        corner.fillRect(-1, -1, 2, 2, 0xF0100010, BlendMode.NORMAL);
+        assertArrayEquals(new int[]{ 0xF00F000F, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, corner.data());
+
+        PixelBuffer overhang = PixelBuffer.create(4, 3);
+        overhang.fillRect(2, 1, 5, 5, 0xF0100010, BlendMode.NORMAL);
+        assertArrayEquals(new int[]{ 0, 0, 0, 0, 0, 0, 0xF00F000F, 0xF00F000F, 0, 0, 0xF00F000F, 0xF00F000F }, overhang.data());
+
+        // Origin and size of each rectangle: left of and above the buffer, overhanging the right and
+        // bottom, overhanging every side, wholly inside, no width, a negative width, no height, a
+        // negative height from an origin above the buffer, and wholly outside on each side.
+        int[][] rects = {
+            { -1, -1, 3, 3 },
+            { 4, 3, 10, 10 },
+            { -2, -3, 20, 20 },
+            { 1, 2, 3, 4 },
+            { 2, 2, 0, 4 },
+            { 2, 2, -3, 4 },
+            { 2, 2, 4, 0 },
+            { 2, -1, 4, -2 },
+            { -5, 0, 3, 2 },
+            { 0, -9, 3, 2 },
+            { 8, 0, 3, 2 },
+            { 0, 7, 3, 2 }
+        };
+        int[] backdrop = texels(8, 7, 7);
+
+        for (int[] rect : rects) {
+            int x = rect[0], y = rect[1], w = rect[2], h = rect[3];
+
+            for (int colour : new int[]{ 0xF0100010, 0x505000FF, 0xFF336699 }) {
+                String label = "%dx%d at (%d, %d), %08X".formatted(w, h, x, y, colour);
+                PixelBuffer covered = PixelBuffer.create(8, 7);
+                covered.fillRect(x, y, w, h, 0xFFFFFFFF);
+
+                int[] expected = backdrop.clone();
+                for (int i = 0; i < expected.length; i++)
+                    if (covered.data()[i] != 0)
+                        expected[i] = ColorMath.blend(colour, backdrop[i], BlendMode.NORMAL);
+
+                PixelBuffer buffer = PixelBuffer.of(backdrop.clone(), 8, 7);
+                buffer.fillRect(x, y, w, h, colour, BlendMode.NORMAL);
+                assertArrayEquals(expected, buffer.data(), label);
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("fillRect REPLACE lays what the overwriting fillRect lays, a colour of alpha 0 included")
+    void fillRectReplaceIsTheOverwritingFillRect() {
+        int[] backdrop = texels(9, 70, 8);
+
+        for (int[] rect : new int[][]{ { -2, -3, 6, 80 }, { 3, 1, 4, 5 }, { 7, 60, 9, 20 }, { 2, 2, 0, 5 } })
+            for (int colour : new int[]{ 0x00000000, 0x00123456, 0x01FFFFFF, 0x80808080, 0xF0100010, 0xFF336699 }) {
+                int x = rect[0], y = rect[1], w = rect[2], h = rect[3];
+                String label = "%dx%d at (%d, %d), %08X".formatted(w, h, x, y, colour);
+
+                PixelBuffer overwritten = PixelBuffer.of(backdrop.clone(), 9, 70);
+                overwritten.fillRect(x, y, w, h, colour);
+
+                PixelBuffer replaced = PixelBuffer.of(backdrop.clone(), 9, 70);
+                replaced.fillRect(x, y, w, h, colour, BlendMode.REPLACE);
+
+                assertArrayEquals(overwritten.data(), replaced.data(), label);
+            }
+    }
+
+    @Test
+    @DisplayName("fillRect with a blend lays what a blit of a one-pixel image of its colour lays at every pixel it covers")
+    void fillRectWithABlendLaysWhatABlitOfOnePixelLays() {
+        // The backdrop holds no alpha over colour bits, full alpha and partial alpha, and is tall
+        // enough for the fill's rows to run in parallel. Under REPLACE a blit discards a source pixel
+        // of alpha 0, which the fill writes as the overwriting fillRect does, so that one pairing is
+        // held by the REPLACE test instead.
+        int width = 9, height = 70;
+        int x = -2, y = 3, w = 8, h = 70;
+        int[] backdrop = texels(width, height, 9);
+
+        for (BlendMode mode : BlendMode.values())
+            for (int colour : new int[]{ 0x00000000, 0x00FFFFFF, 0x01FFFFFF, 0x505000FF, 0x80808080, 0xF0100010, 0xFEFFFFFF, 0xFF336699 }) {
+                if (mode == BlendMode.REPLACE && ColorMath.alpha(colour) == 0) continue;
+                String label = "%08X, %s".formatted(colour, mode);
+
+                PixelBuffer blitted = PixelBuffer.of(backdrop.clone(), width, height);
+                for (int py = y; py < y + h; py++)
+                    for (int px = x; px < x + w; px++)
+                        blitted.blit(PixelBuffer.of(new int[]{ colour }, 1, 1), px, py, mode);
+
+                PixelBuffer filled = PixelBuffer.of(backdrop.clone(), width, height);
+                filled.fillRect(x, y, w, h, colour, mode);
+
+                assertArrayEquals(blitted.data(), filled.data(), label);
+            }
+    }
+
+    @Test
     @DisplayName("contains reports in-bounds coordinates")
     void containsCoordinates() {
         PixelBuffer buffer = PixelBuffer.create(4, 4);
