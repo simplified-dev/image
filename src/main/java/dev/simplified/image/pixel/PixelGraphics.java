@@ -25,6 +25,22 @@ import java.util.Map;
  * Supports 2D primitives (rectangles, rounded rectangles, lines, ovals, arcs, polygons),
  * image blitting, rectangular clipping, and translation.
  * <p>
+ * Every draw composites source-over: {@link AlphaComposite#SrcOver} is the one composite it takes, and
+ * {@link #setComposite(Composite)} refuses any other with {@link UnsupportedOperationException}, as
+ * {@link #setXORMode(Color)} refuses XOR. A colour draw lays its colour, straight colour, as
+ * {@link PixelBuffer#fillRect(int, int, int, int, int, BlendMode)} lays it under
+ * {@link BlendMode#NORMAL}, whose javadoc says which formula a buffer takes: {@code NORMAL}'s on
+ * premultiplied colour or a buffer whose alpha carries no data, and {@link BlendMode#STRAIGHT}'s on
+ * straight colour whose alpha does. That is the compositing Java2D's {@code SrcOver} does on a
+ * {@link BufferedImage#TYPE_INT_ARGB_PRE} image and on a {@link BufferedImage#TYPE_INT_ARGB} image, in
+ * this library's rounding: each channel within 1 of Java2D's on the first, while on the second Java2D
+ * rounds the destination through 8-bit premultiplied colour and loses colour this keeps. A translucent
+ * {@code 80FF0000} over a canvas's {@code F00F000F} stores {@code F8870007}, as Java2D does. An outline or
+ * a shape gathers every pixel it reaches before it lays any, so a pixel its edges, vertices or
+ * segments reach more than once takes the colour once. {@link #clearRect(int, int, int, int)} clears
+ * rather than draws: it writes the background colour in the buffer's convention over what is there,
+ * as Java2D's does.
+ * <p>
  * An image draw reads the image in the convention it holds, through
  * {@link PixelBuffer#wrap(BufferedImage)}, and lays it source-over in the convention the target holds,
  * as {@link PixelBuffer#blit(PixelBuffer, int, int)} lays it, so a
@@ -48,7 +64,6 @@ public class PixelGraphics extends Graphics2D {
     private int translateY;
     private @Nullable Rectangle clip;
     private @NotNull RenderingHints hints;
-    private @NotNull Composite composite;
     private @NotNull Paint paint;
     private @NotNull Stroke stroke;
     private @NotNull AffineTransform transform;
@@ -67,7 +82,6 @@ public class PixelGraphics extends Graphics2D {
         this.translateY = 0;
         this.clip = null;
         this.hints = new RenderingHints(null);
-        this.composite = AlphaComposite.SrcOver;
         this.paint = Color.BLACK;
         this.stroke = new BasicStroke();
         this.transform = new AffineTransform();
@@ -85,7 +99,6 @@ public class PixelGraphics extends Graphics2D {
         this.translateY = source.translateY;
         this.clip = source.clip != null ? new Rectangle(source.clip) : null;
         this.hints = (RenderingHints) source.hints.clone();
-        this.composite = source.composite;
         this.paint = source.paint;
         this.stroke = source.stroke;
         this.transform = new AffineTransform(source.transform);
@@ -129,11 +142,6 @@ public class PixelGraphics extends Graphics2D {
 
     // --- pixel helper ---
 
-    private void setPixelSafe(int x, int y, int argb) {
-        if (x >= 0 && x < this.target.width() && y >= 0 && y < this.target.height() && inClip(x, y))
-            this.target.setPixel(x, y, argb);
-    }
-
     /**
      * Whether a device pixel lies inside the clip, which is read in user space under the current
      * translation. Every pixel is inside when no clip is set.
@@ -147,26 +155,90 @@ public class PixelGraphics extends Graphics2D {
     }
 
     /**
-     * Fills a device-space rectangle on the target with one colour, cut to the clip first.
-     *
-     * @param x the device x coordinate of the left edge
-     * @param y the device y coordinate of the top edge
-     * @param width the rectangle width
-     * @param height the rectangle height
-     * @param argb the fill colour
+     * The pixels one outline or shape covers, gathered while it is rasterized and laid once it is
+     * whole, so that a pixel the draw reaches more than once takes its colour once.
+     * <p>
+     * Each added rectangle is cut to the target and the clip, as
+     * {@link #drawableArea(int, int, int, int)} cuts it, and held as one run per row: the span of
+     * indices the row covers in the target's pixel array, its start in the high half of a {@code long}
+     * and its end in the low half, so that sorting the runs orders them by row and then by column. A
+     * run that starts where the last one added ends, on the same row, lengthens it instead, so a draw
+     * that plots a row's pixels one after another costs one run for them, and a draw costs memory in
+     * its runs rather than in the area it spans.
      */
-    private void fillDeviceRect(int x, int y, int width, int height, int argb) {
-        if (this.clip == null) {
-            this.target.fillRect(x, y, width, height, argb);
-            return;
+    private final class Coverage {
+
+        private long @NotNull [] runs = new long[16];
+        private int count;
+
+        /**
+         * Adds one device pixel.
+         *
+         * @param x the device x coordinate
+         * @param y the device y coordinate
+         */
+        void add(int x, int y) {
+            add(x, y, 1, 1);
         }
 
-        int x0 = Math.max(x, this.clip.x + this.translateX);
-        int y0 = Math.max(y, this.clip.y + this.translateY);
-        int x1 = Math.min(x + width, this.clip.x + this.translateX + this.clip.width);
-        int y1 = Math.min(y + height, this.clip.y + this.translateY + this.clip.height);
-        if (x0 < x1 && y0 < y1)
-            this.target.fillRect(x0, y0, x1 - x0, y1 - y0, argb);
+        /**
+         * Adds a device-space rectangle, one run for each of its rows that lands on the target inside
+         * the clip.
+         *
+         * @param x the device x coordinate of the left edge
+         * @param y the device y coordinate of the top edge
+         * @param width the rectangle width
+         * @param height the rectangle height
+         */
+        void add(int x, int y, int width, int height) {
+            Rectangle area = drawableArea(x, y, width, height);
+            int stride = target.width();
+
+            for (int row = area.y; row < area.y + area.height; row++) {
+                int start = row * stride + area.x;
+                int end = start + area.width;
+
+                if (area.x > 0 && this.count > 0 && (int) this.runs[this.count - 1] == start)
+                    this.runs[this.count - 1] = (this.runs[this.count - 1] & 0xFFFFFFFF00000000L) | end;
+                else {
+                    if (this.count == this.runs.length)
+                        this.runs = Arrays.copyOf(this.runs, this.count * 2);
+                    this.runs[this.count++] = ((long) start << 32) | end;
+                }
+            }
+        }
+
+        /**
+         * Lays a colour once on every covered pixel, as
+         * {@link PixelBuffer#fillRect(int, int, int, int, int, BlendMode)} lays it under
+         * {@link BlendMode#NORMAL}: the runs of a row that overlap or touch are merged, and each merged
+         * stretch is laid with one call.
+         *
+         * @param argb the colour, straight
+         */
+        void lay(int argb) {
+            if (this.count == 0) return;
+            Arrays.sort(this.runs, 0, this.count);
+            int stride = target.width();
+            int start = (int) (this.runs[0] >>> 32);
+            int end = (int) this.runs[0];
+
+            for (int i = 1; i < this.count; i++) {
+                int nextStart = (int) (this.runs[i] >>> 32);
+                int nextEnd = (int) this.runs[i];
+
+                if (nextStart <= end && nextStart / stride == start / stride)
+                    end = Math.max(end, nextEnd);
+                else {
+                    target.fillRect(start % stride, start / stride, end - start, 1, argb, BlendMode.NORMAL);
+                    start = nextStart;
+                    end = nextEnd;
+                }
+            }
+
+            target.fillRect(start % stride, start / stride, end - start, 1, argb, BlendMode.NORMAL);
+        }
+
     }
 
     /**
@@ -193,7 +265,8 @@ public class PixelGraphics extends Graphics2D {
 
     /**
      * Cuts a device-space rectangle to the target's bounds and, with a clip set, to the clip, read in
-     * user space under the current translation.
+     * user space under the current translation. The clip's device edges are summed in {@code long}, so
+     * a clip whose origin, size and translation pass the int range between them cuts where it reaches.
      *
      * @param x the device x coordinate of the left edge
      * @param y the device y coordinate of the top edge
@@ -202,19 +275,21 @@ public class PixelGraphics extends Graphics2D {
      * @return the part of the rectangle a draw may write, empty where there is none
      */
     private @NotNull Rectangle drawableArea(int x, int y, int width, int height) {
-        int x0 = Math.max(x, 0);
-        int y0 = Math.max(y, 0);
-        int x1 = Math.min(x + width, this.target.width());
-        int y1 = Math.min(y + height, this.target.height());
+        long x0 = Math.max(x, 0);
+        long y0 = Math.max(y, 0);
+        long x1 = Math.min(x + width, this.target.width());
+        long y1 = Math.min(y + height, this.target.height());
 
         if (this.clip != null) {
-            x0 = Math.max(x0, this.clip.x + this.translateX);
-            y0 = Math.max(y0, this.clip.y + this.translateY);
-            x1 = Math.min(x1, this.clip.x + this.translateX + this.clip.width);
-            y1 = Math.min(y1, this.clip.y + this.translateY + this.clip.height);
+            long clipX = (long) this.clip.x + this.translateX;
+            long clipY = (long) this.clip.y + this.translateY;
+            x0 = Math.max(x0, clipX);
+            y0 = Math.max(y0, clipY);
+            x1 = Math.min(x1, clipX + this.clip.width);
+            y1 = Math.min(y1, clipY + this.clip.height);
         }
 
-        return x0 < x1 && y0 < y1 ? new Rectangle(x0, y0, x1 - x0, y1 - y0) : new Rectangle();
+        return x0 < x1 && y0 < y1 ? new Rectangle((int) x0, (int) y0, (int) (x1 - x0), (int) (y1 - y0)) : new Rectangle();
     }
 
     /**
@@ -331,22 +406,28 @@ public class PixelGraphics extends Graphics2D {
 
     @Override
     public void fillRect(int x, int y, int width, int height) {
-        fillDeviceRect(this.translateX + x, this.translateY + y, width, height, this.colorArgb);
+        Rectangle area = drawableArea(this.translateX + x, this.translateY + y, width, height);
+        if (!area.isEmpty())
+            this.target.fillRect(area.x, area.y, area.width, area.height, this.colorArgb, BlendMode.NORMAL);
     }
 
     @Override
     public void clearRect(int x, int y, int width, int height) {
-        fillDeviceRect(this.translateX + x, this.translateY + y, width, height, this.backgroundArgb);
+        Rectangle area = drawableArea(this.translateX + x, this.translateY + y, width, height);
+        if (!area.isEmpty())
+            this.target.fillRect(area.x, area.y, area.width, area.height, this.backgroundArgb);
     }
 
     @Override
     public void drawRect(int x, int y, int width, int height) {
         int tx = this.translateX + x;
         int ty = this.translateY + y;
-        fillDeviceRect(tx, ty, width + 1, 1, this.colorArgb);
-        fillDeviceRect(tx, ty + height, width + 1, 1, this.colorArgb);
-        fillDeviceRect(tx, ty, 1, height + 1, this.colorArgb);
-        fillDeviceRect(tx + width, ty, 1, height + 1, this.colorArgb);
+        Coverage coverage = new Coverage();
+        coverage.add(tx, ty, width + 1, 1);
+        coverage.add(tx, ty + height, width + 1, 1);
+        coverage.add(tx, ty, 1, height + 1);
+        coverage.add(tx + width, ty, 1, height + 1);
+        coverage.lay(this.colorArgb);
     }
 
     @Override
@@ -355,15 +436,17 @@ public class PixelGraphics extends Graphics2D {
         int ry = arcHeight / 2;
         int tx = this.translateX + x;
         int ty = this.translateY + y;
+        Coverage coverage = new Coverage();
 
         // Straight edges
-        fillDeviceRect(tx + rx, ty, width - 2 * rx + 1, 1, this.colorArgb);
-        fillDeviceRect(tx + rx, ty + height, width - 2 * rx + 1, 1, this.colorArgb);
-        fillDeviceRect(tx, ty + ry, 1, height - 2 * ry + 1, this.colorArgb);
-        fillDeviceRect(tx + width, ty + ry, 1, height - 2 * ry + 1, this.colorArgb);
+        coverage.add(tx + rx, ty, width - 2 * rx + 1, 1);
+        coverage.add(tx + rx, ty + height, width - 2 * rx + 1, 1);
+        coverage.add(tx, ty + ry, 1, height - 2 * ry + 1);
+        coverage.add(tx + width, ty + ry, 1, height - 2 * ry + 1);
 
         // Corner arcs via midpoint ellipse
-        drawCornerArcs(tx + rx, ty + ry, tx + width - rx, ty + height - ry, rx, ry);
+        drawCornerArcs(coverage, tx + rx, ty + ry, tx + width - rx, ty + height - ry, rx, ry);
+        coverage.lay(this.colorArgb);
     }
 
     @Override
@@ -372,25 +455,27 @@ public class PixelGraphics extends Graphics2D {
         int ry = arcHeight / 2;
         int tx = this.translateX + x;
         int ty = this.translateY + y;
+        Coverage coverage = new Coverage();
 
         // Central body
-        fillDeviceRect(tx, ty + ry, width + 1, height - 2 * ry + 1, this.colorArgb);
+        coverage.add(tx, ty + ry, width + 1, height - 2 * ry + 1);
 
         // Top and bottom bands with rounded corners via scanline
-        fillCornerArcs(tx + rx, ty + ry, tx + width - rx, ty + height - ry, rx, ry);
+        fillCornerArcs(coverage, tx + rx, ty + ry, tx + width - rx, ty + height - ry, rx, ry);
+        coverage.lay(this.colorArgb);
     }
 
-    private void drawCornerArcs(int cx1, int cy1, int cx2, int cy2, int rx, int ry) {
+    private void drawCornerArcs(@NotNull Coverage coverage, int cx1, int cy1, int cx2, int cy2, int rx, int ry) {
         if (rx <= 0 || ry <= 0) return;
         int x = 0, y = ry;
         long rx2 = (long) rx * rx, ry2 = (long) ry * ry;
         long err = ry2 - rx2 * (long) ry + rx2 / 4;
 
         while (ry2 * x <= rx2 * y) {
-            setPixelSafe(cx2 + x, cy1 - y, this.colorArgb);
-            setPixelSafe(cx1 - x, cy1 - y, this.colorArgb);
-            setPixelSafe(cx2 + x, cy2 + y, this.colorArgb);
-            setPixelSafe(cx1 - x, cy2 + y, this.colorArgb);
+            coverage.add(cx2 + x, cy1 - y);
+            coverage.add(cx1 - x, cy1 - y);
+            coverage.add(cx2 + x, cy2 + y);
+            coverage.add(cx1 - x, cy2 + y);
             x++;
             if (err < 0)
                 err += ry2 * (2L * x + 1);
@@ -402,10 +487,10 @@ public class PixelGraphics extends Graphics2D {
 
         err = ry2 * (2L * x + 1) * (2L * x + 1) / 4 + rx2 * ((long)(y - 1) * (y - 1) - ry2);
         while (y >= 0) {
-            setPixelSafe(cx2 + x, cy1 - y, this.colorArgb);
-            setPixelSafe(cx1 - x, cy1 - y, this.colorArgb);
-            setPixelSafe(cx2 + x, cy2 + y, this.colorArgb);
-            setPixelSafe(cx1 - x, cy2 + y, this.colorArgb);
+            coverage.add(cx2 + x, cy1 - y);
+            coverage.add(cx1 - x, cy1 - y);
+            coverage.add(cx2 + x, cy2 + y);
+            coverage.add(cx1 - x, cy2 + y);
             y--;
             if (err > 0)
                 err -= rx2 * (2L * y + 1);
@@ -416,7 +501,7 @@ public class PixelGraphics extends Graphics2D {
         }
     }
 
-    private void fillCornerArcs(int cx1, int cy1, int cx2, int cy2, int rx, int ry) {
+    private void fillCornerArcs(@NotNull Coverage coverage, int cx1, int cy1, int cx2, int cy2, int rx, int ry) {
         if (rx <= 0 || ry <= 0) return;
         int px = 0, py = ry;
         long rx2 = (long) rx * rx, ry2 = (long) ry * ry;
@@ -425,8 +510,8 @@ public class PixelGraphics extends Graphics2D {
         int lastPy = -1;
         while (ry2 * px <= rx2 * py) {
             if (py != lastPy) {
-                fillDeviceRect(cx1 - px, cy1 - py, cx2 - cx1 + 2 * px + 1, 1, this.colorArgb);
-                fillDeviceRect(cx1 - px, cy2 + py, cx2 - cx1 + 2 * px + 1, 1, this.colorArgb);
+                coverage.add(cx1 - px, cy1 - py, cx2 - cx1 + 2 * px + 1, 1);
+                coverage.add(cx1 - px, cy2 + py, cx2 - cx1 + 2 * px + 1, 1);
                 lastPy = py;
             }
             px++;
@@ -441,8 +526,8 @@ public class PixelGraphics extends Graphics2D {
         err = ry2 * (2L * px + 1) * (2L * px + 1) / 4 + rx2 * ((long)(py - 1) * (py - 1) - ry2);
         while (py >= 0) {
             if (py != lastPy) {
-                fillDeviceRect(cx1 - px, cy1 - py, cx2 - cx1 + 2 * px + 1, 1, this.colorArgb);
-                fillDeviceRect(cx1 - px, cy2 + py, cx2 - cx1 + 2 * px + 1, 1, this.colorArgb);
+                coverage.add(cx1 - px, cy1 - py, cx2 - cx1 + 2 * px + 1, 1);
+                coverage.add(cx1 - px, cy2 + py, cx2 - cx1 + 2 * px + 1, 1);
                 lastPy = py;
             }
             py--;
@@ -459,6 +544,22 @@ public class PixelGraphics extends Graphics2D {
 
     @Override
     public void drawLine(int x1, int y1, int x2, int y2) {
+        Coverage coverage = new Coverage();
+        drawLine(coverage, x1, y1, x2, y2);
+        coverage.lay(this.colorArgb);
+    }
+
+    /**
+     * Adds the pixels of a line between two user-space points to a coverage: one rectangle for a
+     * horizontal or vertical line, and otherwise each pixel Bresenham's walk steps on.
+     *
+     * @param coverage the coverage the pixels are added to
+     * @param x1 the x coordinate of the first point
+     * @param y1 the y coordinate of the first point
+     * @param x2 the x coordinate of the second point
+     * @param y2 the y coordinate of the second point
+     */
+    private void drawLine(@NotNull Coverage coverage, int x1, int y1, int x2, int y2) {
         int tx1 = this.translateX + x1;
         int ty1 = this.translateY + y1;
         int tx2 = this.translateX + x2;
@@ -466,12 +567,12 @@ public class PixelGraphics extends Graphics2D {
 
         if (ty1 == ty2) {
             int minX = Math.min(tx1, tx2);
-            fillDeviceRect(minX, ty1, Math.abs(tx2 - tx1) + 1, 1, this.colorArgb);
+            coverage.add(minX, ty1, Math.abs(tx2 - tx1) + 1, 1);
             return;
         }
         if (tx1 == tx2) {
             int minY = Math.min(ty1, ty2);
-            fillDeviceRect(tx1, minY, 1, Math.abs(ty2 - ty1) + 1, this.colorArgb);
+            coverage.add(tx1, minY, 1, Math.abs(ty2 - ty1) + 1);
             return;
         }
 
@@ -482,7 +583,7 @@ public class PixelGraphics extends Graphics2D {
         int err = dx - dy;
 
         while (true) {
-            setPixelSafe(tx1, ty1, this.colorArgb);
+            coverage.add(tx1, ty1);
             if (tx1 == tx2 && ty1 == ty2) break;
             int e2 = 2 * err;
             if (e2 > -dy) { err -= dy; tx1 += sx; }
@@ -498,7 +599,9 @@ public class PixelGraphics extends Graphics2D {
         int cy = this.translateY + y + height / 2;
         int rx = width / 2;
         int ry = height / 2;
-        drawEllipse(cx, cy, rx, ry);
+        Coverage coverage = new Coverage();
+        drawEllipse(coverage, cx, cy, rx, ry);
+        coverage.lay(this.colorArgb);
     }
 
     @Override
@@ -507,20 +610,22 @@ public class PixelGraphics extends Graphics2D {
         int cy = this.translateY + y + height / 2;
         int rx = width / 2;
         int ry = height / 2;
-        fillEllipse(cx, cy, rx, ry);
+        Coverage coverage = new Coverage();
+        fillEllipse(coverage, cx, cy, rx, ry);
+        coverage.lay(this.colorArgb);
     }
 
-    private void drawEllipse(int cx, int cy, int rx, int ry) {
-        if (rx <= 0 || ry <= 0) { setPixelSafe(cx, cy, this.colorArgb); return; }
+    private void drawEllipse(@NotNull Coverage coverage, int cx, int cy, int rx, int ry) {
+        if (rx <= 0 || ry <= 0) { coverage.add(cx, cy); return; }
         int x = 0, y = ry;
         long rx2 = (long) rx * rx, ry2 = (long) ry * ry;
         long err = ry2 - rx2 * (long) ry + rx2 / 4;
 
         while (ry2 * x <= rx2 * y) {
-            setPixelSafe(cx + x, cy + y, this.colorArgb);
-            setPixelSafe(cx - x, cy + y, this.colorArgb);
-            setPixelSafe(cx + x, cy - y, this.colorArgb);
-            setPixelSafe(cx - x, cy - y, this.colorArgb);
+            coverage.add(cx + x, cy + y);
+            coverage.add(cx - x, cy + y);
+            coverage.add(cx + x, cy - y);
+            coverage.add(cx - x, cy - y);
             x++;
             if (err < 0) err += ry2 * (2L * x + 1);
             else { y--; err += ry2 * (2L * x + 1) - rx2 * 2L * y; }
@@ -528,22 +633,22 @@ public class PixelGraphics extends Graphics2D {
 
         err = ry2 * (2L * x + 1) * (2L * x + 1) / 4 + rx2 * ((long)(y - 1) * (y - 1) - ry2);
         while (y >= 0) {
-            setPixelSafe(cx + x, cy + y, this.colorArgb);
-            setPixelSafe(cx - x, cy + y, this.colorArgb);
-            setPixelSafe(cx + x, cy - y, this.colorArgb);
-            setPixelSafe(cx - x, cy - y, this.colorArgb);
+            coverage.add(cx + x, cy + y);
+            coverage.add(cx - x, cy + y);
+            coverage.add(cx + x, cy - y);
+            coverage.add(cx - x, cy - y);
             y--;
             if (err > 0) err -= rx2 * (2L * y + 1);
             else { x++; err += ry2 * (2L * x + 1) - rx2 * (2L * y + 1); }
         }
     }
 
-    private void fillEllipse(int cx, int cy, int rx, int ry) {
-        if (rx <= 0 || ry <= 0) { setPixelSafe(cx, cy, this.colorArgb); return; }
+    private void fillEllipse(@NotNull Coverage coverage, int cx, int cy, int rx, int ry) {
+        if (rx <= 0 || ry <= 0) { coverage.add(cx, cy); return; }
 
         for (int y = -ry; y <= ry; y++) {
             int halfWidth = (int) Math.round(rx * Math.sqrt(1.0 - (double) y * y / ((double) ry * ry)));
-            fillDeviceRect(cx - halfWidth, cy + y, 2 * halfWidth + 1, 1, this.colorArgb);
+            coverage.add(cx - halfWidth, cy + y, 2 * halfWidth + 1, 1);
         }
     }
 
@@ -570,6 +675,7 @@ public class PixelGraphics extends Graphics2D {
         double extentRad = Math.toRadians(arcAngle);
         double endRad = startRad + extentRad;
         if (extentRad < 0) { double t = startRad; startRad = endRad; endRad = t; }
+        Coverage coverage = new Coverage();
 
         if (fill) {
             double normStart = startRad % (2 * Math.PI);
@@ -589,7 +695,7 @@ public class PixelGraphics extends Graphics2D {
                         : angle >= normStart || angle <= normEnd;
 
                     if (inRange)
-                        setPixelSafe(cx + px, cy + py, this.colorArgb);
+                        coverage.add(cx + px, cy + py);
                 }
             }
         } else {
@@ -599,24 +705,42 @@ public class PixelGraphics extends Graphics2D {
                 double angle = startRad + i * step;
                 int px = cx + (int) Math.round(rx * Math.cos(angle));
                 int py = cy - (int) Math.round(ry * Math.sin(angle));
-                setPixelSafe(px, py, this.colorArgb);
+                coverage.add(px, py);
             }
         }
+
+        coverage.lay(this.colorArgb);
     }
 
     // --- polyline and polygon ---
 
     @Override
     public void drawPolyline(int @NotNull [] xPoints, int @NotNull [] yPoints, int nPoints) {
+        Coverage coverage = new Coverage();
+        drawPolyline(coverage, xPoints, yPoints, nPoints);
+        coverage.lay(this.colorArgb);
+    }
+
+    /**
+     * Adds the pixels of the lines joining consecutive user-space points to a coverage.
+     *
+     * @param coverage the coverage the pixels are added to
+     * @param xPoints the x coordinates of the points
+     * @param yPoints the y coordinates of the points
+     * @param nPoints the number of points
+     */
+    private void drawPolyline(@NotNull Coverage coverage, int @NotNull [] xPoints, int @NotNull [] yPoints, int nPoints) {
         for (int i = 0; i < nPoints - 1; i++)
-            drawLine(xPoints[i], yPoints[i], xPoints[i + 1], yPoints[i + 1]);
+            drawLine(coverage, xPoints[i], yPoints[i], xPoints[i + 1], yPoints[i + 1]);
     }
 
     @Override
     public void drawPolygon(int @NotNull [] xPoints, int @NotNull [] yPoints, int nPoints) {
-        drawPolyline(xPoints, yPoints, nPoints);
+        Coverage coverage = new Coverage();
+        drawPolyline(coverage, xPoints, yPoints, nPoints);
         if (nPoints > 1)
-            drawLine(xPoints[nPoints - 1], yPoints[nPoints - 1], xPoints[0], yPoints[0]);
+            drawLine(coverage, xPoints[nPoints - 1], yPoints[nPoints - 1], xPoints[0], yPoints[0]);
+        coverage.lay(this.colorArgb);
     }
 
     @Override
@@ -632,6 +756,7 @@ public class PixelGraphics extends Graphics2D {
         }
 
         // Scanline fill
+        Coverage coverage = new Coverage();
         int[] nodeX = new int[nPoints];
         for (int y = minY; y <= maxY; y++) {
             int nodes = 0;
@@ -649,8 +774,10 @@ public class PixelGraphics extends Graphics2D {
 
             Arrays.sort(nodeX, 0, nodes);
             for (int i = 0; i < nodes - 1; i += 2)
-                fillDeviceRect(nodeX[i], y, nodeX[i + 1] - nodeX[i] + 1, 1, this.colorArgb);
+                coverage.add(nodeX[i], y, nodeX[i + 1] - nodeX[i] + 1, 1);
         }
+
+        coverage.lay(this.colorArgb);
     }
 
     // --- shapes ---
@@ -665,6 +792,7 @@ public class PixelGraphics extends Graphics2D {
         PathIterator pi = s.getPathIterator(null);
         double[] coords = new double[6];
         double startX = 0, startY = 0, lastX = 0, lastY = 0;
+        Coverage coverage = new Coverage();
 
         while (!pi.isDone()) {
             int type = pi.currentSegment(coords);
@@ -674,23 +802,23 @@ public class PixelGraphics extends Graphics2D {
                     startY = lastY = coords[1];
                 }
                 case PathIterator.SEG_LINETO -> {
-                    drawLine((int) Math.round(lastX), (int) Math.round(lastY),
+                    drawLine(coverage, (int) Math.round(lastX), (int) Math.round(lastY),
                         (int) Math.round(coords[0]), (int) Math.round(coords[1]));
                     lastX = coords[0];
                     lastY = coords[1];
                 }
                 case PathIterator.SEG_QUADTO -> {
-                    drawQuadCurve(lastX, lastY, coords[0], coords[1], coords[2], coords[3]);
+                    drawQuadCurve(coverage, lastX, lastY, coords[0], coords[1], coords[2], coords[3]);
                     lastX = coords[2];
                     lastY = coords[3];
                 }
                 case PathIterator.SEG_CUBICTO -> {
-                    drawCubicCurve(lastX, lastY, coords[0], coords[1], coords[2], coords[3], coords[4], coords[5]);
+                    drawCubicCurve(coverage, lastX, lastY, coords[0], coords[1], coords[2], coords[3], coords[4], coords[5]);
                     lastX = coords[4];
                     lastY = coords[5];
                 }
                 case PathIterator.SEG_CLOSE -> {
-                    drawLine((int) Math.round(lastX), (int) Math.round(lastY),
+                    drawLine(coverage, (int) Math.round(lastX), (int) Math.round(lastY),
                         (int) Math.round(startX), (int) Math.round(startY));
                     lastX = startX;
                     lastY = startY;
@@ -698,6 +826,8 @@ public class PixelGraphics extends Graphics2D {
             }
             pi.next();
         }
+
+        coverage.lay(this.colorArgb);
     }
 
     @Override
@@ -738,7 +868,7 @@ public class PixelGraphics extends Graphics2D {
         return s.intersects(rect);
     }
 
-    private void drawQuadCurve(double x0, double y0, double cx, double cy, double x1, double y1) {
+    private void drawQuadCurve(@NotNull Coverage coverage, double x0, double y0, double cx, double cy, double x1, double y1) {
         int steps = Math.max(8, (int) (Math.hypot(x1 - x0, y1 - y0) / 2));
         double prevX = x0, prevY = y0;
         for (int i = 1; i <= steps; i++) {
@@ -746,14 +876,14 @@ public class PixelGraphics extends Graphics2D {
             double u = 1 - t;
             double px = u * u * x0 + 2 * u * t * cx + t * t * x1;
             double py = u * u * y0 + 2 * u * t * cy + t * t * y1;
-            drawLine((int) Math.round(prevX), (int) Math.round(prevY),
+            drawLine(coverage, (int) Math.round(prevX), (int) Math.round(prevY),
                 (int) Math.round(px), (int) Math.round(py));
             prevX = px;
             prevY = py;
         }
     }
 
-    private void drawCubicCurve(double x0, double y0, double cx1, double cy1, double cx2, double cy2, double x1, double y1) {
+    private void drawCubicCurve(@NotNull Coverage coverage, double x0, double y0, double cx1, double cy1, double cx2, double cy2, double x1, double y1) {
         int steps = Math.max(12, (int) (Math.hypot(x1 - x0, y1 - y0) / 2));
         double prevX = x0, prevY = y0;
         for (int i = 1; i <= steps; i++) {
@@ -761,7 +891,7 @@ public class PixelGraphics extends Graphics2D {
             double u = 1 - t;
             double px = u * u * u * x0 + 3 * u * u * t * cx1 + 3 * u * t * t * cx2 + t * t * t * x1;
             double py = u * u * u * y0 + 3 * u * u * t * cy1 + 3 * u * t * t * cy2 + t * t * t * y1;
-            drawLine((int) Math.round(prevX), (int) Math.round(prevY),
+            drawLine(coverage, (int) Math.round(prevX), (int) Math.round(prevY),
                 (int) Math.round(px), (int) Math.round(py));
             prevX = px;
             prevY = py;
@@ -1012,12 +1142,13 @@ public class PixelGraphics extends Graphics2D {
 
     @Override
     public void setComposite(@NotNull Composite comp) {
-        this.composite = comp;
+        if (!AlphaComposite.SrcOver.equals(comp))
+            throw new UnsupportedOperationException("Only AlphaComposite.SrcOver is supported, not '%s'".formatted(comp));
     }
 
     @Override
     public @NotNull Composite getComposite() {
-        return this.composite;
+        return AlphaComposite.SrcOver;
     }
 
     @Override
@@ -1034,7 +1165,7 @@ public class PixelGraphics extends Graphics2D {
 
     @Override
     public void setPaintMode() {
-        // no-op
+        // no-op - every draw composites source-over, the paint mode, and XOR is refused
     }
 
     @Override
