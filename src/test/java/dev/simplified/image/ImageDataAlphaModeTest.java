@@ -6,6 +6,7 @@ import dev.simplified.image.frame.FrameBlend;
 import dev.simplified.image.frame.FrameDisposal;
 import dev.simplified.image.frame.ImageFrame;
 import dev.simplified.image.frame.LoopCount;
+import dev.simplified.image.option.WebPWriteOptions;
 import dev.simplified.image.pixel.AlphaMode;
 import org.jetbrains.annotations.NotNull;
 import org.junit.jupiter.api.DisplayName;
@@ -13,6 +14,8 @@ import org.junit.jupiter.api.Test;
 
 import java.awt.image.BufferedImage;
 import java.awt.image.DataBufferInt;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.equalTo;
@@ -20,10 +23,11 @@ import static org.hamcrest.Matchers.instanceOf;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.sameInstance;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
- * Pins the alpha convention an {@link ImageData} declares - what each way of building one answers,
- * and what converting it to the other convention keeps and copies.
+ * Pins the alpha convention an {@link ImageData} reports - the one its frames' buffers hold - and what
+ * converting it to the other convention keeps and copies.
  */
 class ImageDataAlphaModeTest {
 
@@ -37,30 +41,40 @@ class ImageDataAlphaModeTest {
         0x80FF0000, 0x40808080, 0x01FFFFFF, 0x00000000, 0xFF336699, 0x80808080, 0xFE803F00, 0x02800000
     };
 
-    // ──── the declared convention ────
+    // ──── the reported convention ────
 
     @Test
-    @DisplayName("an image built without a convention declares straight colour")
-    void unlabelledImagesAreStraight() {
-        assertThat(StaticImageData.of(row(STRAIGHT)).getAlphaMode(), equalTo(AlphaMode.STRAIGHT));
+    @DisplayName("an image reports the convention its frames' buffers hold")
+    void anImageReportsItsFramesConvention() {
+        for (AlphaMode mode : AlphaMode.values()) {
+            assertThat(mode.name(), StaticImageData.of(row(PREMULTIPLIED, mode)).getAlphaMode(), equalTo(mode));
+            assertThat(mode.name(), new Still(ImageFrame.of(row(PREMULTIPLIED, mode))).getAlphaMode(), equalTo(mode));
+            assertThat(
+                mode.name(),
+                AnimatedImageData.builder()
+                    .withFrame(ImageFrame.of(row(PREMULTIPLIED, mode), 100))
+                    .withFrame(ImageFrame.of(row(reversed(PREMULTIPLIED), mode), 100))
+                    .build()
+                    .getAlphaMode(),
+                equalTo(mode)
+            );
+        }
+
+        assertThat(StaticImageData.of(PixelBuffer.create(2, 2)).getAlphaMode(), equalTo(AlphaMode.STRAIGHT));
+        assertThat(StaticImageData.of(PixelBuffer.canvas(2, 2)).getAlphaMode(), equalTo(AlphaMode.PREMULTIPLIED));
         assertThat(StaticImageData.of(new BufferedImage(2, 2, BufferedImage.TYPE_INT_ARGB)).getAlphaMode(), equalTo(AlphaMode.STRAIGHT));
-        assertThat(AnimatedImageData.builder().withFrame(ImageFrame.of(row(STRAIGHT), 100)).build().getAlphaMode(), equalTo(AlphaMode.STRAIGHT));
-        assertThat(new Still(ImageFrame.of(row(STRAIGHT))).getAlphaMode(), equalTo(AlphaMode.STRAIGHT));
     }
 
     @Test
-    @DisplayName("an image built with a convention declares it")
-    void labelledImagesDeclareTheirConvention() {
-        assertThat(StaticImageData.of(row(PREMULTIPLIED), AlphaMode.PREMULTIPLIED).getAlphaMode(), equalTo(AlphaMode.PREMULTIPLIED));
-        assertThat(StaticImageData.of(row(STRAIGHT), AlphaMode.STRAIGHT).getAlphaMode(), equalTo(AlphaMode.STRAIGHT));
-        assertThat(
-            AnimatedImageData.builder()
-                .withFrame(ImageFrame.of(row(PREMULTIPLIED), 100))
-                .withAlphaMode(AlphaMode.PREMULTIPLIED)
-                .build()
-                .getAlphaMode(),
-            equalTo(AlphaMode.PREMULTIPLIED)
-        );
+    @DisplayName("an animation refuses a frame holding the other convention from its first")
+    void anAnimationRefusesFramesThatDisagree() {
+        AnimatedImageData.Builder builder = AnimatedImageData.builder()
+            .withFrame(ImageFrame.of(row(STRAIGHT, AlphaMode.STRAIGHT), 100))
+            .withFrame(ImageFrame.of(row(STRAIGHT, AlphaMode.STRAIGHT), 100))
+            .withFrame(ImageFrame.of(row(PREMULTIPLIED, AlphaMode.PREMULTIPLIED), 100));
+
+        IllegalArgumentException refused = assertThrows(IllegalArgumentException.class, builder::build);
+        assertThat(refused.getMessage(), equalTo("Frame 2 holds 'PREMULTIPLIED' colour where the first frame holds 'STRAIGHT'"));
     }
 
     @Test
@@ -72,9 +86,23 @@ class ImageDataAlphaModeTest {
             ImageFormat.PNG, ImageFormat.JPEG, ImageFormat.BMP, ImageFormat.GIF, ImageFormat.WEBP,
             ImageFormat.TIFF, ImageFormat.ICO, ImageFormat.QOI, ImageFormat.TGA, ImageFormat.PNM
         }) {
-            ImageData decoded = ImageFactory.fromByteArray(ImageFactory.toByteArray(source, format));
-            assertThat(format.name(), decoded.getAlphaMode(), equalTo(AlphaMode.STRAIGHT));
+            assertStraight(format.name(), ImageFactory.fromByteArray(ImageFactory.toByteArray(source, format)));
         }
+
+        // The routes those writes do not reach: an ICO whose image is a DIB, the lossy VP8 decoder, and
+        // the canvas an animated WebP's frames are composed on.
+        assertStraight("ICO with a BMP payload", ImageFactory.fromByteArray(icoWithBmpPayload(16, 0xC0336699)));
+
+        byte[] lossy = ImageFactory.toByteArray(source, ImageFormat.WEBP, WebPWriteOptions.builder().isLossless(false).build());
+        assertStraight("lossy WEBP", ImageFactory.fromByteArray(lossy));
+
+        ImageData animation = AnimatedImageData.builder()
+            .withFrame(ImageFrame.of(square(16, 0xC0336699), 100))
+            .withFrame(ImageFrame.of(square(16, 0x80996633), 100))
+            .build();
+        ImageData decodedAnimation = ImageFactory.fromByteArray(ImageFactory.toByteArray(animation, ImageFormat.WEBP));
+        assertThat(decodedAnimation.getFrames().size(), equalTo(2));
+        assertStraight("animated WEBP", decodedAnimation);
     }
 
     // ──── converting to the convention already held ────
@@ -83,11 +111,10 @@ class ImageDataAlphaModeTest {
     @DisplayName("converting to the convention an image already holds answers the image and its own buffer")
     void convertingToTheHeldConventionIsTheIdentity() {
         for (AlphaMode mode : AlphaMode.values()) {
-            PixelBuffer pixels = row(PREMULTIPLIED);
-            ImageData still = StaticImageData.of(pixels, mode);
+            PixelBuffer pixels = row(PREMULTIPLIED, mode);
+            ImageData still = StaticImageData.of(pixels);
             ImageData animated = AnimatedImageData.builder()
                 .withFrame(ImageFrame.of(pixels, 100))
-                .withAlphaMode(mode)
                 .build();
 
             assertThat(still.toAlphaMode(mode), sameInstance(still));
@@ -102,11 +129,12 @@ class ImageDataAlphaModeTest {
     @Test
     @DisplayName("a premultiplied still converts to a straight copy and leaves its own pixels alone")
     void premultipliedStillConvertsToAStraightCopy() {
-        PixelBuffer pixels = row(PREMULTIPLIED);
-        ImageData image = StaticImageData.of(pixels, AlphaMode.PREMULTIPLIED);
+        PixelBuffer pixels = row(PREMULTIPLIED, AlphaMode.PREMULTIPLIED);
+        ImageData image = StaticImageData.of(pixels);
 
         PixelBuffer straight = image.toPixelBuffer(AlphaMode.STRAIGHT);
         assertThat(straight, not(sameInstance(pixels)));
+        assertThat(straight.alphaMode(), equalTo(AlphaMode.STRAIGHT));
         assertThat(straight.data(), equalTo(STRAIGHT));
         assertThat(pixels.data(), equalTo(PREMULTIPLIED));
 
@@ -120,9 +148,10 @@ class ImageDataAlphaModeTest {
     @Test
     @DisplayName("a straight still converts to a premultiplied copy")
     void straightStillConvertsToAPremultipliedCopy() {
-        PixelBuffer pixels = row(STRAIGHT);
+        PixelBuffer pixels = row(STRAIGHT, AlphaMode.STRAIGHT);
         ImageData image = StaticImageData.of(pixels);
 
+        assertThat(image.toPixelBuffer(AlphaMode.PREMULTIPLIED).alphaMode(), equalTo(AlphaMode.PREMULTIPLIED));
         assertThat(image.toPixelBuffer(AlphaMode.PREMULTIPLIED).data(), equalTo(PREMULTIPLIED));
         assertThat(image.toAlphaMode(AlphaMode.PREMULTIPLIED).getAlphaMode(), equalTo(AlphaMode.PREMULTIPLIED));
         assertThat(pixels.data(), equalTo(STRAIGHT));
@@ -131,8 +160,8 @@ class ImageDataAlphaModeTest {
     @Test
     @DisplayName("a premultiplied animation converts every frame and keeps the canvas, timing and frame metadata")
     void premultipliedAnimationConvertsEveryFrame() {
-        PixelBuffer first = row(PREMULTIPLIED);
-        PixelBuffer second = row(reversed(PREMULTIPLIED));
+        PixelBuffer first = row(PREMULTIPLIED, AlphaMode.PREMULTIPLIED);
+        PixelBuffer second = row(reversed(PREMULTIPLIED), AlphaMode.PREMULTIPLIED);
         AnimatedImageData image = AnimatedImageData.builder()
             .withFrame(ImageFrame.of(first, 40, 1, 2, FrameDisposal.DO_NOT_DISPOSE, FrameBlend.OVER))
             .withFrame(ImageFrame.of(second, 70, 3, 0, FrameDisposal.RESTORE_TO_PREVIOUS, FrameBlend.SOURCE))
@@ -140,7 +169,6 @@ class ImageDataAlphaModeTest {
             .withHeight(5)
             .withLoopCount(LoopCount.of(3))
             .withBackgroundColor(0x80112233)
-            .withAlphaMode(AlphaMode.PREMULTIPLIED)
             .build();
 
         ImageData converted = image.toAlphaMode(AlphaMode.STRAIGHT);
@@ -164,6 +192,7 @@ class ImageDataAlphaModeTest {
         assertThat(convertedFirst.blend(), equalTo(FrameBlend.OVER));
 
         ImageFrame convertedSecond = animated.getFrames().getLast();
+        assertThat(convertedSecond.pixels().alphaMode(), equalTo(AlphaMode.STRAIGHT));
         assertThat(convertedSecond.pixels().data(), equalTo(reversed(STRAIGHT)));
         assertThat(convertedSecond.delayMs(), equalTo(70));
         assertThat(convertedSecond.offsetX(), equalTo(3));
@@ -176,18 +205,28 @@ class ImageDataAlphaModeTest {
     }
 
     @Test
-    @DisplayName("a buffer whose alpha carries no data holds the same colour in either convention")
+    @DisplayName("a buffer whose alpha carries no data converts to a buffer sharing its pixel array")
     void bufferWithoutAlphaIsNotConverted() {
-        PixelBuffer pixels = PixelBuffer.of(PREMULTIPLIED.clone(), PREMULTIPLIED.length, 1, false);
-        ImageData still = StaticImageData.of(pixels, AlphaMode.PREMULTIPLIED);
+        PixelBuffer pixels = PixelBuffer.ofStraight(PREMULTIPLIED.clone(), PREMULTIPLIED.length, 1, false)
+            .toAlphaMode(AlphaMode.PREMULTIPLIED);
+        ImageData still = StaticImageData.of(pixels);
         ImageData animated = AnimatedImageData.builder()
             .withFrame(ImageFrame.of(pixels, 100))
-            .withAlphaMode(AlphaMode.PREMULTIPLIED)
             .build();
 
-        assertThat(still.toPixelBuffer(AlphaMode.STRAIGHT), sameInstance(pixels));
-        assertThat(still.toAlphaMode(AlphaMode.STRAIGHT).toPixelBuffer(), sameInstance(pixels));
-        assertThat(animated.toAlphaMode(AlphaMode.STRAIGHT).getFrames().getFirst().pixels(), sameInstance(pixels));
+        PixelBuffer straight = still.toPixelBuffer(AlphaMode.STRAIGHT);
+        assertThat(straight.data(), sameInstance(pixels.data()));
+        assertThat(straight.alphaMode(), equalTo(AlphaMode.STRAIGHT));
+        assertThat(straight.hasAlpha(), is(false));
+
+        ImageData convertedStill = still.toAlphaMode(AlphaMode.STRAIGHT);
+        assertThat(convertedStill.getAlphaMode(), equalTo(AlphaMode.STRAIGHT));
+        assertThat(convertedStill.toPixelBuffer().data(), sameInstance(pixels.data()));
+
+        ImageData convertedAnimation = animated.toAlphaMode(AlphaMode.STRAIGHT);
+        assertThat(convertedAnimation.getAlphaMode(), equalTo(AlphaMode.STRAIGHT));
+        assertThat(convertedAnimation.getFrames().getFirst().pixels().data(), sameInstance(pixels.data()));
+        assertThat(pixels.alphaMode(), equalTo(AlphaMode.PREMULTIPLIED));
         assertThat(pixels.data(), equalTo(PREMULTIPLIED));
     }
 
@@ -196,32 +235,87 @@ class ImageDataAlphaModeTest {
     @Test
     @DisplayName("a straight image's buffered image shares the first frame's pixel array")
     void straightBufferedImageIsZeroCopy() {
-        PixelBuffer pixels = row(STRAIGHT);
+        PixelBuffer pixels = row(STRAIGHT, AlphaMode.STRAIGHT);
         BufferedImage image = StaticImageData.of(pixels).toBufferedImage();
 
         assertThat(backing(image), sameInstance(pixels.data()));
+        assertThat(image.getType(), equalTo(BufferedImage.TYPE_INT_ARGB));
         assertThat(image.isAlphaPremultiplied(), is(false));
     }
 
     @Test
-    @DisplayName("a premultiplied image's buffered image holds a straight copy and leaves the frame alone")
-    void premultipliedBufferedImageIsAStraightCopy() {
-        PixelBuffer pixels = row(PREMULTIPLIED);
-        BufferedImage image = StaticImageData.of(pixels, AlphaMode.PREMULTIPLIED).toBufferedImage();
+    @DisplayName("a premultiplied image's buffered image shares the first frame's pixel array as premultiplied colour")
+    void toBufferedImageSharesAPremultipliedFrame() {
+        PixelBuffer pixels = row(PREMULTIPLIED, AlphaMode.PREMULTIPLIED);
+        BufferedImage image = StaticImageData.of(pixels).toBufferedImage();
 
-        assertThat(backing(image), not(sameInstance(pixels.data())));
-        assertThat(image.isAlphaPremultiplied(), is(false));
+        assertThat(backing(image), sameInstance(pixels.data()));
+        assertThat(image.getType(), equalTo(BufferedImage.TYPE_INT_ARGB_PRE));
+        assertThat(image.isAlphaPremultiplied(), is(true));
         for (int x = 0; x < STRAIGHT.length; x++)
             assertThat("pixel " + x, image.getRGB(x, 0), equalTo(STRAIGHT[x]));
 
         image.setRGB(0, 0, 0xFF000000);
-        assertThat(pixels.data(), equalTo(PREMULTIPLIED));
+        assertThat(pixels.getPixel(0, 0), equalTo(0xFF000000));
     }
 
     // ──── fixtures ────
 
-    private static @NotNull PixelBuffer row(int @NotNull [] pixels) {
-        return PixelBuffer.of(pixels.clone(), pixels.length, 1);
+    /**
+     * Asserts that a decoded image and every one of its frames hold straight colour.
+     *
+     * @param label the route the image was decoded through
+     * @param decoded the decoded image
+     */
+    private static void assertStraight(@NotNull String label, @NotNull ImageData decoded) {
+        assertThat(label, decoded.getAlphaMode(), equalTo(AlphaMode.STRAIGHT));
+        for (ImageFrame frame : decoded.getFrames())
+            assertThat(label, frame.pixels().alphaMode(), equalTo(AlphaMode.STRAIGHT));
+    }
+
+    /**
+     * Writes an ICO whose one image is a 32-bit DIB, a payload the library's writer never produces,
+     * every pixel holding {@code argb}.
+     *
+     * @param size the image's width and height, at most 255
+     * @param argb the straight colour of every pixel
+     * @return the ICO bytes
+     */
+    private static byte @NotNull [] icoWithBmpPayload(int size, int argb) {
+        int maskRow = (size + 31) / 32 * 4;
+        int dibSize = 40 + size * size * 4 + maskRow * size;
+        ByteBuffer ico = ByteBuffer.allocate(6 + 16 + dibSize).order(ByteOrder.LITTLE_ENDIAN);
+
+        // The header, then the one directory entry: dimensions, no palette, one plane, 32 bits, the
+        // DIB's size and its offset.
+        ico.putShort((short) 0).putShort((short) 1).putShort((short) 1);
+        ico.put((byte) size).put((byte) size).put((byte) 0).put((byte) 0);
+        ico.putShort((short) 1).putShort((short) 32).putInt(dibSize).putInt(6 + 16);
+
+        // The BITMAPINFOHEADER, its height counting the AND mask; the fields after the bit count are 0.
+        ico.putInt(40).putInt(size).putInt(size * 2).putShort((short) 1).putShort((short) 32);
+        ico.position(6 + 16 + 40);
+
+        // Bottom-up BGRA rows, which a little-endian ARGB int lays down byte for byte; the AND mask
+        // after them is 0.
+        for (int i = 0; i < size * size; i++)
+            ico.putInt(argb);
+
+        return ico.array();
+    }
+
+    /**
+     * Wraps a copy of {@code pixels}, one pixel tall, in a buffer holding {@code alphaMode}.
+     *
+     * @param pixels the pixels, copied
+     * @param alphaMode the convention the buffer holds
+     * @return the buffer
+     */
+    private static @NotNull PixelBuffer row(int @NotNull [] pixels, @NotNull AlphaMode alphaMode) {
+        return switch (alphaMode) {
+            case STRAIGHT -> PixelBuffer.ofStraight(pixels.clone(), pixels.length, 1);
+            case PREMULTIPLIED -> PixelBuffer.ofPremultiplied(pixels.clone(), pixels.length, 1);
+        };
     }
 
     private static @NotNull PixelBuffer square(int size, int argb) {

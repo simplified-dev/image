@@ -7,13 +7,12 @@ import dev.simplified.annotations.RequiredArgsConstructor;
 import dev.simplified.collection.Concurrent;
 import dev.simplified.collection.ConcurrentList;
 import dev.simplified.image.frame.ImageFrame;
-import dev.simplified.image.pixel.AlphaMode;
 import org.jetbrains.annotations.NotNull;
 
 import java.awt.image.BufferedImage;
 
 /**
- * A single-frame image.
+ * A single-frame image, held in the convention its frame's buffer holds.
  */
 @Getter
 @RequiredArgsConstructor(access = AccessLevel.PRIVATE)
@@ -24,32 +23,19 @@ public class StaticImageData implements ImageData {
     @Getter(style = NamingStyle.FLUENT)
     private final boolean hasAlpha;
     private final @NotNull ConcurrentList<ImageFrame> frames;
-    /** the convention the frame's pixels are held in */
-    private final @NotNull AlphaMode alphaMode;
 
     /**
-     * Wraps a {@link PixelBuffer} holding straight colour as static image data.
+     * Wraps a {@link PixelBuffer} as static image data, held in the convention the buffer holds.
      *
      * @param pixels the source pixel data
      * @return a new static image data instance
      */
     public static @NotNull StaticImageData of(@NotNull PixelBuffer pixels) {
-        return of(pixels, AlphaMode.STRAIGHT);
-    }
-
-    /**
-     * Wraps a {@link PixelBuffer} holding pixels in the given convention as static image data.
-     *
-     * @param pixels the source pixel data
-     * @param alphaMode the convention the pixels are held in
-     * @return a new static image data instance
-     */
-    public static @NotNull StaticImageData of(@NotNull PixelBuffer pixels, @NotNull AlphaMode alphaMode) {
         ImageFrame frame = ImageFrame.of(pixels, 0);
         ConcurrentList<ImageFrame> frames = Concurrent.newList();
         frames.add(frame);
 
-        return new StaticImageData(pixels.width(), pixels.height(), pixels.hasAlpha(), frames, alphaMode);
+        return new StaticImageData(pixels.width(), pixels.height(), pixels.hasAlpha(), frames);
     }
 
     /**

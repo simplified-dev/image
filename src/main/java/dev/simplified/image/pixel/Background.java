@@ -82,7 +82,7 @@ public sealed interface Background permits Background.Solid, Background.Checkerb
      * {@linkplain ImageData#toCanvasFrames() composed onto whole canvases}, so the fill covers the
      * canvas outside every frame, a checkerboard is anchored at the canvas origin, and a partly
      * transparent frame shows the frames beneath it rather than the fill. Each canvas is then laid over
-     * a freshly filled buffer of the canvas size, in the convention {@code image} holds - with
+     * a freshly filled buffer of the canvas size, in the convention the canvas holds - with
      * {@link BlendMode#PREMULTIPLIED} and a premultiplied fill under {@link AlphaMode#PREMULTIPLIED},
      * with {@link BlendMode#STRAIGHT} under {@link AlphaMode#STRAIGHT} - and the result holds that
      * convention. A {@linkplain #isTransparent() transparent} background returns {@code image}
@@ -98,45 +98,39 @@ public sealed interface Background permits Background.Solid, Background.Checkerb
     default @NotNull ImageData composite(@NotNull ImageData image) {
         if (isTransparent()) return image;
 
-        AlphaMode alphaMode = image.getAlphaMode();
         ImageData canvas = image.toCanvasFrames();
 
         if (!canvas.isAnimated())
-            return StaticImageData.of(over(canvas.getFrames().getFirst().pixels(), alphaMode), alphaMode);
+            return StaticImageData.of(over(canvas.getFrames().getFirst().pixels()));
 
         AnimatedImageData.Builder builder = AnimatedImageData.builder()
             .withWidth(canvas.getWidth())
-            .withHeight(canvas.getHeight())
-            .withAlphaMode(alphaMode);
+            .withHeight(canvas.getHeight());
 
         if (canvas instanceof AnimatedImageData animated)
             builder.withLoopCount(animated.getLoopCount()).withBackgroundColor(animated.getBackgroundColor());
         for (ImageFrame frame : canvas.getFrames())
-            builder.withFrame(frame.withPixels(over(frame.pixels(), alphaMode)));
+            builder.withFrame(frame.withPixels(over(frame.pixels())));
 
         return builder.build();
     }
 
     /**
      * Returns a new buffer the size of {@code rendered} with this background filled underneath and
-     * {@code rendered} laid on top, both in {@code alphaMode}: the fill premultiplied and the render
-     * laid with {@link BlendMode#PREMULTIPLIED} under {@link AlphaMode#PREMULTIPLIED}, the fill as given
-     * and the render laid with {@link BlendMode#STRAIGHT} under {@link AlphaMode#STRAIGHT}.
+     * {@code rendered} laid on top, both in the convention {@code rendered} holds: the fill
+     * premultiplied and the render laid with {@link BlendMode#PREMULTIPLIED} under
+     * {@link AlphaMode#PREMULTIPLIED}, the fill as given and the render laid with
+     * {@link BlendMode#STRAIGHT} under {@link AlphaMode#STRAIGHT}.
      *
      * @param rendered the composed canvas laid over the fill
-     * @param alphaMode the convention {@code rendered} is held in, which the fill is laid down in
-     * @return a new buffer holding {@code rendered} over the fill
+     * @return a new buffer holding {@code rendered} over the fill, in its convention
      */
-    private @NotNull PixelBuffer over(@NotNull PixelBuffer rendered, @NotNull AlphaMode alphaMode) {
-        PixelBuffer out = PixelBuffer.create(rendered.width(), rendered.height());
-        this.fill(out);
+    private @NotNull PixelBuffer over(@NotNull PixelBuffer rendered) {
+        PixelBuffer fill = PixelBuffer.create(rendered.width(), rendered.height());
+        this.fill(fill);
 
-        if (alphaMode == AlphaMode.PREMULTIPLIED) {
-            out.premultiplyAlpha();
-            out.blit(rendered, 0, 0, BlendMode.PREMULTIPLIED);
-        } else
-            out.blit(rendered, 0, 0, BlendMode.STRAIGHT);
-
+        PixelBuffer out = fill.toAlphaMode(rendered.alphaMode());
+        out.blit(rendered, 0, 0, rendered.alphaMode() == AlphaMode.PREMULTIPLIED ? BlendMode.PREMULTIPLIED : BlendMode.STRAIGHT);
         return out;
     }
 

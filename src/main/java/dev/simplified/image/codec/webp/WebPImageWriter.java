@@ -336,7 +336,7 @@ public class WebPImageWriter implements ImageWriter {
         if (level >= 100) return pixels;
         int[] out = NearLosslessPreprocess.apply(
             pixels.data(), pixels.width(), pixels.height(), level);
-        return PixelBuffer.of(out, pixels.width(), pixels.height());
+        return PixelBuffer.ofStraight(out, pixels.width(), pixels.height());
     }
 
     private static byte @NotNull [] buildVP8XPayload(int width, int height, boolean animation, boolean alpha) {
@@ -452,7 +452,7 @@ public class WebPImageWriter implements ImageWriter {
             // decoder calls DecodeImageStream directly without parsing the standalone
             // VP8L header (see VP8LDecodeAlphaHeader in src/dec/vp8l_dec.c) - dimensions
             // are inferred from the parent VP8 chunk instead.
-            PixelBuffer alphaBuf = PixelBuffer.of(
+            PixelBuffer alphaBuf = PixelBuffer.ofStraight(
                 IntStream.range(0, data.length)
                     .map(i -> 0xFF000000 | ((rawAlpha[i] & 0xFF) << 8))
                     .toArray(),

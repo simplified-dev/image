@@ -112,7 +112,7 @@ public class QoiImageReader implements ImageReader {
             table[(r * 3 + g * 5 + b * 7 + a * 11) & 0x3F] = argb;
         }
 
-        return StaticImageData.of(PixelBuffer.of(pixels, width, height, channels == 4));
+        return StaticImageData.of(PixelBuffer.ofStraight(pixels, width, height, channels == 4));
     }
 
     private static int readUint32BE(byte @NotNull [] data, int offset) {

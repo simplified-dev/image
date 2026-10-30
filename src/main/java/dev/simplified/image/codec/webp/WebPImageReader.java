@@ -262,7 +262,7 @@ public class WebPImageReader implements ImageReader {
             // frame's disposal, so it carries neither: it is a whole canvas
             // that replaces the one before it.
             int[] snapshot = canvas.clone();
-            PixelBuffer composed = PixelBuffer.of(snapshot, canvasWidth, canvasHeight);
+            PixelBuffer composed = PixelBuffer.ofStraight(snapshot, canvasWidth, canvasHeight);
             frames.add(ImageFrame.of(composed, durationMs));
 
             priorFrameX = frameX;

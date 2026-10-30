@@ -135,7 +135,7 @@ class WebPComposedFrameTest {
         chunks.add(RiffContainer.createChunk(WebPChunk.Type.VP8X, vp8x));
         chunks.add(RiffContainer.createChunk(WebPChunk.Type.ANIM, new byte[6]));
         chunks.add(anmf(0, 0, filled(SIZE, HALF_RED), 0));
-        chunks.add(anmf(0, 0, PixelBuffer.of(blueLeft, 8, 8), DISPOSE_TO_BACKGROUND));
+        chunks.add(anmf(0, 0, PixelBuffer.ofStraight(blueLeft, 8, 8), DISPOSE_TO_BACKGROUND));
         chunks.add(anmf(8, 8, filled(8, GREEN), NO_BLEND));
         chunks.add(anmf(12, 0, filled(4, CLEAR), NO_BLEND));
         return RiffContainer.write(chunks);
@@ -183,7 +183,7 @@ class WebPComposedFrameTest {
     private static @NotNull PixelBuffer filled(int side, int argb) {
         int[] pixels = new int[side * side];
         Arrays.fill(pixels, argb);
-        return PixelBuffer.of(pixels, side, side);
+        return PixelBuffer.ofStraight(pixels, side, side);
     }
 
     /**

@@ -578,7 +578,7 @@ class WebPRoundTripTest {
                 int a = raw[off + 3] & 0xFF;
                 argb[i] = (a << 24) | (r << 16) | (g << 8) | b;
             }
-            frames.add(ImageFrame.of(PixelBuffer.of(argb, W, H), 50, 0, 0,
+            frames.add(ImageFrame.of(PixelBuffer.ofStraight(argb, W, H), 50, 0, 0,
                 FrameDisposal.DO_NOT_DISPOSE, FrameBlend.OVER));
         }
         AnimatedImageData anim = AnimatedImageData.builder()
@@ -1192,7 +1192,7 @@ class WebPRoundTripTest {
                             partial[yy * partialW + xx] = curr.getPixel(bbox[0] + xx, bbox[1] + yy);
                 }
             }
-            PixelBuffer fb = PixelBuffer.of(partial, partialW, partialH);
+            PixelBuffer fb = PixelBuffer.ofStraight(partial, partialW, partialH);
             int lit  = VP8LEncoder.encode(fb, VP8LEncoder.TransformMode.NONE, 0).length;
             int pal  = VP8LEncoder.encode(fb, VP8LEncoder.TransformMode.PALETTE, 0).length;
             int pred = VP8LEncoder.encode(fb, VP8LEncoder.TransformMode.PREDICTOR, 0).length;

@@ -215,8 +215,8 @@ class GifDisposalTest {
         }
 
         return animation(
-            ImageFrame.of(PixelBuffer.of(red, SIZE, SIZE), 100, 0, 0, FrameDisposal.NONE, FrameBlend.SOURCE),
-            ImageFrame.of(PixelBuffer.of(block, SIZE, SIZE), 100, 0, 0, FrameDisposal.NONE, FrameBlend.OVER)
+            ImageFrame.of(PixelBuffer.ofStraight(red, SIZE, SIZE), 100, 0, 0, FrameDisposal.NONE, FrameBlend.SOURCE),
+            ImageFrame.of(PixelBuffer.ofStraight(block, SIZE, SIZE), 100, 0, 0, FrameDisposal.NONE, FrameBlend.OVER)
         );
     }
 
@@ -227,8 +227,8 @@ class GifDisposalTest {
      */
     private static @NotNull AnimatedImageData halves(@NotNull FrameBlend secondBlend) {
         return animation(
-            ImageFrame.of(PixelBuffer.of(half(true, RED), SIZE, SIZE), 100, 0, 0, FrameDisposal.NONE, FrameBlend.SOURCE),
-            ImageFrame.of(PixelBuffer.of(half(false, BLUE), SIZE, SIZE), 100, 0, 0, FrameDisposal.NONE, secondBlend)
+            ImageFrame.of(PixelBuffer.ofStraight(half(true, RED), SIZE, SIZE), 100, 0, 0, FrameDisposal.NONE, FrameBlend.SOURCE),
+            ImageFrame.of(PixelBuffer.ofStraight(half(false, BLUE), SIZE, SIZE), 100, 0, 0, FrameDisposal.NONE, secondBlend)
         );
     }
 

@@ -45,7 +45,7 @@ public class IcoImageWriter implements ImageWriter {
             throw new dev.simplified.image.exception.ImageEncodeException(
                 "ICO dimensions must be <= %d; got '%dx%d'", MAX_ICO_DIMENSION, width, height);
 
-        byte[] png = new PngImageWriter().write(StaticImageData.of(frame.pixels(), data.getAlphaMode()));
+        byte[] png = new PngImageWriter().write(StaticImageData.of(frame.pixels()));
 
         @Cleanup ByteArrayDataOutput out = new ByteArrayDataOutput(6 + 16 + png.length);
         LittleEndian.writeUint16(out, 0);

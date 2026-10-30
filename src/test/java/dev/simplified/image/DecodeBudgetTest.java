@@ -280,7 +280,7 @@ class DecodeBudgetTest {
         for (int i = 0; i < pixels.length; i++)
             pixels[i] = 0xFF000000 | (i % SIDE * 16) << 16 | (i / SIDE * 16) << 8;
 
-        return StaticImageData.of(PixelBuffer.of(pixels, SIDE, SIDE, false));
+        return StaticImageData.of(PixelBuffer.ofStraight(pixels, SIDE, SIDE, false));
     }
 
     private static @NotNull AnimatedImageData animation() {

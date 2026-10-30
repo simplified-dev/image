@@ -50,6 +50,28 @@ final class PixelVector {
         }
     }
 
+    /**
+     * Scales all four channels of each premultiplied pixel in the run by {@code factor}, each rounded
+     * half up once, so a colour at or under its alpha stays there. Scalar only; the straight form,
+     * {@link #multiplyAlpha}, scales alpha alone.
+     *
+     * @param p the pixels
+     * @param off the index of the first pixel of the run
+     * @param len the number of pixels in the run
+     * @param factor the multiplier, in {@code [0, 1]}
+     */
+    static void multiplyPremultiplied(int @NotNull [] p, int off, int len, float factor) {
+        int end = off + len;
+        for (int i = off; i < end; i++) {
+            int px = p[i];
+            int a = Math.round(((px >>> 24) & 0xFF) * factor);
+            int r = Math.round(((px >>> 16) & 0xFF) * factor);
+            int g = Math.round(((px >>> 8) & 0xFF) * factor);
+            int b = Math.round((px & 0xFF) * factor);
+            p[i] = (a << 24) | (r << 16) | (g << 8) | b;
+        }
+    }
+
     static void premultiply(int @NotNull [] p, int off, int len) {
         int start = ENABLED ? VectorOps.premultiply(p, off, len) : 0;
         int end = off + len;

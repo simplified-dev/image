@@ -108,7 +108,7 @@ class WebPCanvasWriteTest {
             .withWidth(8)
             .withHeight(8)
             .withFrame(ImageFrame.of(filled(8, 8, RED), 100, 0, 0, FrameDisposal.DO_NOT_DISPOSE, FrameBlend.SOURCE))
-            .withFrame(ImageFrame.of(PixelBuffer.of(holed, 8, 8), 100, 0, 0, FrameDisposal.DO_NOT_DISPOSE, FrameBlend.OVER))
+            .withFrame(ImageFrame.of(PixelBuffer.ofStraight(holed, 8, 8), 100, 0, 0, FrameDisposal.DO_NOT_DISPOSE, FrameBlend.OVER))
             .build();
 
         int shown = read(new WebPImageWriter().write(animation)).getFrames().getLast().pixels().getPixel(3, 3);
@@ -147,10 +147,10 @@ class WebPCanvasWriteTest {
         return AnimatedImageData.builder()
             .withWidth(WIDTH)
             .withHeight(HEIGHT)
-            .withFrame(ImageFrame.of(PixelBuffer.of(holedDark, 10, 8), 80, 3, 1, FrameDisposal.DO_NOT_DISPOSE, FrameBlend.OVER))
-            .withFrame(ImageFrame.of(PixelBuffer.of(holedLight, 6, 6), 90, 7, 4, FrameDisposal.RESTORE_TO_PREVIOUS, FrameBlend.OVER))
+            .withFrame(ImageFrame.of(PixelBuffer.ofStraight(holedDark, 10, 8), 80, 3, 1, FrameDisposal.DO_NOT_DISPOSE, FrameBlend.OVER))
+            .withFrame(ImageFrame.of(PixelBuffer.ofStraight(holedLight, 6, 6), 90, 7, 4, FrameDisposal.RESTORE_TO_PREVIOUS, FrameBlend.OVER))
             .withFrame(ImageFrame.of(filled(4, 4, MID), 100, 1, 6, FrameDisposal.RESTORE_TO_BACKGROUND, FrameBlend.OVER))
-            .withFrame(ImageFrame.of(PixelBuffer.of(striped, 5, 3), 110, 11, 9, FrameDisposal.DO_NOT_DISPOSE, FrameBlend.OVER))
+            .withFrame(ImageFrame.of(PixelBuffer.ofStraight(striped, 5, 3), 110, 11, 9, FrameDisposal.DO_NOT_DISPOSE, FrameBlend.OVER))
             .build();
     }
 
@@ -165,7 +165,7 @@ class WebPCanvasWriteTest {
     private static @NotNull PixelBuffer filled(int width, int height, int argb) {
         int[] pixels = new int[width * height];
         Arrays.fill(pixels, argb);
-        return PixelBuffer.of(pixels, width, height);
+        return PixelBuffer.ofStraight(pixels, width, height);
     }
 
     // ──── reading ────

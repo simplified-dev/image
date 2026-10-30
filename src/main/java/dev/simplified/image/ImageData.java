@@ -42,11 +42,11 @@ public interface ImageData {
     boolean isAnimated();
 
     /**
-     * The convention every frame's pixels are held in - {@link AlphaMode#STRAIGHT} for a decoded image
-     * and for any image not built to say otherwise.
+     * The convention every frame's pixels are held in, as the first frame's buffer holds it -
+     * {@link AlphaMode#STRAIGHT} for a decoded image.
      */
     default @NotNull AlphaMode getAlphaMode() {
-        return AlphaMode.STRAIGHT;
+        return getFrames().getFirst().pixels().alphaMode();
     }
 
     /**
@@ -67,28 +67,28 @@ public interface ImageData {
 
     /**
      * Returns the first frame's pixels held in the given convention - the frame's own buffer when they
-     * already are, otherwise a converted copy.
+     * already are, otherwise what {@link PixelBuffer#toAlphaMode(AlphaMode)} answers for it.
      * <p>
      * A buffer whose alpha channel carries no data holds the same colour in either convention and is
-     * answered as it is.
+     * answered as a buffer sharing its pixel array under the asked convention.
      *
      * @param alphaMode the convention to hold the pixels in
      * @return the first frame's pixel buffer, or a converted copy of it
      */
     default @NotNull PixelBuffer toPixelBuffer(@NotNull AlphaMode alphaMode) {
-        PixelBuffer pixels = toPixelBuffer();
-        return getAlphaMode() == alphaMode ? pixels : convert(pixels, alphaMode);
+        return toPixelBuffer().toAlphaMode(alphaMode);
     }
 
     /**
      * Returns this image with its pixels held in the given convention - this image itself when they
-     * already are, otherwise a copy whose every frame is converted.
+     * already are, otherwise a copy whose every frame is converted with
+     * {@link PixelBuffer#toAlphaMode(AlphaMode)}.
      * <p>
      * A still image is copied as a {@link StaticImageData} of its first frame's converted pixels. An
      * animation is copied as an {@link AnimatedImageData} keeping this image's canvas size and each
      * frame's timing, offset, disposal and blend, and - when this image is an
      * {@link AnimatedImageData} - its loop count and background colour. A frame whose alpha channel
-     * carries no data keeps its own buffer.
+     * carries no data keeps its own pixel array.
      *
      * @param alphaMode the convention to hold the pixels in
      * @return this image, or a converted copy of it
@@ -98,18 +98,17 @@ public interface ImageData {
             return this;
 
         if (!isAnimated())
-            return StaticImageData.of(convert(toPixelBuffer(), alphaMode), alphaMode);
+            return StaticImageData.of(toPixelBuffer().toAlphaMode(alphaMode));
 
         AnimatedImageData.Builder builder = AnimatedImageData.builder()
             .withWidth(getWidth())
-            .withHeight(getHeight())
-            .withAlphaMode(alphaMode);
+            .withHeight(getHeight());
 
         if (this instanceof AnimatedImageData animated)
             builder.withLoopCount(animated.getLoopCount()).withBackgroundColor(animated.getBackgroundColor());
 
         for (ImageFrame frame : getFrames())
-            builder.withFrame(frame.withPixels(convert(frame.pixels(), alphaMode)));
+            builder.withFrame(frame.withPixels(frame.pixels().toAlphaMode(alphaMode)));
 
         return builder.build();
     }
@@ -122,7 +121,8 @@ public interface ImageData {
      * disposes to the background, so it replaces the frame before it, and keeps its source frame's
      * delay. The canvas starts transparent. A {@link FrameBlend#SOURCE} frame replaces its rectangle,
      * transparent pixels included, and a {@link FrameBlend#OVER} frame composites over it in the
-     * convention this image is held in. Once a frame has shown, {@link FrameDisposal#RESTORE_TO_BACKGROUND}
+     * convention this image's frames hold, which every composed frame holds too. Once a frame has
+     * shown, {@link FrameDisposal#RESTORE_TO_BACKGROUND}
      * clears its rectangle to transparent, {@link FrameDisposal#RESTORE_TO_PREVIOUS} puts back what the
      * rectangle held before the frame was drawn, and the others leave it as drawn.
      * <p>
@@ -150,14 +150,15 @@ public interface ImageData {
         if (wholeCanvas)
             return this;
 
-        BlendMode over = getAlphaMode() == AlphaMode.PREMULTIPLIED ? BlendMode.PREMULTIPLIED : BlendMode.STRAIGHT;
+        AlphaMode alphaMode = getAlphaMode();
+        BlendMode over = alphaMode == AlphaMode.PREMULTIPLIED ? BlendMode.PREMULTIPLIED : BlendMode.STRAIGHT;
         int[] canvas = new int[width * height];
         ConcurrentList<PixelBuffer> composed = Concurrent.newList();
 
         for (ImageFrame frame : frames) {
             int[] previous = frame.disposal() == FrameDisposal.RESTORE_TO_PREVIOUS ? canvas.clone() : null;
             draw(canvas, width, height, frame, over);
-            composed.add(PixelBuffer.of(canvas.clone(), width, height));
+            composed.add(new PixelBuffer(canvas.clone(), width, height, true, alphaMode));
 
             switch (frame.disposal()) {
                 case RESTORE_TO_BACKGROUND -> clear(canvas, width, height, frame);
@@ -167,12 +168,11 @@ public interface ImageData {
         }
 
         if (!isAnimated())
-            return StaticImageData.of(composed.getFirst(), getAlphaMode());
+            return StaticImageData.of(composed.getFirst());
 
         AnimatedImageData.Builder builder = AnimatedImageData.builder()
             .withWidth(width)
-            .withHeight(height)
-            .withAlphaMode(getAlphaMode());
+            .withHeight(height);
 
         if (this instanceof AnimatedImageData animated)
             builder.withLoopCount(animated.getLoopCount()).withBackgroundColor(animated.getBackgroundColor());
@@ -184,17 +184,19 @@ public interface ImageData {
     }
 
     /**
-     * Returns the first frame as a {@link BufferedImage} holding straight colour.
+     * Returns the first frame as a {@link BufferedImage} sharing its pixel array, in the convention the
+     * frame holds.
      * <p>
-     * The image is constructed on demand from the underlying pixel data. For an image held in
-     * {@link AlphaMode#STRAIGHT} it shares the first frame's pixel array, so edits made through either
-     * are visible from the other; for one held in {@link AlphaMode#PREMULTIPLIED} it holds a straight
-     * copy, and edits made through it do not reach the frame.
+     * The image is constructed on demand from the underlying pixel data, as
+     * {@link PixelBuffer#toBufferedImage()} constructs it: a {@link BufferedImage#TYPE_INT_ARGB} image
+     * for an image held in {@link AlphaMode#STRAIGHT}, a {@link BufferedImage#TYPE_INT_ARGB_PRE} image
+     * for one held in {@link AlphaMode#PREMULTIPLIED}. Either way edits made through the image or the
+     * frame are visible from the other, and Java2D and ImageIO read the colour the pixels stand for.
      *
      * @return the first frame's pixel data as a buffered image
      */
     default @NotNull BufferedImage toBufferedImage() {
-        return toPixelBuffer(AlphaMode.STRAIGHT).toBufferedImage();
+        return toPixelBuffer().toBufferedImage();
     }
 
     /**
@@ -243,28 +245,6 @@ public interface ImageData {
             if (x0 < x1)
                 Arrays.fill(canvas, y * width + x0, y * width + x1, 0);
         }
-    }
-
-    /**
-     * Converts a buffer into a copy held in the given convention, or answers it as it is when its alpha
-     * channel carries no data.
-     *
-     * @param pixels the buffer to convert, held in the other convention
-     * @param alphaMode the convention to hold the copy in
-     * @return the converted copy, or {@code pixels} when it carries no alpha
-     */
-    private static @NotNull PixelBuffer convert(@NotNull PixelBuffer pixels, @NotNull AlphaMode alphaMode) {
-        if (!pixels.hasAlpha())
-            return pixels;
-
-        PixelBuffer copy = pixels.copy();
-
-        switch (alphaMode) {
-            case STRAIGHT -> copy.unpremultiplyAlpha();
-            case PREMULTIPLIED -> copy.premultiplyAlpha();
-        }
-
-        return copy;
     }
 
 }

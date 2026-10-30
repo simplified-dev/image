@@ -289,12 +289,13 @@ public class ImagePipelineTest {
         }
 
         /**
-         * Asserts that a wrapped buffer holds each premultiplied sample un-premultiplied exactly as
-         * {@link PixelBuffer#unpremultiplyAlpha()} takes it, naming the first pixel that differs.
+         * Asserts that a wrapped buffer holds straight colour, each premultiplied sample un-premultiplied
+         * exactly as {@link PixelBuffer#toAlphaMode(AlphaMode)} takes it, naming the first pixel that
+         * differs.
          */
         private static void assertUnpremultipliedExactly(PixelBuffer buffer, int[] samples) {
-            PixelBuffer expected = PixelBuffer.of(samples.clone(), 256, 256);
-            expected.unpremultiplyAlpha();
+            PixelBuffer expected = PixelBuffer.ofPremultiplied(samples.clone(), 256, 256).toAlphaMode(AlphaMode.STRAIGHT);
+            assertThat(buffer.alphaMode(), is(AlphaMode.STRAIGHT));
 
             String firstDifference = "none";
             for (int i = 0; i < samples.length; i++) {
@@ -310,7 +311,7 @@ public class ImagePipelineTest {
         @Test
         void getSetPixel() {
             int[] pixels = new int[4];
-            PixelBuffer buffer = PixelBuffer.of(pixels, 2, 2);
+            PixelBuffer buffer = PixelBuffer.ofStraight(pixels, 2, 2);
 
             buffer.setPixel(1, 0, 0xFFFF0000);
             assertThat(buffer.getPixel(1, 0), is(0xFFFF0000));
@@ -446,9 +447,8 @@ public class ImagePipelineTest {
         void normalizeKeepsTheConvention() {
             for (AlphaMode mode : AlphaMode.values()) {
                 AnimatedImageData data = AnimatedImageData.builder()
-                    .withFrame(ImageFrame.of(PixelBuffer.wrap(createArgbTestImage(4, 4, Color.RED)), 100))
-                    .withFrame(ImageFrame.of(PixelBuffer.wrap(createArgbTestImage(8, 8, Color.BLUE)), 100))
-                    .withAlphaMode(mode)
+                    .withFrame(ImageFrame.of(PixelBuffer.wrap(createArgbTestImage(4, 4, Color.RED)).toAlphaMode(mode), 100))
+                    .withFrame(ImageFrame.of(PixelBuffer.wrap(createArgbTestImage(8, 8, Color.BLUE)).toAlphaMode(mode), 100))
                     .build();
 
                 assertThat(FrameNormalizer.normalize(data).getAlphaMode(), is(mode));

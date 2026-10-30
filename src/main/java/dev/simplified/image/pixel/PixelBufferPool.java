@@ -15,19 +15,23 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * A thread-local pool of {@link PixelBuffer} instances keyed by dimensions.
+ * A thread-local pool of canvases - {@link PixelBuffer} instances holding
+ * {@link AlphaMode#PREMULTIPLIED} colour, as {@link PixelBuffer#canvas(int, int)} makes them - keyed
+ * by dimensions.
  * <p>
  * Hot rasterization paths allocate large scratch {@link PixelBuffer}s (SSAA hi-res
  * intermediates, shading masks, downsample inputs) inside tight per-tile loops. The
  * backing {@code int[]} escapes every call - the buffer is handed to a {@link BufferedImage}
  * converter or composited into an output frame - so HotSpot's escape analysis cannot
  * stack-allocate it. This pool lets callers reuse a buffer across many calls on the
- * same worker thread instead of allocating per call.
+ * same worker thread instead of allocating per call. A buffer rasterized into from
+ * transparency with a source-over blend holds premultiplied colour, which is the convention
+ * every pooled buffer holds.
  *
  * <h2>Lifecycle</h2>
  * <ul>
  *   <li>{@link #acquire} returns a {@link Lease} - an {@link AutoCloseable} wrapping a
- *       fresh or pooled {@link PixelBuffer} of the requested dimensions.</li>
+ *       fresh or pooled canvas of the requested dimensions.</li>
  *   <li>{@link Lease#close} clears the buffer to transparent black and returns it to the
  *       per-thread pool. Double-close is a no-op; use-after-close throws
  *       {@link IllegalStateException}.</li>
@@ -41,8 +45,8 @@ import java.util.Map;
  * <p>
  * Each thread has its own pool map - acquire/release is lock-free. A lease may be closed
  * on a different thread than it was acquired on; the buffer simply lands in the closing
- * thread's pool rather than the acquiring thread's. Callers that want a buffer to escape
- * their calling scope should call {@link PixelBuffer#create} directly instead - pooling
+ * thread's pool rather than the acquiring thread's. Callers that want a canvas to escape
+ * their calling scope should call {@link PixelBuffer#canvas} directly instead - pooling
  * an escape-path buffer forces an extra deep copy that defeats the point.
  *
  * <h2>Typical use</h2>
@@ -68,8 +72,9 @@ public final class PixelBufferPool {
         ThreadLocal.withInitial(HashMap::new);
 
     /**
-     * Acquires a {@link PixelBuffer} of the given dimensions, either reusing a pooled
-     * buffer on the current thread or allocating a fresh one.
+     * Acquires a canvas of the given dimensions - a {@link PixelBuffer} holding
+     * {@link AlphaMode#PREMULTIPLIED} colour - either reusing a pooled canvas on the current
+     * thread or allocating a fresh one with {@link PixelBuffer#canvas(int, int)}.
      * <p>
      * The returned buffer is guaranteed to be zero-filled (transparent black) - pool
      * releases clear the contents before returning it to the pool.
@@ -92,7 +97,7 @@ public final class PixelBufferPool {
                 if (buffer != null) return new Lease(buffer, key);
             }
         }
-        return new Lease(PixelBuffer.create(width, height), key);
+        return new Lease(PixelBuffer.canvas(width, height), key);
     }
 
     /**

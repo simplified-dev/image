@@ -22,7 +22,6 @@ import dev.simplified.image.frame.ImageFrame;
 import dev.simplified.image.option.ImageWriteOptions;
 import dev.simplified.image.option.TiffWriteOptions;
 import dev.simplified.image.option.WebPWriteOptions;
-import dev.simplified.image.pixel.AlphaMode;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.junit.jupiter.api.DynamicTest;
@@ -39,8 +38,9 @@ import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.equalTo;
 
 /**
- * Pins the bytes every writer writes for straight colour, which every image holds unless it is built
- * to say otherwise.
+ * Pins the bytes every writer writes for straight colour, which a buffer holds when
+ * {@link PixelBuffer#create(int, int)} makes it blank, though the name does not say so, and when
+ * {@link PixelBuffer#ofStraight(int[], int, int)} wraps it.
  * <p>
  * The digests cover the writers whose bytes come from this library's own code or ImageIO's Java
  * plugins: QOI, TGA, PNM, BMP, GIF, uncompressed TIFF and the WebP paths. PNG, ICO's embedded PNG,
@@ -115,7 +115,7 @@ class StraightEncodeBytesTest {
         return CASES.stream()
             .filter(entry -> DIGESTS.containsKey(entry.name()))
             .map(entry -> DynamicTest.dynamicTest(entry.name(), () ->
-                assertThat(sha256(entry.write(image(entry.animated(), null))), equalTo(DIGESTS.get(entry.name())))
+                assertThat(sha256(entry.write(image(entry.animated(), false))), equalTo(DIGESTS.get(entry.name())))
             ));
     }
 
@@ -123,7 +123,7 @@ class StraightEncodeBytesTest {
     Stream<DynamicTest> declaredStraightWritesTheDefaultBytes() {
         return CASES.stream()
             .map(entry -> DynamicTest.dynamicTest(entry.name(), () ->
-                assertThat(entry.write(image(entry.animated(), AlphaMode.STRAIGHT)), equalTo(entry.write(image(entry.animated(), null))))
+                assertThat(entry.write(image(entry.animated(), true)), equalTo(entry.write(image(entry.animated(), false))))
             ));
     }
 
@@ -131,7 +131,7 @@ class StraightEncodeBytesTest {
     Stream<DynamicTest> factoryWritesTheWriterBytes() {
         return CASES.stream()
             .map(entry -> DynamicTest.dynamicTest(entry.name(), () -> {
-                ImageData image = image(entry.animated(), null);
+                ImageData image = image(entry.animated(), false);
                 assertThat(ImageFactory.toByteArray(image, entry.format(), entry.options()), equalTo(entry.write(image)));
             }));
     }
@@ -139,21 +139,18 @@ class StraightEncodeBytesTest {
     // ──── fixtures ────
 
     /**
-     * The still fixture, or the three-frame animation when {@code animated} is set, built the way an
-     * image is built without a convention when {@code alphaMode} is {@code null} and declaring it
-     * otherwise.
+     * The still fixture, or the three-frame animation when {@code animated} is set, each frame drawn
+     * into a {@link PixelBuffer#create(int, int)} buffer, the factory that does not name its convention,
+     * or wrapped by {@link PixelBuffer#ofStraight(int[], int, int)} when {@code declared} is set.
      */
-    private static @NotNull ImageData image(boolean animated, @Nullable AlphaMode alphaMode) {
+    private static @NotNull ImageData image(boolean animated, boolean declared) {
         if (!animated)
-            return alphaMode == null ? StaticImageData.of(frame(0)) : StaticImageData.of(frame(0), alphaMode);
+            return StaticImageData.of(frame(0, declared));
 
         AnimatedImageData.Builder builder = AnimatedImageData.builder();
 
         for (int index = 0; index < 3; index++)
-            builder.withFrame(ImageFrame.of(frame(index), 100, 0, 0, FrameDisposal.RESTORE_TO_BACKGROUND, FrameBlend.SOURCE));
-
-        if (alphaMode != null)
-            builder.withAlphaMode(alphaMode);
+            builder.withFrame(ImageFrame.of(frame(index, declared), 100, 0, 0, FrameDisposal.RESTORE_TO_BACKGROUND, FrameBlend.SOURCE));
 
         return builder.build();
     }
@@ -161,9 +158,10 @@ class StraightEncodeBytesTest {
     /**
      * A frame whose first row is {@link #ROW} twice over and whose other rows are a pattern of partial
      * alpha. Frame {@code index} differs from frame 0 only in a 4x4 block, so consecutive frames of the
-     * animation differ in part of the canvas.
+     * animation differ in part of the canvas. It is wrapped straight when {@code declared} is set and
+     * drawn into a {@link PixelBuffer#create(int, int)} buffer otherwise.
      */
-    private static @NotNull PixelBuffer frame(int index) {
+    private static @NotNull PixelBuffer frame(int index, boolean declared) {
         int[] pixels = new int[WIDTH * HEIGHT];
 
         for (int y = 0; y < HEIGHT; y++) {
@@ -173,7 +171,12 @@ class StraightEncodeBytesTest {
             }
         }
 
-        return PixelBuffer.of(pixels, WIDTH, HEIGHT);
+        if (declared)
+            return PixelBuffer.ofStraight(pixels, WIDTH, HEIGHT);
+
+        PixelBuffer drawn = PixelBuffer.create(WIDTH, HEIGHT);
+        drawn.setPixels(0, 0, WIDTH, HEIGHT, pixels, 0, WIDTH);
+        return drawn;
     }
 
     private static int pattern(int x, int y, int seed) {

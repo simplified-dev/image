@@ -161,7 +161,7 @@ class GifInterlaceTest {
                 pixels[y * width + x] = argb;
         }
 
-        return PixelBuffer.of(pixels, width, height);
+        return PixelBuffer.ofStraight(pixels, width, height);
     }
 
     /** Lists the pixels of each row of a frame, top row first. */

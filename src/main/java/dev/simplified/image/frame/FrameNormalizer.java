@@ -38,7 +38,8 @@ public final class FrameNormalizer {
      * <p>
      * Frames are scaled bicubically in the convention {@code data} is held in, and the background fill,
      * given as straight colour, is premultiplied for an animation held in {@link AlphaMode#PREMULTIPLIED}.
-     * A scaled frame replaces the fill it covers, transparent pixels included.
+     * A scaled frame replaces the fill it covers, transparent pixels included. Every frame of the result
+     * holds the convention {@code data} holds.
      *
      * @param data the animated image data containing frames to normalize
      * @param targetWidth the target canvas width, or null to derive from frames
@@ -84,8 +85,7 @@ public final class FrameNormalizer {
 
             // Fast path: no transformation needed
             if (sw == canvasW && sh == canvasH && fitMode != FitMode.COVER) {
-                PixelBuffer copy = PixelBuffer.of(src.data().clone(), canvasW, canvasH, src.hasAlpha());
-                normalized.add(ImageFrame.of(copy, frame.delayMs(), 0, 0, frame.disposal(), frame.blend()));
+                normalized.add(ImageFrame.of(src.copy(), frame.delayMs(), 0, 0, frame.disposal(), frame.blend()));
                 continue;
             }
 
@@ -123,12 +123,11 @@ public final class FrameNormalizer {
                 }
             }
 
-            PixelBuffer canvas = PixelBuffer.create(canvasW, canvasH);
-            canvas.fill(backgroundColor.getRGB());
-            if (alphaMode == AlphaMode.PREMULTIPLIED)
-                canvas.premultiplyAlpha();
+            PixelBuffer fill = PixelBuffer.create(canvasW, canvasH);
+            fill.fill(backgroundColor.getRGB());
+            PixelBuffer canvas = fill.toAlphaMode(alphaMode);
 
-            PixelBuffer scaled = src.resize(dw, dh, Resample.BICUBIC, alphaMode);
+            PixelBuffer scaled = src.resize(dw, dh, Resample.BICUBIC);
             replace(canvas, scaled, dx, dy);
             normalized.add(ImageFrame.of(canvas, frame.delayMs(), 0, 0, frame.disposal(), frame.blend()));
         }
@@ -137,7 +136,6 @@ public final class FrameNormalizer {
             .withFrames(normalized)
             .withLoopCount(data.getLoopCount())
             .withBackgroundColor(data.getBackgroundColor())
-            .withAlphaMode(alphaMode)
             .build();
     }
 

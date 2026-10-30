@@ -220,9 +220,13 @@ ImageFactory.toFiles(images, ImageFormat.PNG, outputFiles);
 `PixelBuffer` is a whole image as pixels, so it sits in the root package; colour,
 compositing and drawing work on it comes from `dev.simplified.image.pixel`.
 
+Every buffer holds its pixels in one alpha convention, fixed when it is made and reported by
+`alphaMode()`: a decoded image, `PixelBuffer.create` and `PixelBuffer.ofStraight` hold straight
+colour, and `PixelBuffer.canvas` and `PixelBuffer.ofPremultiplied` hold colour already scaled by
+alpha, what drawing onto transparency leaves. `toAlphaMode` converts.
+
 ```java
 import dev.simplified.image.PixelBuffer;
-import dev.simplified.image.pixel.AlphaMode;
 
 PixelBuffer buffer = image.toPixelBuffer();
 
@@ -230,13 +234,14 @@ PixelBuffer buffer = image.toPixelBuffer();
 int argb = buffer.getPixel(x, y);
 buffer.setPixel(x, y, 0xFFFF0000); // solid red
 
-// Apply FXAA anti-aliasing (parallel scanline processing) to straight colour, as a decoded image holds.
+// Apply FXAA anti-aliasing (parallel scanline processing) in the convention the buffer holds -
+// straight colour, as a decoded image holds.
 buffer.applyFxaa();
 
-// A buffer drawn onto transparency with BlendMode.NORMAL holds its colour already scaled by alpha; say so.
-PixelBuffer render = PixelBuffer.create(256, 256);
+// A canvas holds premultiplied colour, which drawing onto transparency with BlendMode.NORMAL leaves.
+PixelBuffer render = PixelBuffer.canvas(256, 256);
 render.blit(buffer, 0, 0);
-render.applyFxaa(AlphaMode.PREMULTIPLIED);
+render.applyFxaa();
 ```
 
 ## Supported Formats

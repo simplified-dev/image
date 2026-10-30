@@ -71,10 +71,10 @@ class BackgroundTest {
     void compositesTranslucentRenderAsDrawnOverFill() {
         int source = 0x80FFFFFF;
         int fill = 0xFF204060;
-        PixelBuffer rendered = PixelBuffer.create(1, 1);
+        PixelBuffer rendered = PixelBuffer.canvas(1, 1);
         rendered.setPixel(0, 0, ColorMath.blend(source, ColorMath.TRANSPARENT, BlendMode.NORMAL));
 
-        PixelBuffer result = Background.solid(fill).composite(StaticImageData.of(rendered, AlphaMode.PREMULTIPLIED)).toPixelBuffer();
+        PixelBuffer result = Background.solid(fill).composite(StaticImageData.of(rendered)).toPixelBuffer();
         assertThat(result.getPixel(0, 0), is(0xFF90A0B0));
         assertThat(result.getPixel(0, 0), is(ColorMath.blend(source, fill, BlendMode.NORMAL)));
     }
@@ -111,11 +111,10 @@ class BackgroundTest {
         AnimatedImageData animated = AnimatedImageData.builder()
             .withWidth(8)
             .withHeight(6)
-            .withFrame(ImageFrame.of(PixelBuffer.create(2, 2), 40, 1, 1, FrameDisposal.DO_NOT_DISPOSE, FrameBlend.OVER))
-            .withFrame(ImageFrame.of(PixelBuffer.create(3, 3), 60, 4, 2, FrameDisposal.RESTORE_TO_PREVIOUS, FrameBlend.SOURCE))
+            .withFrame(ImageFrame.of(PixelBuffer.canvas(2, 2), 40, 1, 1, FrameDisposal.DO_NOT_DISPOSE, FrameBlend.OVER))
+            .withFrame(ImageFrame.of(PixelBuffer.canvas(3, 3), 60, 4, 2, FrameDisposal.RESTORE_TO_PREVIOUS, FrameBlend.SOURCE))
             .withLoopCount(LoopCount.of(3))
             .withBackgroundColor(0xFF00FF00)
-            .withAlphaMode(AlphaMode.PREMULTIPLIED)
             .build();
 
         ImageData out = Background.solid(0xFF222222).composite(animated);
@@ -181,11 +180,10 @@ class BackgroundTest {
     @DisplayName("composite keeps the convention the image is held in")
     void compositeKeepsTheConvention() {
         for (AlphaMode mode : AlphaMode.values()) {
-            ImageData still = StaticImageData.of(PixelBuffer.create(2, 2), mode);
+            ImageData still = StaticImageData.of(blank(mode));
             ImageData animated = AnimatedImageData.builder()
-                .withFrame(ImageFrame.of(PixelBuffer.create(2, 2), 40))
-                .withFrame(ImageFrame.of(PixelBuffer.create(2, 2), 60))
-                .withAlphaMode(mode)
+                .withFrame(ImageFrame.of(blank(mode), 40))
+                .withFrame(ImageFrame.of(blank(mode), 60))
                 .build();
 
             assertThat(Background.solid(0xFF000000).composite(still).getAlphaMode(), is(mode));
@@ -201,10 +199,10 @@ class BackgroundTest {
         int fill = 0x80336699;
         int premultipliedFill = 0x801A334D;
         int render = 0x80400000;
-        PixelBuffer rendered = PixelBuffer.create(2, 1);
+        PixelBuffer rendered = PixelBuffer.canvas(2, 1);
         rendered.setPixel(1, 0, render);
 
-        ImageData out = Background.solid(fill).composite(StaticImageData.of(rendered, AlphaMode.PREMULTIPLIED));
+        ImageData out = Background.solid(fill).composite(StaticImageData.of(rendered));
         PixelBuffer result = out.toPixelBuffer();
         assertThat(result.getPixel(0, 0), is(premultipliedFill));
         assertThat(result.getPixel(1, 0), is(ColorMath.blend(render, premultipliedFill, BlendMode.PREMULTIPLIED)));
@@ -221,7 +219,7 @@ class BackgroundTest {
     @Test
     @DisplayName("every translucent cell of a checkerboard under a premultiplied image is premultiplied")
     void translucentCheckerboardUnderPremultipliedImage() {
-        ImageData image = StaticImageData.of(PixelBuffer.create(2, 1), AlphaMode.PREMULTIPLIED);
+        ImageData image = StaticImageData.of(PixelBuffer.canvas(2, 1));
         PixelBuffer result = Background.checkerboard(0x80336699, 0x40FFFFFF, 1).composite(image).toPixelBuffer();
 
         assertThat(result.getPixel(0, 0), is(0x801A334D));
@@ -241,16 +239,28 @@ class BackgroundTest {
         PixelBuffer straight = PixelBuffer.create(4, 4);
         for (int i = 0; i < 16; i++)
             straight.data()[i] = ((i * 17) << 24) | ((i * 7) << 16) | ((i * 3) << 8) | i;
-        PixelBuffer premultiplied = straight.copy();
-        premultiplied.premultiplyAlpha();
+        PixelBuffer premultiplied = straight.toAlphaMode(AlphaMode.PREMULTIPLIED);
 
         for (Background background : new Background[] { Background.solid(0xFF204060), Background.checkerboard() }) {
             int[] fromStraight = background.composite(StaticImageData.of(straight)).toPixelBuffer().data();
-            int[] fromPremultiplied = background.composite(StaticImageData.of(premultiplied, AlphaMode.PREMULTIPLIED)).toPixelBuffer().data();
+            int[] fromPremultiplied = background.composite(StaticImageData.of(premultiplied)).toPixelBuffer().data();
             for (int i = 0; i < 16; i++)
                 for (int shift = 0; shift <= 24; shift += 8)
                     assertThat(Math.abs(((fromStraight[i] >>> shift) & 0xFF) - ((fromPremultiplied[i] >>> shift) & 0xFF)), is(lessThanOrEqualTo(1)));
         }
+    }
+
+    /**
+     * Creates a transparent 2x2 buffer holding the given convention.
+     *
+     * @param alphaMode the convention the buffer holds
+     * @return the buffer
+     */
+    private static PixelBuffer blank(AlphaMode alphaMode) {
+        return switch (alphaMode) {
+            case STRAIGHT -> PixelBuffer.create(2, 2);
+            case PREMULTIPLIED -> PixelBuffer.canvas(2, 2);
+        };
     }
 
 }

@@ -1,6 +1,7 @@
 package dev.simplified.image;
 
 import dev.simplified.annotations.UtilityClass;
+import dev.simplified.image.pixel.AlphaMode;
 import org.jetbrains.annotations.NotNull;
 
 import java.awt.Graphics2D;
@@ -19,7 +20,7 @@ import java.awt.image.Raster;
  * Per-layout {@link BufferedImage}-to-ARGB unpackers used by
  * {@link PixelBuffer#wrap(BufferedImage)}. Each method handles one source layout, packs the
  * raster into a fresh ARGB {@code int[]} (or reuses the existing one for the zero-copy case),
- * and returns the wrapping {@link PixelBuffer}.
+ * and returns the wrapping {@link PixelBuffer}, holding {@link AlphaMode#STRAIGHT} colour.
  * <p>
  * Package-private because the methods make assumptions about the source layout that callers
  * outside this package shouldn't have to enforce - {@link PixelBuffer#wrap(BufferedImage)} is
@@ -34,19 +35,18 @@ class BufferedImageUnpacker {
      */
     static @NotNull PixelBuffer intArgb(@NotNull BufferedImage image, int w, int h, boolean alpha) {
         int[] data = ((DataBufferInt) image.getRaster().getDataBuffer()).getData();
-        return PixelBuffer.of(data, w, h, alpha);
+        return new PixelBuffer(data, w, h, alpha, AlphaMode.STRAIGHT);
     }
 
     /**
      * Source is {@code 0xAARRGGBB} packed ints holding each colour already scaled by its alpha.
-     * Copy them, since the straight colour cannot share the source's array, and divide each
-     * channel back by its alpha with {@link PixelBuffer#unpremultiplyAlpha()}.
+     * Read the backing array as premultiplied colour and convert it with
+     * {@link PixelBuffer#toAlphaMode(AlphaMode)}, which copies it, since the straight colour cannot
+     * share the source's array, and divides each channel back by its alpha.
      */
     static @NotNull PixelBuffer intArgbPre(@NotNull BufferedImage image, int w, int h, boolean alpha) {
         int[] src = ((DataBufferInt) image.getRaster().getDataBuffer()).getData();
-        PixelBuffer buffer = PixelBuffer.of(src.clone(), w, h, alpha);
-        buffer.unpremultiplyAlpha();
-        return buffer;
+        return new PixelBuffer(src, w, h, alpha, AlphaMode.PREMULTIPLIED).toAlphaMode(AlphaMode.STRAIGHT);
     }
 
     /**
@@ -60,7 +60,7 @@ class BufferedImageUnpacker {
         for (int i = 0; i < src.length; i++)
             dst[i] = (src[i] & 0x00FFFFFF) | 0xFF000000;
 
-        return PixelBuffer.of(dst, w, h, alpha);
+        return new PixelBuffer(dst, w, h, alpha, AlphaMode.STRAIGHT);
     }
 
     /**
@@ -79,7 +79,7 @@ class BufferedImageUnpacker {
             dst[i] = 0xFF000000 | (r << 16) | (g << 8) | b;
         }
 
-        return PixelBuffer.of(dst, w, h, alpha);
+        return new PixelBuffer(dst, w, h, alpha, AlphaMode.STRAIGHT);
     }
 
     /**
@@ -98,18 +98,18 @@ class BufferedImageUnpacker {
             dst[i] = (a << 24) | (r << 16) | (g << 8) | b;
         }
 
-        return PixelBuffer.of(dst, w, h, alpha);
+        return new PixelBuffer(dst, w, h, alpha, AlphaMode.STRAIGHT);
     }
 
     /**
      * Source is a flat {@code byte[]} with 4 bytes per pixel in A, B, G, R order, each colour
-     * already scaled by its alpha. Repack them as {@link #fourByteAbgr} does, then divide each
-     * channel back by its alpha with {@link PixelBuffer#unpremultiplyAlpha()}.
+     * already scaled by its alpha. Repack them as {@link #fourByteAbgr} does, read the repacked
+     * array as premultiplied colour and convert it with {@link PixelBuffer#toAlphaMode(AlphaMode)},
+     * which divides each channel back by its alpha.
      */
     static @NotNull PixelBuffer fourByteAbgrPre(@NotNull BufferedImage image, int w, int h, boolean alpha) {
-        PixelBuffer buffer = fourByteAbgr(image, w, h, alpha);
-        buffer.unpremultiplyAlpha();
-        return buffer;
+        int[] repacked = fourByteAbgr(image, w, h, alpha).data();
+        return new PixelBuffer(repacked, w, h, alpha, AlphaMode.PREMULTIPLIED).toAlphaMode(AlphaMode.STRAIGHT);
     }
 
     /**
@@ -127,7 +127,7 @@ class BufferedImageUnpacker {
             dst[i] = 0xFF000000 | (r << 16) | (g << 8) | b;
         }
 
-        return PixelBuffer.of(dst, w, h, alpha);
+        return new PixelBuffer(dst, w, h, alpha, AlphaMode.STRAIGHT);
     }
 
     /**
@@ -148,7 +148,7 @@ class BufferedImageUnpacker {
             }
         }
 
-        return PixelBuffer.of(dst, w, h, alpha);
+        return new PixelBuffer(dst, w, h, alpha, AlphaMode.STRAIGHT);
     }
 
     /**
@@ -173,7 +173,7 @@ class BufferedImageUnpacker {
             }
         }
 
-        return PixelBuffer.of(dst, w, h, alpha);
+        return new PixelBuffer(dst, w, h, alpha, AlphaMode.STRAIGHT);
     }
 
     /**
