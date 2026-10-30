@@ -218,7 +218,9 @@ class PixelBufferRowScheduleTest {
         operations.put("tint", buffer -> buffer.tint(0xFF80C0E0));
 
         for (BlendMode mode : BlendMode.values()) {
-            operations.put("fillRect " + mode, inPlace(buffer -> buffer.fillRect(-4, 7, 60, 120, 0x80C04020, mode)));
+            // A fill colour is straight colour, so a fill refuses the two modes naming a source's convention.
+            if (mode != BlendMode.PREMULTIPLIED && mode != BlendMode.STRAIGHT)
+                operations.put("fillRect " + mode, inPlace(buffer -> buffer.fillRect(-4, 7, 60, 120, 0x80C04020, mode)));
 
             for (AlphaMode convention : AlphaMode.values()) {
                 String from = "%s from a %s source".formatted(mode, convention);

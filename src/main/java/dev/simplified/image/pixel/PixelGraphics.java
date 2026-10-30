@@ -25,6 +25,14 @@ import java.util.Map;
  * Supports 2D primitives (rectangles, rounded rectangles, lines, ovals, arcs, polygons),
  * image blitting, rectangular clipping, and translation.
  * <p>
+ * An image draw reads the image in the convention it holds, through
+ * {@link PixelBuffer#wrap(BufferedImage)}, and lays it source-over in the convention the target holds,
+ * as {@link PixelBuffer#blit(PixelBuffer, int, int)} lays it, so a
+ * {@link BufferedImage#TYPE_INT_ARGB_PRE} image lays as the premultiplied colour it holds. A
+ * sub-rectangle or transformed draw samples the image into a buffer of the image's convention first,
+ * only over the part of its destination that lands on the target inside the clip; a scaled draw under
+ * a clip samples its whole destination so, and a clipped draw lays only the part inside the clip.
+ * <p>
  * Text rendering ({@code drawString}) throws {@link UnsupportedOperationException} at this
  * level - subclasses that provide a glyph source should override it.
  *
@@ -162,33 +170,67 @@ public class PixelGraphics extends Graphics2D {
     }
 
     /**
-     * Composites one pixel of a drawn image onto the target with {@link BlendMode#NORMAL}, as the
-     * unclipped image forms do through {@link PixelBuffer#blit}. A fully transparent pixel, and one
-     * outside the target or outside the clip, is skipped. The clip is read in user space under the
-     * current translation.
+     * Lays an image onto the target with its top-left corner at device coordinates {@code (x, y)},
+     * source-over in the target's convention as {@link PixelBuffer#blit(PixelBuffer, int, int)} lays
+     * it. With a clip set, only the part of the image inside the clip is laid: the image is cut to the
+     * clip and the target, as {@link #drawableArea(int, int, int, int)} cuts it, and the cut part
+     * blitted.
      *
-     * @param x the device x coordinate
-     * @param y the device y coordinate
-     * @param argb the image pixel
-     */
-    private void drawImagePixel(int x, int y, int argb) {
-        if (ColorMath.alpha(argb) == 0) return;
-        if (x < 0 || x >= this.target.width() || y < 0 || y >= this.target.height() || !inClip(x, y)) return;
-        this.target.setPixel(x, y, ColorMath.blend(argb, this.target.getPixel(x, y), BlendMode.NORMAL));
-    }
-
-    /**
-     * Composites every pixel of {@code source} onto the target with its top-left corner at device
-     * coordinates {@code (x, y)}, through {@link #drawImagePixel}.
-     *
-     * @param source the image pixels
+     * @param image the image pixels, in the convention they are held in
      * @param x the device x coordinate of the top-left corner
      * @param y the device y coordinate of the top-left corner
      */
-    private void drawImagePixels(@NotNull PixelBuffer source, int x, int y) {
-        for (int sy = 0; sy < source.height(); sy++)
-            for (int sx = 0; sx < source.width(); sx++)
-                drawImagePixel(x + sx, y + sy, source.getPixel(sx, sy));
+    private void layImage(@NotNull PixelBuffer image, int x, int y) {
+        if (this.clip == null) {
+            this.target.blit(image, x, y);
+            return;
+        }
+
+        Rectangle area = drawableArea(x, y, image.width(), image.height());
+        if (!area.isEmpty())
+            this.target.blit(image.crop(area.x - x, area.y - y, area.width, area.height), area.x, area.y);
+    }
+
+    /**
+     * Cuts a device-space rectangle to the target's bounds and, with a clip set, to the clip, read in
+     * user space under the current translation.
+     *
+     * @param x the device x coordinate of the left edge
+     * @param y the device y coordinate of the top edge
+     * @param width the rectangle width
+     * @param height the rectangle height
+     * @return the part of the rectangle a draw may write, empty where there is none
+     */
+    private @NotNull Rectangle drawableArea(int x, int y, int width, int height) {
+        int x0 = Math.max(x, 0);
+        int y0 = Math.max(y, 0);
+        int x1 = Math.min(x + width, this.target.width());
+        int y1 = Math.min(y + height, this.target.height());
+
+        if (this.clip != null) {
+            x0 = Math.max(x0, this.clip.x + this.translateX);
+            y0 = Math.max(y0, this.clip.y + this.translateY);
+            x1 = Math.min(x1, this.clip.x + this.translateX + this.clip.width);
+            y1 = Math.min(y1, this.clip.y + this.translateY + this.clip.height);
+        }
+
+        return x0 < x1 && y0 < y1 ? new Rectangle(x0, y0, x1 - x0, y1 - y0) : new Rectangle();
+    }
+
+    /**
+     * Creates a transparent buffer holding the convention {@code image} holds, for pixels sampled from
+     * it to be held in as they are.
+     *
+     * @param image the image whose convention the buffer holds
+     * @param width the buffer width
+     * @param height the buffer height
+     * @return a transparent buffer of that convention
+     */
+    private static @NotNull PixelBuffer blankLike(@NotNull PixelBuffer image, int width, int height) {
+        return switch (image.alphaMode()) {
+            case STRAIGHT -> PixelBuffer.create(width, height);
+            case PREMULTIPLIED -> PixelBuffer.canvas(width, height);
+        };
     }
 
     // --- text rendering (subclass responsibility) ---
@@ -731,13 +773,7 @@ public class PixelGraphics extends Graphics2D {
     @Override
     public boolean drawImage(@NotNull Image img, int x, int y, @Nullable ImageObserver observer) {
         if (!(img instanceof BufferedImage bi)) return false;
-        PixelBuffer source = PixelBuffer.wrap(bi);
-
-        if (this.clip == null)
-            this.target.blit(source, this.translateX + x, this.translateY + y);
-        else
-            drawImagePixels(source, this.translateX + x, this.translateY + y);
-
+        layImage(PixelBuffer.wrap(bi), this.translateX + x, this.translateY + y);
         return true;
     }
 
@@ -752,9 +788,9 @@ public class PixelGraphics extends Graphics2D {
         }
 
         if (width <= 0 || height <= 0) return true;
-        PixelBuffer scaled = PixelBuffer.create(width, height);
+        PixelBuffer scaled = blankLike(source, width, height);
         scaled.blitScaled(source, 0, 0, width, height, BlendMode.REPLACE);
-        drawImagePixels(scaled, this.translateX + x, this.translateY + y);
+        layImage(scaled, this.translateX + x, this.translateY + y);
         return true;
     }
 
@@ -784,17 +820,24 @@ public class PixelGraphics extends Graphics2D {
         // always receives (sx1, sy1).
         boolean flipX = (dx2 < dx1) != (sx2 < sx1);
         boolean flipY = (dy2 < dy1) != (sy2 < sy1);
+        int left = this.translateX + dstMinX;
+        int top = this.translateY + dstMinY;
+        Rectangle area = drawableArea(left, top, dw, dh);
+        if (area.isEmpty()) return true;
+        PixelBuffer sampled = blankLike(source, area.width, area.height);
 
-        for (int y = 0; y < dh; y++) {
-            int offY = y * sh / dh;
+        for (int py = area.y; py < area.y + area.height; py++) {
+            int offY = (py - top) * sh / dh;
             int srcY = flipY ? srcMinY + sh - 1 - offY : srcMinY + offY;
-            for (int x = 0; x < dw; x++) {
-                int offX = x * sw / dw;
+            for (int px = area.x; px < area.x + area.width; px++) {
+                int offX = (px - left) * sw / dw;
                 int srcX = flipX ? srcMinX + sw - 1 - offX : srcMinX + offX;
                 if (srcX >= 0 && srcX < source.width() && srcY >= 0 && srcY < source.height())
-                    drawImagePixel(this.translateX + dstMinX + x, this.translateY + dstMinY + y, source.getPixel(srcX, srcY));
+                    sampled.setPixel(px - area.x, py - area.y, source.getPixel(srcX, srcY));
             }
         }
+
+        this.target.blit(sampled, area.x, area.y);
         return true;
     }
 
@@ -812,17 +855,22 @@ public class PixelGraphics extends Graphics2D {
         try {
             AffineTransform inv = xform.createInverse();
             Rectangle bounds = xform.createTransformedShape(new Rectangle(0, 0, source.width(), source.height())).getBounds();
+            Rectangle area = drawableArea(this.translateX + bounds.x, this.translateY + bounds.y, bounds.width, bounds.height);
+            if (area.isEmpty()) return true;
+            PixelBuffer sampled = blankLike(source, area.width, area.height);
 
-            for (int dy = bounds.y; dy < bounds.y + bounds.height; dy++) {
-                for (int dx = bounds.x; dx < bounds.x + bounds.width; dx++) {
+            for (int py = area.y; py < area.y + area.height; py++) {
+                for (int px = area.x; px < area.x + area.width; px++) {
                     double[] src = new double[2];
-                    inv.transform(new double[]{dx, dy}, 0, src, 0, 1);
+                    inv.transform(new double[]{ px - this.translateX, py - this.translateY }, 0, src, 0, 1);
                     int srcX = (int) Math.round(src[0]);
                     int srcY = (int) Math.round(src[1]);
                     if (srcX >= 0 && srcX < source.width() && srcY >= 0 && srcY < source.height())
-                        drawImagePixel(this.translateX + dx, this.translateY + dy, source.getPixel(srcX, srcY));
+                        sampled.setPixel(px - area.x, py - area.y, source.getPixel(srcX, srcY));
                 }
             }
+
+            this.target.blit(sampled, area.x, area.y);
         } catch (java.awt.geom.NoninvertibleTransformException e) {
             return false;
         }

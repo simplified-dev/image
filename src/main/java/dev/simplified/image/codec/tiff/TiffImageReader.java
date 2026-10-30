@@ -16,6 +16,7 @@ import dev.simplified.image.frame.FrameBlend;
 import dev.simplified.image.frame.FrameDisposal;
 import dev.simplified.image.frame.ImageFrame;
 import dev.simplified.image.option.ImageReadOptions;
+import dev.simplified.image.pixel.AlphaMode;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -31,6 +32,10 @@ import java.io.ByteArrayInputStream;
  * Multi-page TIFFs are returned as {@link AnimatedImageData} with a synthesized
  * {@value #PAGE_DELAY_MS}-ms per-page delay, matching the GIF/WebP convention of
  * promoting any multi-frame image to animated output.
+ * <p>
+ * Every page is answered as {@link AlphaMode#STRAIGHT} colour, as every reader answers. ImageIO decodes a
+ * page stored with associated alpha to premultiplied colour, which is divided back to straight colour
+ * with {@link PixelBuffer#toAlphaMode(AlphaMode)}'s rounding.
  */
 @ApiStatus.Internal
 public class TiffImageReader implements ImageReader {
@@ -70,7 +75,7 @@ public class TiffImageReader implements ImageReader {
             budget.claim(reader.getWidth(0), reader.getHeight(0));
             BufferedImage image = reader.read(0);
             reader.dispose();
-            return StaticImageData.of(PixelBuffer.wrap(image));
+            return StaticImageData.of(PixelBuffer.wrap(image).toAlphaMode(AlphaMode.STRAIGHT));
         }
 
         ConcurrentList<ImageFrame> frames = Concurrent.newList();
@@ -78,7 +83,7 @@ public class TiffImageReader implements ImageReader {
         for (int i = 0; i < pages; i++) {
             budget.claim(reader.getWidth(i), reader.getHeight(i));
             BufferedImage image = reader.read(i);
-            frames.add(ImageFrame.of(PixelBuffer.wrap(image), PAGE_DELAY_MS, 0, 0, FrameDisposal.NONE, FrameBlend.SOURCE));
+            frames.add(ImageFrame.of(PixelBuffer.wrap(image).toAlphaMode(AlphaMode.STRAIGHT), PAGE_DELAY_MS, 0, 0, FrameDisposal.NONE, FrameBlend.SOURCE));
         }
 
         reader.dispose();

@@ -6,8 +6,6 @@ import dev.simplified.image.frame.FrameBlend;
 import dev.simplified.image.frame.FrameDisposal;
 import dev.simplified.image.frame.ImageFrame;
 import dev.simplified.image.pixel.AlphaMode;
-import dev.simplified.image.pixel.BlendMode;
-import dev.simplified.image.pixel.ColorMath;
 import org.jetbrains.annotations.NotNull;
 
 import java.awt.image.BufferedImage;
@@ -119,10 +117,11 @@ public interface ImageData {
      * <p>
      * Every frame of the result covers the canvas from the origin, blends {@link FrameBlend#SOURCE} and
      * disposes to the background, so it replaces the frame before it, and keeps its source frame's
-     * delay. The canvas starts transparent. A {@link FrameBlend#SOURCE} frame replaces its rectangle,
-     * transparent pixels included, and a {@link FrameBlend#OVER} frame composites over it in the
-     * convention this image's frames hold, which every composed frame holds too. Once a frame has
-     * shown, {@link FrameDisposal#RESTORE_TO_BACKGROUND}
+     * delay. The canvas starts transparent and holds the convention this image's frames hold, which
+     * every composed frame holds too. A {@link FrameBlend#SOURCE} frame replaces its rectangle,
+     * transparent pixels included, and a {@link FrameBlend#OVER} frame is laid over it by
+     * {@link PixelBuffer#blit(PixelBuffer, int, int)}, source-over in the canvas's convention. Once a
+     * frame has shown, {@link FrameDisposal#RESTORE_TO_BACKGROUND}
      * clears its rectangle to transparent, {@link FrameDisposal#RESTORE_TO_PREVIOUS} puts back what the
      * rectangle held before the frame was drawn, and the others leave it as drawn.
      * <p>
@@ -150,19 +149,22 @@ public interface ImageData {
         if (wholeCanvas)
             return this;
 
-        AlphaMode alphaMode = getAlphaMode();
-        BlendMode over = alphaMode == AlphaMode.PREMULTIPLIED ? BlendMode.PREMULTIPLIED : BlendMode.STRAIGHT;
-        int[] canvas = new int[width * height];
+        PixelBuffer canvas = new PixelBuffer(new int[width * height], width, height, true, getAlphaMode());
         ConcurrentList<PixelBuffer> composed = Concurrent.newList();
 
         for (ImageFrame frame : frames) {
-            int[] previous = frame.disposal() == FrameDisposal.RESTORE_TO_PREVIOUS ? canvas.clone() : null;
-            draw(canvas, width, height, frame, over);
-            composed.add(new PixelBuffer(canvas.clone(), width, height, true, alphaMode));
+            int[] previous = frame.disposal() == FrameDisposal.RESTORE_TO_PREVIOUS ? canvas.data().clone() : null;
+
+            if (frame.blend() == FrameBlend.SOURCE)
+                replace(canvas.data(), width, height, frame);
+            else
+                canvas.blit(frame.pixels(), frame.offsetX(), frame.offsetY());
+
+            composed.add(canvas.copy());
 
             switch (frame.disposal()) {
-                case RESTORE_TO_BACKGROUND -> clear(canvas, width, height, frame);
-                case RESTORE_TO_PREVIOUS -> System.arraycopy(previous, 0, canvas, 0, canvas.length);
+                case RESTORE_TO_BACKGROUND -> clear(canvas.data(), width, height, frame);
+                case RESTORE_TO_PREVIOUS -> System.arraycopy(previous, 0, canvas.data(), 0, previous.length);
                 default -> { }
             }
         }
@@ -200,32 +202,25 @@ public interface ImageData {
     }
 
     /**
-     * Lays one frame onto the canvas at its offset, clipped to the canvas - replacing its rectangle under
-     * {@link FrameBlend#SOURCE}, compositing over it with {@code over} under {@link FrameBlend#OVER}.
+     * Copies one frame onto the canvas at its offset, clipped to the canvas, replacing its rectangle
+     * with the frame's pixels as they are held, transparent ones included.
      *
      * @param canvas the canvas pixels, row-major
      * @param width the canvas width
      * @param height the canvas height
      * @param frame the frame to lay down
-     * @param over the source-over mode for the convention the frame's pixels are held in
      */
-    private static void draw(int @NotNull [] canvas, int width, int height, @NotNull ImageFrame frame, @NotNull BlendMode over) {
+    private static void replace(int @NotNull [] canvas, int width, int height, @NotNull ImageFrame frame) {
         PixelBuffer pixels = frame.pixels();
-        int[] source = pixels.data();
         int x0 = Math.max(0, frame.offsetX());
         int y0 = Math.max(0, frame.offsetY());
         int x1 = Math.min(width, frame.offsetX() + pixels.width());
         int y1 = Math.min(height, frame.offsetY() + pixels.height());
-        boolean replace = frame.blend() == FrameBlend.SOURCE;
 
-        for (int y = y0; y < y1; y++) {
-            int sourceRow = (y - frame.offsetY()) * pixels.width() - frame.offsetX();
-            int canvasRow = y * width;
-            for (int x = x0; x < x1; x++) {
-                int src = source[sourceRow + x];
-                canvas[canvasRow + x] = replace ? src : ColorMath.blend(src, canvas[canvasRow + x], over);
-            }
-        }
+        if (x0 >= x1) return;
+
+        for (int y = y0; y < y1; y++)
+            System.arraycopy(pixels.data(), (y - frame.offsetY()) * pixels.width() + x0 - frame.offsetX(), canvas, y * width + x0, x1 - x0);
     }
 
     /**

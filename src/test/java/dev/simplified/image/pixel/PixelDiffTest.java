@@ -228,6 +228,28 @@ class PixelDiffTest {
         }
     }
 
+    @Nested
+    @DisplayName("alpha convention")
+    class Convention {
+
+        @Test
+        @DisplayName("a premultiplied input is read as the straight colour it stands for, in every type")
+        void aPremultipliedInputIsReadAsStraight() {
+            // A canvas of partly transparent colour against its own straight form is one picture both
+            // ways round: each diff is what the straight form diffs against itself. Read as held, the
+            // premultiplied colour differs from the straight colour wherever alpha is partial.
+            PixelBuffer canvas = PixelBuffer.ofPremultiplied(new int[]{ 0x80800000, 0x40102030, 0xFF336699, 0x00000000, 0x01010000, 0xC0603000 }, 3, 2);
+            PixelBuffer straight = canvas.toAlphaMode(AlphaMode.STRAIGHT);
+
+            for (DiffType type : DiffType.values()) {
+                int[] same = PixelDiff.of(straight, straight, type).data();
+                assertThat(type + " canvas against straight", PixelDiff.of(canvas, straight, type).data(), equalTo(same));
+                assertThat(type + " straight against canvas", PixelDiff.of(straight, canvas, type).data(), equalTo(same));
+                assertThat(type + " canvas against itself", PixelDiff.of(canvas, canvas, type).data(), equalTo(same));
+            }
+        }
+    }
+
     private static PixelBuffer filledOpaque(int w, int h, int r, int g, int b) {
         PixelBuffer buf = PixelBuffer.create(w, h);
         int argb = ColorMath.pack(0xFF, r, g, b);

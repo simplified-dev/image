@@ -136,6 +136,23 @@ class ImageDataCanvasFramesTest {
     }
 
     @Test
+    @DisplayName("a SOURCE or OVER frame lying wholly right of the canvas lays nothing")
+    void aFrameRightOfTheCanvasLaysNothing() {
+        // Neither the builder nor ImageFrame.of holds an offset inside the canvas. At offset 6 a frame
+        // two wide starts two columns past the right edge of a canvas four wide.
+        AnimatedImageData image = canvas(4, 4,
+            frame(filled(4, 4, RED), 40, 0, 0, FrameDisposal.DO_NOT_DISPOSE, FrameBlend.SOURCE),
+            frame(filled(2, 2, BLUE), 40, 6, 1, FrameDisposal.DO_NOT_DISPOSE, FrameBlend.SOURCE),
+            frame(filled(2, 2, GREEN), 40, 6, 1, FrameDisposal.DO_NOT_DISPOSE, FrameBlend.OVER));
+
+        ImageData composed = image.toCanvasFrames();
+        int[] first = composed.getFrames().getFirst().pixels().data();
+        assertThat(composed.getFrames().get(1).pixels().data(), is(first));
+        assertThat(composed.getFrames().get(2).pixels().data(), is(first));
+        assertThat(first[0], is(RED));
+    }
+
+    @Test
     @DisplayName("an OVER frame composites in the convention the image is held in")
     void overFrameBlendsInTheHeldConvention() {
         AnimatedImageData straight = canvas(2, 1,

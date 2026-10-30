@@ -34,10 +34,19 @@ import dev.simplified.image.pixel.AlphaMode;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
+import javax.imageio.IIOImage;
+import javax.imageio.ImageIO;
+import javax.imageio.ImageWriter;
+import javax.imageio.stream.ImageOutputStream;
 import java.awt.*;
+import java.awt.color.ColorSpace;
 import java.awt.image.BufferedImage;
+import java.awt.image.ComponentColorModel;
+import java.awt.image.DataBuffer;
 import java.awt.image.DataBufferByte;
 import java.awt.image.DataBufferInt;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 
 import static org.hamcrest.MatcherAssert.assertThat;
@@ -248,33 +257,49 @@ public class ImagePipelineTest {
         }
 
         @Test
-        void wrapIntArgbPreUnpremultipliesExactly() {
-            BufferedImage image = new BufferedImage(256, 256, BufferedImage.TYPE_INT_ARGB_PRE);
-            int[] raw = ((DataBufferInt) image.getRaster().getDataBuffer()).getData();
-            for (int i = 0; i < raw.length; i++)
-                raw[i] = premultipliedSample(i);
-
-            int[] before = raw.clone();
-            assertUnpremultipliedExactly(PixelBuffer.wrap(image), before);
-            assertThat("the source raster is left as it was", raw, is(before));
-        }
-
-        @Test
-        void wrap4ByteAbgrPreUnpremultipliesExactly() {
-            BufferedImage image = new BufferedImage(256, 256, BufferedImage.TYPE_4BYTE_ABGR_PRE);
-            byte[] raw = ((DataBufferByte) image.getRaster().getDataBuffer()).getData();
+        void aPremultipliedImageIsWrappedAsItIs() {
             int[] samples = new int[256 * 256];
-            for (int i = 0, j = 0; i < samples.length; i++, j += 4) {
-                int p = samples[i] = premultipliedSample(i);
-                raw[j] = (byte) (p >>> 24);
-                raw[j + 1] = (byte) p;
-                raw[j + 2] = (byte) (p >>> 8);
-                raw[j + 3] = (byte) (p >>> 16);
-            }
+            for (int i = 0; i < samples.length; i++)
+                samples[i] = premultipliedSample(i);
 
-            byte[] before = raw.clone();
-            assertUnpremultipliedExactly(PixelBuffer.wrap(image), samples);
-            assertThat("the source raster is left as it was", raw, is(before));
+            // TYPE_INT_ARGB_PRE is the buffer's own layout, so its array is shared.
+            BufferedImage intImage = new BufferedImage(256, 256, BufferedImage.TYPE_INT_ARGB_PRE);
+            int[] ints = ((DataBufferInt) intImage.getRaster().getDataBuffer()).getData();
+            System.arraycopy(samples, 0, ints, 0, samples.length);
+            PixelBuffer fromInts = PixelBuffer.wrap(intImage);
+            assertThat(fromInts.data(), is(sameInstance(ints)));
+            assertHeldAsSampled("TYPE_INT_ARGB_PRE", fromInts, samples);
+
+            // TYPE_4BYTE_ABGR_PRE is repacked, each channel left as it is held.
+            BufferedImage byteImage = new BufferedImage(256, 256, BufferedImage.TYPE_4BYTE_ABGR_PRE);
+            byte[] bytes = ((DataBufferByte) byteImage.getRaster().getDataBuffer()).getData();
+            for (int i = 0, j = 0; i < samples.length; i++, j += 4) {
+                int p = samples[i];
+                bytes[j] = (byte) (p >>> 24);
+                bytes[j + 1] = (byte) p;
+                bytes[j + 2] = (byte) (p >>> 8);
+                bytes[j + 3] = (byte) (p >>> 16);
+            }
+            byte[] before = bytes.clone();
+            assertHeldAsSampled("TYPE_4BYTE_ABGR_PRE", PixelBuffer.wrap(byteImage), samples);
+            assertThat("the source raster is left as it was", bytes, is(before));
+
+            // A custom layout says it is premultiplied through its colour model: four interleaved
+            // premultiplied bytes, the layout ImageIO decodes a TIFF with associated alpha to.
+            ComponentColorModel model = new ComponentColorModel(
+                ColorSpace.getInstance(ColorSpace.CS_sRGB), true, true, Transparency.TRANSLUCENT, DataBuffer.TYPE_BYTE
+            );
+            BufferedImage customImage = new BufferedImage(model, model.createCompatibleWritableRaster(256, 256), true, null);
+            assertThat(customImage.getType(), is(BufferedImage.TYPE_CUSTOM));
+            byte[] custom = ((DataBufferByte) customImage.getRaster().getDataBuffer()).getData();
+            for (int i = 0, j = 0; i < samples.length; i++, j += 4) {
+                int p = samples[i];
+                custom[j] = (byte) (p >>> 16);
+                custom[j + 1] = (byte) (p >>> 8);
+                custom[j + 2] = (byte) p;
+                custom[j + 3] = (byte) (p >>> 24);
+            }
+            assertHeldAsSampled("custom premultiplied layout", PixelBuffer.wrap(customImage), samples);
         }
 
         /**
@@ -289,23 +314,36 @@ public class ImagePipelineTest {
         }
 
         /**
-         * Asserts that a wrapped buffer holds straight colour, each premultiplied sample un-premultiplied
-         * exactly as {@link PixelBuffer#toAlphaMode(AlphaMode)} takes it, naming the first pixel that
-         * differs.
+         * Asserts that a wrapped buffer holds premultiplied colour, every sample as it was held, and
+         * that converting it to straight colour divides each sample back exactly as the library's
+         * own un-premultiply does, {@code (c * 255 + a / 2) / a} held at 255, naming the first pixel
+         * that differs.
+         *
+         * @param layout the layout the buffer was wrapped from
+         * @param buffer the wrapped buffer
+         * @param samples the premultiplied samples the image held
          */
-        private static void assertUnpremultipliedExactly(PixelBuffer buffer, int[] samples) {
-            PixelBuffer expected = PixelBuffer.ofPremultiplied(samples.clone(), 256, 256).toAlphaMode(AlphaMode.STRAIGHT);
-            assertThat(buffer.alphaMode(), is(AlphaMode.STRAIGHT));
+        private static void assertHeldAsSampled(String layout, PixelBuffer buffer, int[] samples) {
+            assertThat(layout, buffer.alphaMode(), is(AlphaMode.PREMULTIPLIED));
+            assertThat(layout, buffer.data(), is(samples));
 
+            int[] straight = buffer.toAlphaMode(AlphaMode.STRAIGHT).data();
             String firstDifference = "none";
             for (int i = 0; i < samples.length; i++) {
-                if (buffer.data()[i] != expected.data()[i]) {
-                    firstDifference = "%08X wrapped to %08X, not %08X".formatted(samples[i], buffer.data()[i], expected.data()[i]);
+                int p = samples[i];
+                int a = p >>> 24;
+                int expected = a == 0 || a == 0xFF ? p : (a << 24)
+                    | Math.min(255, (((p >>> 16) & 0xFF) * 255 + a / 2) / a) << 16
+                    | Math.min(255, (((p >>> 8) & 0xFF) * 255 + a / 2) / a) << 8
+                    | Math.min(255, ((p & 0xFF) * 255 + a / 2) / a);
+
+                if (straight[i] != expected) {
+                    firstDifference = "%08X un-premultiplied to %08X, not %08X".formatted(p, straight[i], expected);
                     break;
                 }
             }
 
-            assertThat(firstDifference, is("none"));
+            assertThat(layout, firstDifference, is("none"));
         }
 
         @Test
@@ -660,6 +698,36 @@ public class ImagePipelineTest {
         }
 
         @Test
+        void fromImagesHoldsTheFirstImagesConvention() {
+            // One picture as a straight image and as a premultiplied one: every frame holds the first
+            // image's convention, the other image converted into it.
+            int[] straightPixels = { 0x80FF0000, 0xFF336699, 0x00000000 };
+            int[] premultipliedPixels = { 0x80800000, 0xFF336699, 0x00000000 };
+            BufferedImage straight = PixelBuffer.ofStraight(straightPixels.clone(), 3, 1).toBufferedImage();
+            BufferedImage premultiplied = PixelBuffer.ofPremultiplied(premultipliedPixels.clone(), 3, 1).toBufferedImage();
+
+            ConcurrentList<BufferedImage> straightFirst = Concurrent.newList();
+            straightFirst.add(straight);
+            straightFirst.add(premultiplied);
+            AnimatedImageData fromStraight = ImageFactory.fromImages(straightFirst, 100);
+            assertThat(fromStraight.getAlphaMode(), is(AlphaMode.STRAIGHT));
+            for (ImageFrame frame : fromStraight.getFrames()) {
+                assertThat(frame.pixels().alphaMode(), is(AlphaMode.STRAIGHT));
+                assertThat(frame.pixels().data(), is(straightPixels));
+            }
+
+            ConcurrentList<BufferedImage> premultipliedFirst = Concurrent.newList();
+            premultipliedFirst.add(premultiplied);
+            premultipliedFirst.add(straight);
+            AnimatedImageData fromPremultiplied = ImageFactory.fromImages(premultipliedFirst, 100);
+            assertThat(fromPremultiplied.getAlphaMode(), is(AlphaMode.PREMULTIPLIED));
+            for (ImageFrame frame : fromPremultiplied.getFrames()) {
+                assertThat(frame.pixels().alphaMode(), is(AlphaMode.PREMULTIPLIED));
+                assertThat(frame.pixels().data(), is(premultipliedPixels));
+            }
+        }
+
+        @Test
         void detectFormatFromPngBytes() {
             BufferedImage image = createRgbTestImage(4, 4, Color.RED);
             byte[] pngBytes = new PngImageWriter().write(StaticImageData.of(image));
@@ -907,6 +975,58 @@ public class ImagePipelineTest {
 
             assertThat(decoded.isAnimated(), is(true));
             assertThat(decoded.getFrames(), hasSize(3));
+        }
+
+        @Test
+        void aTiffWithAssociatedAlphaReadsStraight() throws IOException {
+            // ImageIO stores a TYPE_INT_ARGB_PRE image with associated alpha and decodes it to
+            // premultiplied colour. 160B0502 divides back to 16803A17 by the library's rounding, where
+            // Java2D's drawImage into a straight image rounds it to 167F3A17; 80800000 is 80FF0000.
+            int[] premultiplied = { 0x160B0502, 0x80800000, 0xFF336699, 0x00000000 };
+            int[] straight = { 0x16803A17, 0x80FF0000, 0xFF336699, 0x00000000 };
+
+            ImageData still = new TiffImageReader().read(associatedAlphaTiff(premultiplied));
+            assertThat(still.isAnimated(), is(false));
+            assertThat(still.getAlphaMode(), is(AlphaMode.STRAIGHT));
+            assertThat(still.toPixelBuffer().data(), is(straight));
+
+            ImageData pages = new TiffImageReader().read(associatedAlphaTiff(premultiplied, premultiplied));
+            assertThat(pages.getFrames(), hasSize(2));
+            assertThat(pages.getAlphaMode(), is(AlphaMode.STRAIGHT));
+            for (ImageFrame frame : pages.getFrames()) {
+                assertThat(frame.pixels().alphaMode(), is(AlphaMode.STRAIGHT));
+                assertThat(frame.pixels().data(), is(straight));
+            }
+        }
+
+        /**
+         * Writes a TIFF through ImageIO's own writer, one page per row of pixels, each from a
+         * {@code TYPE_INT_ARGB_PRE} image, which the writer stores with associated alpha.
+         *
+         * @param pages the premultiplied pixels of each one-row page
+         * @return the TIFF bytes
+         * @throws IOException if the writer fails
+         */
+        private static byte[] associatedAlphaTiff(int[]... pages) throws IOException {
+            ImageWriter writer = ImageIO.getImageWritersByFormatName("tiff").next();
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+
+            try (ImageOutputStream out = ImageIO.createImageOutputStream(bytes)) {
+                writer.setOutput(out);
+                writer.prepareWriteSequence(null);
+
+                for (int[] page : pages) {
+                    BufferedImage image = new BufferedImage(page.length, 1, BufferedImage.TYPE_INT_ARGB_PRE);
+                    System.arraycopy(page, 0, ((DataBufferInt) image.getRaster().getDataBuffer()).getData(), 0, page.length);
+                    writer.writeToSequence(new IIOImage(image, null, null), null);
+                }
+
+                writer.endWriteSequence();
+            } finally {
+                writer.dispose();
+            }
+
+            return bytes.toByteArray();
         }
 
     }

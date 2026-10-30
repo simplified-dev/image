@@ -14,6 +14,7 @@ import java.awt.image.BufferedImage;
 import java.awt.image.ComponentColorModel;
 import java.awt.image.DataBuffer;
 import java.awt.image.DataBufferInt;
+import java.awt.image.DirectColorModel;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -52,6 +53,11 @@ class PixelBufferTest {
         { 5, 3, 64, 70, -3, -1, 70, 80 },
         { 50000, 2, 100000, 2, -60000, -1, 10, 1 }
     };
+
+    /** Every blend mode a colour fill takes: all but the two that name the convention of a source. */
+    private static final BlendMode[] FILL_MODES = Arrays.stream(BlendMode.values())
+        .filter(mode -> mode != BlendMode.PREMULTIPLIED && mode != BlendMode.STRAIGHT)
+        .toArray(BlendMode[]::new);
 
     private static PixelBuffer gradient(int w, int h) {
         int[] data = new int[w * h];
@@ -164,14 +170,26 @@ class PixelBufferTest {
         assertThat(grayAndAlphaImage.getType(), is(BufferedImage.TYPE_CUSTOM));
         assertThat(PixelBuffer.wrap(grayAndAlphaImage).hasAlpha(), is(true));
 
-        String[] layouts = { "TYPE_INT_RGB", "TYPE_INT_BGR", "TYPE_BYTE_GRAY", "gray and alpha", "TYPE_BYTE_BINARY", "TYPE_USHORT_565_RGB" };
+        // Translucent ints in A, B, G, R order under a colour model that does not premultiply are
+        // TYPE_CUSTOM too, with no unpacker of their own, and are drawn into an ARGB image. Its
+        // 80FF0000 reads as it is held, where a premultiplied scratch would answer 80800000.
+        DirectColorModel abgr = new DirectColorModel(32, 0x000000FF, 0x0000FF00, 0x00FF0000, 0xFF000000);
+        BufferedImage abgrImage = new BufferedImage(abgr, abgr.createCompatibleWritableRaster(3, 1), false, null);
+        abgrImage.getRaster().setDataElements(0, 0, 3, 1, new int[]{ 0x800000FF, 0xFF996633, 0x00000000 });
+        assertThat(abgrImage.getType(), is(BufferedImage.TYPE_CUSTOM));
+        PixelBuffer abgrWrapped = PixelBuffer.wrap(abgrImage);
+        assertThat(abgrWrapped.hasAlpha(), is(true));
+        assertArrayEquals(new int[]{ 0x80FF0000, 0xFF336699, 0x00000000 }, abgrWrapped.data());
+
+        String[] layouts = { "TYPE_INT_RGB", "TYPE_INT_BGR", "TYPE_BYTE_GRAY", "gray and alpha", "TYPE_BYTE_BINARY", "TYPE_USHORT_565_RGB", "translucent A, B, G, R ints" };
         BufferedImage[] images = {
             new BufferedImage(2, 2, BufferedImage.TYPE_INT_RGB),
             new BufferedImage(2, 2, BufferedImage.TYPE_INT_BGR),
             new BufferedImage(2, 2, BufferedImage.TYPE_BYTE_GRAY),
             grayAndAlphaImage,
             new BufferedImage(2, 2, BufferedImage.TYPE_BYTE_BINARY),
-            new BufferedImage(2, 2, BufferedImage.TYPE_USHORT_565_RGB)
+            new BufferedImage(2, 2, BufferedImage.TYPE_USHORT_565_RGB),
+            abgrImage
         };
 
         for (int i = 0; i < images.length; i++)
@@ -243,9 +261,9 @@ class PixelBufferTest {
     }
 
     @Test
-    @DisplayName("fillRect NORMAL lays F0100010 onto a clear pixel as F00F000F, and 505000FF over that as F523005A")
+    @DisplayName("fillRect NORMAL lays F0100010 onto a clear pixel of a canvas as F00F000F, and 505000FF over that as F523005A")
     void fillRectNormalBlendsTheColour() {
-        PixelBuffer buffer = PixelBuffer.create(3, 2);
+        PixelBuffer buffer = PixelBuffer.canvas(3, 2);
         buffer.fillRect(0, 0, 3, 2, 0xF0100010, BlendMode.NORMAL);
         for (int pixel : buffer.data())
             assertThat(Integer.toHexString(pixel), pixel, equalTo(0xF00F000F));
@@ -258,31 +276,32 @@ class PixelBufferTest {
     }
 
     @Test
-    @DisplayName("fillRect with a blend lays a colour of alpha 0 nowhere under every mode but REPLACE")
+    @DisplayName("fillRect with a blend lays a colour of alpha 0 nowhere, on a buffer of either convention, under every mode a fill takes but REPLACE")
     void fillRectOfNoAlphaLaysNothing() {
         int[] backdrop = texels(9, 70, 6);
 
-        for (BlendMode mode : BlendMode.values()) {
-            if (mode == BlendMode.REPLACE) continue;
+        for (AlphaMode alphaMode : AlphaMode.values())
+            for (BlendMode mode : FILL_MODES) {
+                if (mode == BlendMode.REPLACE) continue;
 
-            for (int colour : new int[]{ 0x00000000, 0x00FFFFFF, 0x00123456 }) {
-                PixelBuffer buffer = PixelBuffer.ofStraight(backdrop.clone(), 9, 70);
-                buffer.fillRect(-1, -1, 11, 72, colour, mode);
-                assertArrayEquals(backdrop, buffer.data(), "%08X, %s".formatted(colour, mode));
+                for (int colour : new int[]{ 0x00000000, 0x00FFFFFF, 0x00123456 }) {
+                    PixelBuffer buffer = held(alphaMode, backdrop.clone(), 9, 70, true);
+                    buffer.fillRect(-1, -1, 11, 72, colour, mode);
+                    assertArrayEquals(backdrop, buffer.data(), "%08X, %s, %s".formatted(colour, mode, alphaMode));
+                }
             }
-        }
     }
 
     @Test
-    @DisplayName("fillRect with a blend covers exactly the pixels the overwriting fillRect covers")
+    @DisplayName("fillRect with a blend covers exactly the pixels the overwriting fillRect covers, on a canvas")
     void fillRectWithABlendClipsAsFillRectClips() {
         // A 2x2 rectangle from (-1, -1) lays only (0, 0), and one overhanging the right and bottom
         // edges only the pixels inside them.
-        PixelBuffer corner = PixelBuffer.create(4, 3);
+        PixelBuffer corner = PixelBuffer.canvas(4, 3);
         corner.fillRect(-1, -1, 2, 2, 0xF0100010, BlendMode.NORMAL);
         assertArrayEquals(new int[]{ 0xF00F000F, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, corner.data());
 
-        PixelBuffer overhang = PixelBuffer.create(4, 3);
+        PixelBuffer overhang = PixelBuffer.canvas(4, 3);
         overhang.fillRect(2, 1, 5, 5, 0xF0100010, BlendMode.NORMAL);
         assertArrayEquals(new int[]{ 0, 0, 0, 0, 0, 0, 0xF00F000F, 0xF00F000F, 0, 0, 0xF00F000F, 0xF00F000F }, overhang.data());
 
@@ -318,7 +337,7 @@ class PixelBufferTest {
                     if (covered.data()[i] != 0)
                         expected[i] = ColorMath.blend(colour, backdrop[i], BlendMode.NORMAL);
 
-                PixelBuffer buffer = PixelBuffer.ofStraight(backdrop.clone(), 8, 7);
+                PixelBuffer buffer = PixelBuffer.ofPremultiplied(backdrop.clone(), 8, 7);
                 buffer.fillRect(x, y, w, h, colour, BlendMode.NORMAL);
                 assertArrayEquals(expected, buffer.data(), label);
             }
@@ -326,51 +345,107 @@ class PixelBufferTest {
     }
 
     @Test
-    @DisplayName("fillRect REPLACE lays what the overwriting fillRect lays, a colour of alpha 0 included")
+    @DisplayName("fillRect REPLACE lays what the overwriting fillRect lays, a colour of alpha 0 included, on a buffer of either convention")
     void fillRectReplaceIsTheOverwritingFillRect() {
         int[] backdrop = texels(9, 70, 8);
 
-        for (int[] rect : new int[][]{ { -2, -3, 6, 80 }, { 3, 1, 4, 5 }, { 7, 60, 9, 20 }, { 2, 2, 0, 5 } })
-            for (int colour : new int[]{ 0x00000000, 0x00123456, 0x01FFFFFF, 0x80808080, 0xF0100010, 0xFF336699 }) {
-                int x = rect[0], y = rect[1], w = rect[2], h = rect[3];
-                String label = "%dx%d at (%d, %d), %08X".formatted(w, h, x, y, colour);
+        for (AlphaMode alphaMode : AlphaMode.values())
+            for (int[] rect : new int[][]{ { -2, -3, 6, 80 }, { 3, 1, 4, 5 }, { 7, 60, 9, 20 }, { 2, 2, 0, 5 } })
+                for (int colour : new int[]{ 0x00000000, 0x00123456, 0x01FFFFFF, 0x80808080, 0xF0100010, 0xFF336699 }) {
+                    int x = rect[0], y = rect[1], w = rect[2], h = rect[3];
+                    String label = "%dx%d at (%d, %d), %08X, %s".formatted(w, h, x, y, colour, alphaMode);
 
-                PixelBuffer overwritten = PixelBuffer.ofStraight(backdrop.clone(), 9, 70);
-                overwritten.fillRect(x, y, w, h, colour);
+                    PixelBuffer overwritten = held(alphaMode, backdrop.clone(), 9, 70, true);
+                    overwritten.fillRect(x, y, w, h, colour);
 
-                PixelBuffer replaced = PixelBuffer.ofStraight(backdrop.clone(), 9, 70);
-                replaced.fillRect(x, y, w, h, colour, BlendMode.REPLACE);
+                    PixelBuffer replaced = held(alphaMode, backdrop.clone(), 9, 70, true);
+                    replaced.fillRect(x, y, w, h, colour, BlendMode.REPLACE);
 
-                assertArrayEquals(overwritten.data(), replaced.data(), label);
-            }
+                    assertArrayEquals(overwritten.data(), replaced.data(), label);
+                }
     }
 
     @Test
-    @DisplayName("fillRect with a blend lays what a blit of a one-pixel image of its colour lays at every pixel it covers")
+    @DisplayName("fillRect with a blend lays what a blit of a straight one-pixel image of its colour lays at every pixel it covers, onto either convention")
     void fillRectWithABlendLaysWhatABlitOfOnePixelLays() {
         // The backdrop holds no alpha over colour bits, full alpha and partial alpha, and is tall
-        // enough for the fill's rows to run in parallel. Under REPLACE a blit discards a source pixel
-        // of alpha 0, which the fill writes as the overwriting fillRect does, so that one pairing is
-        // held by the REPLACE test instead.
+        // enough for the fill's rows to run in parallel. A fill colour is straight colour, so it is
+        // held to a straight image. Under REPLACE a blit discards a source pixel of alpha 0, which the
+        // fill writes as the overwriting fillRect does, so that one pairing is held by the REPLACE
+        // test instead.
         int width = 9, height = 70;
         int x = -2, y = 3, w = 8, h = 70;
         int[] backdrop = texels(width, height, 9);
 
-        for (BlendMode mode : BlendMode.values())
-            for (int colour : new int[]{ 0x00000000, 0x00FFFFFF, 0x01FFFFFF, 0x505000FF, 0x80808080, 0xF0100010, 0xFEFFFFFF, 0xFF336699 }) {
-                if (mode == BlendMode.REPLACE && ColorMath.alpha(colour) == 0) continue;
-                String label = "%08X, %s".formatted(colour, mode);
+        for (AlphaMode alphaMode : AlphaMode.values())
+            for (BlendMode mode : FILL_MODES)
+                for (int colour : new int[]{ 0x00000000, 0x00FFFFFF, 0x01FFFFFF, 0x505000FF, 0x80808080, 0xF0100010, 0xFEFFFFFF, 0xFF336699 }) {
+                    if (mode == BlendMode.REPLACE && ColorMath.alpha(colour) == 0) continue;
+                    String label = "%08X, %s onto %s".formatted(colour, mode, alphaMode);
 
-                PixelBuffer blitted = PixelBuffer.ofStraight(backdrop.clone(), width, height);
-                for (int py = y; py < y + h; py++)
-                    for (int px = x; px < x + w; px++)
-                        blitted.blit(PixelBuffer.ofStraight(new int[]{ colour }, 1, 1), px, py, mode);
+                    PixelBuffer blitted = held(alphaMode, backdrop.clone(), width, height, true);
+                    for (int py = y; py < y + h; py++)
+                        for (int px = x; px < x + w; px++)
+                            blitted.blit(PixelBuffer.ofStraight(new int[]{ colour }, 1, 1), px, py, mode);
 
-                PixelBuffer filled = PixelBuffer.ofStraight(backdrop.clone(), width, height);
-                filled.fillRect(x, y, w, h, colour, mode);
+                    PixelBuffer filled = held(alphaMode, backdrop.clone(), width, height, true);
+                    filled.fillRect(x, y, w, h, colour, mode);
 
-                assertArrayEquals(blitted.data(), filled.data(), label);
-            }
+                    assertArrayEquals(blitted.data(), filled.data(), label);
+                }
+    }
+
+    @Test
+    @DisplayName("fill and the overwriting fillRect lay a straight colour in the convention the buffer holds")
+    void aFillLaysAStraightColourInTheBuffersConvention() {
+        // F0100010 premultiplies to F00F000F and 80FF0000 to 80800000; a colour of alpha 0 is
+        // transparent black in premultiplied colour, whatever its colour bits.
+        PixelBuffer canvas = PixelBuffer.canvas(3, 2);
+        canvas.fill(0xF0100010);
+        for (int pixel : canvas.data())
+            assertThat(hex(pixel), equalTo(hex(0xF00F000F)));
+
+        canvas.fillRect(1, 0, 2, 1, 0x80FF0000);
+        canvas.fillRect(0, 1, 1, 1, 0x00123456);
+        assertArrayEquals(new int[]{ 0xF00F000F, 0x80800000, 0x80800000, 0x00000000, 0xF00F000F, 0xF00F000F }, canvas.data());
+
+        PixelBuffer straight = PixelBuffer.create(3, 2);
+        straight.fill(0xF0100010);
+        for (int pixel : straight.data())
+            assertThat(hex(pixel), equalTo(hex(0xF0100010)));
+
+        straight.fillRect(1, 0, 2, 1, 0x80FF0000);
+        straight.fillRect(0, 1, 1, 1, 0x00123456);
+        assertArrayEquals(new int[]{ 0xF0100010, 0x80FF0000, 0x80FF0000, 0x00123456, 0xF0100010, 0xF0100010 }, straight.data());
+    }
+
+    @Test
+    @DisplayName("fillRect NORMAL composites source-over in the convention the buffer holds, and a fill refuses the two modes that name a source's convention")
+    void fillRectSourceOverFollowsTheBuffer() {
+        // 80FF0000 over the premultiplied F00F000F stores NORMAL's F8870007, and over the straight
+        // F0100010 STRAIGHT's F88C0008: what Java2D's SrcOver stores on a TYPE_INT_ARGB_PRE and a
+        // TYPE_INT_ARGB image. NORMAL's formula on the straight pixel would store F8880008.
+        PixelBuffer canvas = PixelBuffer.ofPremultiplied(new int[]{ 0xF00F000F, 0xF00F000F }, 2, 1);
+        canvas.fillRect(0, 0, 1, 1, 0x80FF0000, BlendMode.NORMAL);
+        assertThat(hex(canvas.getPixel(0, 0)), equalTo(hex(0xF8870007)));
+        assertThat(hex(canvas.getPixel(1, 0)), equalTo(hex(0xF00F000F)));
+
+        PixelBuffer straight = PixelBuffer.ofStraight(new int[]{ 0xF0100010, 0xF0100010 }, 2, 1);
+        straight.fillRect(0, 0, 1, 1, 0x80FF0000, BlendMode.NORMAL);
+        assertThat(hex(straight.getPixel(0, 0)), equalTo(hex(0xF88C0008)));
+        assertThat(hex(straight.getPixel(1, 0)), equalTo(hex(0xF0100010)));
+
+        // A colour argument is straight colour and has no buffer to say otherwise, so the two modes
+        // that name a source's convention are refused before anything is laid, a colour of alpha 0
+        // and a rectangle of no size included.
+        for (BlendMode mode : new BlendMode[]{ BlendMode.PREMULTIPLIED, BlendMode.STRAIGHT })
+            for (PixelBuffer buffer : new PixelBuffer[]{ PixelBuffer.canvas(2, 1), PixelBuffer.create(2, 1) })
+                for (int[] fill : new int[][]{ { 0, 0, 2, 1, 0x80FF0000 }, { 0, 0, 2, 1, 0x00123456 }, { 0, 0, 0, 0, 0x80FF0000 } }) {
+                    IllegalArgumentException refused = assertThrows(IllegalArgumentException.class,
+                        () -> buffer.fillRect(fill[0], fill[1], fill[2], fill[3], fill[4], mode));
+                    assertThat(refused.getMessage(), equalTo("A fill colour is straight colour and takes 'NORMAL', not '%s'".formatted(mode)));
+                    assertArrayEquals(new int[2], buffer.data(), mode + " left the buffer as it was");
+                }
     }
 
     @Test
@@ -468,30 +543,34 @@ class PixelBufferTest {
     }
 
     @Test
-    @DisplayName("blitScaled PREMULTIPLIED onto a fresh buffer agrees with resize NEAREST for a translucent source")
+    @DisplayName("blitScaled of a translucent render onto a fresh canvas agrees with resize NEAREST, under PREMULTIPLIED and the default mode alike")
     void blitScaledPremultipliedMatchesResizeNearest() {
-        PixelBuffer render = PixelBuffer.create(6, 6);
+        PixelBuffer render = PixelBuffer.canvas(6, 6);
         for (int y = 0; y < 6; y++)
             for (int x = 0; x < 6; x++)
                 render.setPixel(x, y, ColorMath.blend(ColorMath.pack(20 + 40 * x, 0xFF, 8 * y, 0x80), ColorMath.TRANSPARENT, BlendMode.NORMAL));
 
         for (int size : new int[]{ 3, 6, 12 }) {
-            PixelBuffer laid = PixelBuffer.create(size, size);
+            PixelBuffer laid = PixelBuffer.canvas(size, size);
             laid.blitScaled(render, 0, 0, size, size, BlendMode.PREMULTIPLIED);
             assertArrayEquals(render.resize(size, size, Resample.NEAREST).data(), laid.data());
         }
 
-        PixelBuffer darkened = PixelBuffer.create(6, 6);
-        darkened.blitScaled(render, 0, 0, 6, 6);
-        assertThat(darkened.getPixel(5, 0), not(equalTo(render.getPixel(5, 0))));
+        // The default source-over takes its formula from the two canvases, so it lays the render as it
+        // is rather than weighing its colour by its alpha a second time.
+        PixelBuffer laidByDefault = PixelBuffer.canvas(6, 6);
+        laidByDefault.blitScaled(render, 0, 0, 6, 6);
+        assertThat(laidByDefault.getPixel(5, 0), equalTo(render.getPixel(5, 0)));
+        assertArrayEquals(render.data(), laidByDefault.data());
     }
 
     @Test
-    @DisplayName("blitScaled lays down what a frozen per-pixel copy of its loop lays down, over random and transparent targets")
+    @DisplayName("blitScaled lays down what a frozen per-pixel copy of its loop lays down, over random and transparent targets, in each pairing of conventions")
     void blitScaledMatchesTheFrozenLoop() {
         // Each geometry is drawn over random texels and over a fresh transparent target, the backdrop
         // most composites land on, so a run filled from what the target holds rather than from the
-        // texel alone differs from the frozen loop.
+        // texel alone differs from the frozen loop. The frozen loop lays each texel as the table of
+        // conventions says, which in each mode's own pairing is ColorMath.blend of the pixels as held.
         int seed = 0;
 
         for (int[] blit : SCALED_BLITS) {
@@ -501,40 +580,43 @@ class PixelBufferTest {
 
             for (int[] backdrop : new int[][]{ random, new int[width * height] })
                 for (boolean hasAlpha : new boolean[]{ true, false })
-                    for (BlendMode mode : BlendMode.values()) {
-                        String label = "%dx%d -> %dx%d at (%d, %d) onto %dx%d %s, hasAlpha %s, %s"
-                            .formatted(srcW, srcH, dw, dh, dx, dy, width, height, backdrop == random ? "random" : "transparent", hasAlpha, mode);
-                        PixelBuffer source = PixelBuffer.ofStraight(drawn.clone(), srcW, srcH, hasAlpha);
+                    for (AlphaMode from : AlphaMode.values())
+                        for (AlphaMode to : AlphaMode.values())
+                            for (BlendMode mode : BlendMode.values()) {
+                                String label = "%dx%d -> %dx%d at (%d, %d) onto %dx%d %s, hasAlpha %s, %s onto %s, %s"
+                                    .formatted(srcW, srcH, dw, dh, dx, dy, width, height, backdrop == random ? "random" : "transparent", hasAlpha, from, to, mode);
+                                PixelBuffer source = held(from, drawn.clone(), srcW, srcH, hasAlpha);
 
-                        PixelBuffer expected = PixelBuffer.ofStraight(backdrop.clone(), width, height);
-                        frozenBlitScaled(expected, source, dx, dy, dw, dh, mode);
+                                PixelBuffer expected = held(to, backdrop.clone(), width, height, true);
+                                frozenBlitScaled(expected, source, dx, dy, dw, dh, mode);
 
-                        PixelBuffer actual = PixelBuffer.ofStraight(backdrop.clone(), width, height);
-                        actual.blitScaled(source, dx, dy, dw, dh, mode);
+                                PixelBuffer actual = held(to, backdrop.clone(), width, height, true);
+                                actual.blitScaled(source, dx, dy, dw, dh, mode);
 
-                        assertArrayEquals(expected.data(), actual.data(), label);
-                        assertArrayEquals(drawn, source.data(), label + " left its source as drawn");
-                    }
+                                assertArrayEquals(expected.data(), actual.data(), label);
+                                assertArrayEquals(drawn, source.data(), label + " left its source as drawn");
+                            }
         }
     }
 
     @Test
-    @DisplayName("blitScaled of a buffer onto itself reads each texel after every write ahead of it in its row")
+    @DisplayName("blitScaled of a buffer onto itself reads each texel after every write ahead of it in its row, in either convention")
     void blitScaledOntoItselfMatchesTheFrozenLoop() {
         // Doubling from the origin, the first pixel of row 0 writes the texel the second pixel reads,
         // so that texel is held translucent to make the write change it in every mode but REPLACE.
         int[] drawn = texels(24, 20, 1);
         drawn[0] = 0x80C08040;
 
-        for (BlendMode mode : BlendMode.values()) {
-            PixelBuffer expected = PixelBuffer.ofStraight(drawn.clone(), 24, 20);
-            frozenBlitScaled(expected, expected, 0, 0, 48, 40, mode);
+        for (AlphaMode alphaMode : AlphaMode.values())
+            for (BlendMode mode : BlendMode.values()) {
+                PixelBuffer expected = held(alphaMode, drawn.clone(), 24, 20, true);
+                frozenBlitScaled(expected, expected, 0, 0, 48, 40, mode);
 
-            PixelBuffer actual = PixelBuffer.ofStraight(drawn.clone(), 24, 20);
-            actual.blitScaled(actual, 0, 0, 48, 40, mode);
+                PixelBuffer actual = held(alphaMode, drawn.clone(), 24, 20, true);
+                actual.blitScaled(actual, 0, 0, 48, 40, mode);
 
-            assertArrayEquals(expected.data(), actual.data(), mode.name());
-        }
+                assertArrayEquals(expected.data(), actual.data(), alphaMode + ", " + mode);
+            }
     }
 
     @Test
@@ -605,6 +687,191 @@ class PixelBufferTest {
         generic.blit(src, 2, 2, BlendMode.PREMULTIPLIED);
 
         assertThat(fast, equalTo(generic));
+    }
+
+    @Test
+    @DisplayName("a composite lays its source in the destination's convention, by the formula the two conventions give")
+    void aCompositeLaysTheSourceInTheDestinationsConvention() {
+        // Texels of no, full and partial alpha over a backdrop of the same, in each pairing of
+        // conventions and under every mode. Each composite is held to the frozen loop laying every
+        // pixel as the table of conventions says: blit as a scale of one to one, blitScaled shrinking
+        // and magnifying, blitScaledFxaa as FXAA and then the scaled loop, and blitTinted as the tint
+        // and then the blit.
+        int[] drawn = texels(10, 8, 31);
+        int[] backdrop = texels(24, 20, 32);
+
+        for (AlphaMode from : AlphaMode.values())
+            for (AlphaMode to : AlphaMode.values())
+                for (BlendMode mode : BlendMode.values()) {
+                    String label = "%s onto %s, %s".formatted(from, to, mode);
+                    PixelBuffer source = held(from, drawn.clone(), 10, 8, true);
+                    PixelBuffer filtered = source.copy();
+                    filtered.applyFxaa();
+                    PixelBuffer tinted = source.tint(0xFF60A0F0);
+
+                    PixelBuffer blitted = held(to, backdrop.clone(), 24, 20, true);
+                    blitted.blit(source, 3, 2, mode);
+                    PixelBuffer frozenBlit = held(to, backdrop.clone(), 24, 20, true);
+                    frozenBlitScaled(frozenBlit, source, 3, 2, 10, 8, mode);
+                    assertArrayEquals(frozenBlit.data(), blitted.data(), "blit " + label);
+
+                    for (int[] size : new int[][]{ { -1, 1, 5, 4 }, { -2, -1, 23, 19 } }) {
+                        PixelBuffer scaled = held(to, backdrop.clone(), 24, 20, true);
+                        scaled.blitScaled(source, size[0], size[1], size[2], size[3], mode);
+                        PixelBuffer frozenScaled = held(to, backdrop.clone(), 24, 20, true);
+                        frozenBlitScaled(frozenScaled, source, size[0], size[1], size[2], size[3], mode);
+                        assertArrayEquals(frozenScaled.data(), scaled.data(), "blitScaled to %dx%d %s".formatted(size[2], size[3], label));
+                    }
+
+                    PixelBuffer smoothed = held(to, backdrop.clone(), 24, 20, true);
+                    smoothed.blitScaledFxaa(source, 2, 2, 20, 16, mode);
+                    PixelBuffer frozenSmoothed = held(to, backdrop.clone(), 24, 20, true);
+                    frozenBlitScaled(frozenSmoothed, filtered, 2, 2, 20, 16, mode);
+                    assertArrayEquals(frozenSmoothed.data(), smoothed.data(), "blitScaledFxaa " + label);
+
+                    PixelBuffer tintedBlit = held(to, backdrop.clone(), 24, 20, true);
+                    tintedBlit.blitTinted(source, 3, 2, 0xFF60A0F0, mode);
+                    PixelBuffer frozenTinted = held(to, backdrop.clone(), 24, 20, true);
+                    frozenBlitScaled(frozenTinted, tinted, 3, 2, 10, 8, mode);
+                    assertArrayEquals(frozenTinted.data(), tintedBlit.data(), "blitTinted " + label);
+                }
+    }
+
+    @Test
+    @DisplayName("the three source-over modes lay one composite, the default blit's, whichever conventions the two buffers hold")
+    void theSourceOverModesAreOneModeInAComposite() {
+        int[] drawn = texels(10, 8, 33);
+        int[] backdrop = texels(24, 20, 34);
+
+        for (AlphaMode from : AlphaMode.values())
+            for (AlphaMode to : AlphaMode.values()) {
+                PixelBuffer source = held(from, drawn.clone(), 10, 8, true);
+                PixelBuffer byDefault = held(to, backdrop.clone(), 24, 20, true);
+                byDefault.blit(source, 3, 2);
+                PixelBuffer scaledByDefault = held(to, backdrop.clone(), 24, 20, true);
+                scaledByDefault.blitScaled(source, -2, -1, 23, 19);
+
+                for (BlendMode mode : new BlendMode[]{ BlendMode.NORMAL, BlendMode.PREMULTIPLIED, BlendMode.STRAIGHT }) {
+                    String label = "%s onto %s, %s".formatted(from, to, mode);
+
+                    PixelBuffer blitted = held(to, backdrop.clone(), 24, 20, true);
+                    blitted.blit(source, 3, 2, mode);
+                    assertArrayEquals(byDefault.data(), blitted.data(), "blit " + label);
+
+                    PixelBuffer scaled = held(to, backdrop.clone(), 24, 20, true);
+                    scaled.blitScaled(source, -2, -1, 23, 19, mode);
+                    assertArrayEquals(scaledByDefault.data(), scaled.data(), "blitScaled " + label);
+                }
+            }
+    }
+
+    @Test
+    @DisplayName("a straight see-through child laid with PREMULTIPLIED onto a canvas stores NORMAL's 50190050 and encodes as its own colour")
+    void aStraightChildLaidAsPremultipliedIsNotTooBright() {
+        // Laid by PREMULTIPLIED's formula as it is held, the child would stay 505000FF, colour above its
+        // alpha on a canvas, and encode as 50FF00FF.
+        PixelBuffer child = PixelBuffer.ofStraight(new int[]{ 0x505000FF }, 1, 1);
+
+        PixelBuffer canvas = PixelBuffer.canvas(1, 1);
+        canvas.blit(child, 0, 0, BlendMode.PREMULTIPLIED);
+        assertThat(hex(canvas.getPixel(0, 0)), equalTo(hex(0x50190050)));
+        assertThat(hex(canvas.toAlphaMode(AlphaMode.STRAIGHT).getPixel(0, 0)), equalTo(hex(0x505000FF)));
+
+        PixelBuffer scaled = PixelBuffer.canvas(3, 2);
+        scaled.blitScaled(child, 0, 0, 3, 2, BlendMode.PREMULTIPLIED);
+        for (int pixel : scaled.data())
+            assertThat(hex(pixel), equalTo(hex(0x50190050)));
+
+        byte[] png = ImageFactory.toByteArray(StaticImageData.of(canvas), ImageFormat.PNG);
+        assertThat(hex(ImageFactory.fromByteArray(png).toPixelBuffer().getPixel(0, 0)), equalTo(hex(0x505000FF)));
+    }
+
+    @Test
+    @DisplayName("REPLACE writes the source in the destination's convention, both ways, through blit and both scaled paths")
+    void replaceConvertsIntoTheDestinationsConvention() {
+        // Straight 80FF0000 is premultiplied 80800000 and F0100010 is F00F000F; an opaque pixel is the
+        // same int in both, and a source already in the destination's convention is written as held.
+        int[] straight = { 0x80FF0000, 0xF0100010, 0xFF336699 };
+        int[] premultiplied = { 0x80800000, 0xF00F000F, 0xFF336699 };
+
+        assertReplaceWrites(PixelBuffer.ofStraight(straight.clone(), 3, 1), AlphaMode.PREMULTIPLIED, premultiplied);
+        assertReplaceWrites(PixelBuffer.ofPremultiplied(premultiplied.clone(), 3, 1), AlphaMode.STRAIGHT, straight);
+        assertReplaceWrites(PixelBuffer.ofStraight(straight.clone(), 3, 1), AlphaMode.STRAIGHT, straight);
+        assertReplaceWrites(PixelBuffer.ofPremultiplied(premultiplied.clone(), 3, 1), AlphaMode.PREMULTIPLIED, premultiplied);
+    }
+
+    @Test
+    @DisplayName("ADD reads a premultiplied source as the straight colour it stands for")
+    void addReadsAPremultipliedSourceAsStraight() {
+        // Premultiplied 80800000 stands for straight 80FF0000, which ADD weighs by its alpha onto the
+        // premultiplied 40000040: C0800040. Read as it is held, its red would be weighed twice, to 40.
+        PixelBuffer source = PixelBuffer.ofPremultiplied(new int[]{ 0x80800000 }, 1, 1);
+        PixelBuffer canvas = PixelBuffer.ofPremultiplied(new int[]{ 0x40000040 }, 1, 1);
+        canvas.blit(source, 0, 0, BlendMode.ADD);
+
+        assertThat(hex(canvas.getPixel(0, 0)), equalTo(hex(0xC0800040)));
+        assertThat(canvas.getPixel(0, 0), equalTo(ColorMath.blend(0x80FF0000, 0x40000040, BlendMode.ADD)));
+    }
+
+    @Test
+    @DisplayName("ADD, QUADRATIC_ADD and OVERLAY lay onto a pixel in the convention their formula reads, MULTIPLY onto it as held, and source-over onto a buffer without alpha as onto an opaque one")
+    void theOtherModesWorkInTheirOwnConvention() {
+        // ADD adds premultiplied colour: straight 80FF0000 is premultiplied 80800000, and 800000FF
+        // weighed by its alpha adds blue 80 and alpha 80, FF800080. Added to the straight red as held
+        // it would be FFFF0080.
+        assertFillAndBlitLay(PixelBuffer.ofStraight(new int[]{ 0x80FF0000 }, 1, 1), 0x800000FF, BlendMode.ADD, 0xFF800080);
+
+        // QUADRATIC_ADD adds the squared colour to premultiplied colour: straight 80400000 is
+        // 80200000, plus 10 from each channel of 80404040 is 80301010, straight 80602020. Added to the
+        // straight colour as held it would be 80501010.
+        assertFillAndBlitLay(PixelBuffer.ofStraight(new int[]{ 0x80400000 }, 1, 1), 0x80404040, BlendMode.QUADRATIC_ADD, 0x80602020);
+
+        // OVERLAY reads straight colour: premultiplied 80700000 is straight 80DF0000, which white
+        // overlays to 80FF0000, premultiplied 80800000. Overlaid as held, the red of 70 reads as dark
+        // and becomes E0, above its alpha.
+        assertFillAndBlitLay(PixelBuffer.ofPremultiplied(new int[]{ 0x80700000 }, 1, 1), 0xFFFFFFFF, BlendMode.OVERLAY, 0x80800000);
+
+        // MULTIPLY scales each channel and keeps alpha, which holds in either convention, so it lays
+        // onto the pixel as held: straight 03FF0000 by 80 is 03800000, where converting it to
+        // premultiplied colour and back around the product would round it to 03AA0000.
+        assertFillAndBlitLay(PixelBuffer.ofStraight(new int[]{ 0x03FF0000 }, 1, 1), 0xFF808080, BlendMode.MULTIPLY, 0x03800000);
+        assertFillAndBlitLay(PixelBuffer.ofPremultiplied(new int[]{ 0x80800000 }, 1, 1), 0xFF808080, BlendMode.MULTIPLY, 0x80400000);
+
+        // A buffer whose alpha carries no data holds the same colour in either convention, so its pixel
+        // is read as held whatever its alpha byte: 00FF0000 plus 800000FF is 80FF0080. Premultiplied at
+        // its alpha byte of 0, the red would be lost, to 800000FF.
+        assertFillAndBlitLay(PixelBuffer.ofStraight(new int[]{ 0x00FF0000 }, 1, 1, false), 0x800000FF, BlendMode.ADD, 0x80FF0080);
+
+        // Source-over counts such a buffer as opaque, held straight as its premultiplied twin over the
+        // same array: 800000FF over the red stores 807F0080, and so does the premultiplied 80000080.
+        // By STRAIGHT's formula its alpha byte of 0 would leave the source alone, 800000FF.
+        PixelBuffer withoutAlpha = PixelBuffer.ofStraight(new int[]{ 0x00FF0000 }, 1, 1, false);
+        assertFillAndBlitLay(withoutAlpha, 0x800000FF, BlendMode.NORMAL, 0x807F0080);
+        assertFillAndBlitLay(withoutAlpha.toAlphaMode(AlphaMode.PREMULTIPLIED), 0x800000FF, BlendMode.NORMAL, 0x807F0080);
+
+        PixelBuffer underPremultiplied = withoutAlpha.copy();
+        underPremultiplied.blit(PixelBuffer.ofPremultiplied(new int[]{ 0x80000080 }, 1, 1), 0, 0);
+        assertThat(hex(underPremultiplied.getPixel(0, 0)), equalTo(hex(0x807F0080)));
+    }
+
+    @Test
+    @DisplayName("lerp converts its second buffer into the first one's convention before mixing")
+    void lerpConvertsItsSecondBuffer() {
+        // Straight 80FF0000 and premultiplied 80800000 are one picture, so halfway between them is
+        // that picture again, in the first buffer's convention. Mixed as held, the red would be C0.
+        PixelBuffer premultiplied = PixelBuffer.ofPremultiplied(new int[]{ 0x80800000 }, 1, 1);
+        PixelBuffer straight = PixelBuffer.ofStraight(new int[]{ 0x80FF0000 }, 1, 1);
+
+        PixelBuffer intoPremultiplied = PixelBuffer.lerp(premultiplied, straight, 0.5f);
+        assertThat(intoPremultiplied.alphaMode(), is(AlphaMode.PREMULTIPLIED));
+        assertThat(hex(intoPremultiplied.getPixel(0, 0)), equalTo(hex(0x80800000)));
+
+        PixelBuffer intoStraight = PixelBuffer.lerp(straight, premultiplied, 0.5f);
+        assertThat(intoStraight.alphaMode(), is(AlphaMode.STRAIGHT));
+        assertThat(hex(intoStraight.getPixel(0, 0)), equalTo(hex(0x80FF0000)));
+
+        assertThat(premultiplied.getPixel(0, 0), equalTo(0x80800000));
+        assertThat(straight.getPixel(0, 0), equalTo(0x80FF0000));
     }
 
     @Test
@@ -743,10 +1010,11 @@ class PixelBufferTest {
         }
 
         // The area average weighs straight colour by alpha and mixes premultiplied colour as held, so
-        // the source's convention decides the resampled pixels.
+        // the source's convention decides the resampled pixels, which REPLACE writes as they are onto
+        // a buffer of that convention.
         PixelBuffer fromStraight = PixelBuffer.create(4, 4);
         fromStraight.blitScaled(straight, 0, 0, 4, 4, BlendMode.REPLACE, Resample.AREA);
-        PixelBuffer fromPremultiplied = PixelBuffer.create(4, 4);
+        PixelBuffer fromPremultiplied = PixelBuffer.canvas(4, 4);
         fromPremultiplied.blitScaled(straight.toAlphaMode(AlphaMode.PREMULTIPLIED), 0, 0, 4, 4, BlendMode.REPLACE, Resample.AREA);
         assertArrayEquals(straight.resize(4, 4, Resample.AREA).data(), fromStraight.data());
         assertArrayEquals(straight.toAlphaMode(AlphaMode.PREMULTIPLIED).resize(4, 4, Resample.AREA).data(), fromPremultiplied.data());
@@ -1142,10 +1410,68 @@ class PixelBufferTest {
     }
 
     /**
+     * Formats a pixel as eight hex digits, so a failed comparison names both pixels legibly.
+     *
+     * @param argb the packed ARGB pixel
+     * @return the pixel in hex
+     */
+    private static String hex(int argb) {
+        return "%08X".formatted(argb);
+    }
+
+    /**
+     * Asserts that {@link BlendMode#REPLACE} writes every pixel of a one-row source as {@code expected}
+     * onto a transparent buffer of the given convention, through blit, a one-to-one blitScaled and a
+     * blitScaled doubling the row, whose runs each fill with one converted texel.
+     *
+     * @param source the one-row source
+     * @param to the convention of the buffer written to
+     * @param expected the pixels REPLACE writes, one per source pixel
+     */
+    private static void assertReplaceWrites(PixelBuffer source, AlphaMode to, int[] expected) {
+        int width = source.width();
+        String label = "%s onto %s".formatted(source.alphaMode(), to);
+
+        PixelBuffer blitted = held(to, new int[width], width, 1, true);
+        blitted.blit(source, 0, 0, BlendMode.REPLACE);
+        assertArrayEquals(expected, blitted.data(), "blit " + label);
+
+        PixelBuffer copied = held(to, new int[width], width, 1, true);
+        copied.blitScaled(source, 0, 0, width, 1, BlendMode.REPLACE);
+        assertArrayEquals(expected, copied.data(), "blitScaled " + label);
+
+        PixelBuffer doubled = held(to, new int[width * 2], width * 2, 1, true);
+        doubled.blitScaled(source, 0, 0, width * 2, 1, BlendMode.REPLACE);
+        for (int x = 0; x < width * 2; x++)
+            assertThat("magnified " + label + " at " + x, hex(doubled.getPixel(x, 0)), equalTo(hex(expected[x / 2])));
+    }
+
+    /**
+     * Asserts that a straight colour laid with {@code mode} onto a one-pixel buffer stores
+     * {@code expected}, filled with fillRect and blitted as a straight one-pixel image alike.
+     *
+     * @param pixel the one-pixel buffer laid onto, left as it is
+     * @param colour the straight colour laid
+     * @param mode the blend mode
+     * @param expected the pixel each lays
+     */
+    private static void assertFillAndBlitLay(PixelBuffer pixel, int colour, BlendMode mode, int expected) {
+        String label = "%08X by %s onto %s %08X".formatted(colour, mode, pixel.alphaMode(), pixel.getPixel(0, 0));
+
+        PixelBuffer filled = pixel.copy();
+        filled.fillRect(0, 0, 1, 1, colour, mode);
+        assertThat("fillRect " + label, hex(filled.getPixel(0, 0)), equalTo(hex(expected)));
+
+        PixelBuffer blitted = pixel.copy();
+        blitted.blit(PixelBuffer.ofStraight(new int[]{ colour }, 1, 1), 0, 0, mode);
+        assertThat("blit " + label, hex(blitted.getPixel(0, 0)), equalTo(hex(expected)));
+    }
+
+    /**
      * Composites {@code source} onto {@code target} exactly as the scaled blit did when it computed
      * each source column with its own integer divide: the clip, the row and column products in int
      * arithmetic, rows in order, every pixel reading its texel afresh, alpha 0 skipped and every
-     * other texel blended.
+     * other texel laid by {@link #laid}.
      *
      * @param target the buffer composited onto
      * @param source the buffer composited
@@ -1174,9 +1500,77 @@ class PixelBufferTest {
                 int src = pixels[sy * source.width() + sx];
                 if (ColorMath.alpha(src) == 0) continue;
                 int dstIdx = dstRow + dx + x;
-                data[dstIdx] = ColorMath.blend(src, data[dstIdx], mode);
+                data[dstIdx] = laid(src, data[dstIdx], mode, source, target);
             }
         }
+    }
+
+    /**
+     * Lays one source pixel over one destination pixel as a composite between buffers of these
+     * conventions lays it, computed with {@link ColorMath#blend} and {@link PixelBuffer#toAlphaMode}
+     * as the table of conventions says.
+     * <p>
+     * The three source-over modes are one mode, the formula taken from the two conventions:
+     * {@link BlendMode#NORMAL}'s lays a straight source onto premultiplied colour,
+     * {@link BlendMode#PREMULTIPLIED}'s a premultiplied source onto it, and {@link BlendMode#STRAIGHT}'s
+     * a source read as straight colour onto straight colour. {@link BlendMode#REPLACE} writes the source
+     * in the destination's convention. The other four read the source as straight colour:
+     * {@link BlendMode#ADD} and {@link BlendMode#QUADRATIC_ADD} lay it onto the destination pixel
+     * premultiplied and {@link BlendMode#OVERLAY} onto it straight, converted there and back, and
+     * {@link BlendMode#MULTIPLY} onto it as held. A buffer whose alpha carries no data has none of its
+     * pixels converted, and source-over onto one lays as onto premultiplied colour.
+     *
+     * @param src the source pixel, as its buffer holds it
+     * @param dst the destination pixel, as its buffer holds it
+     * @param mode the blend mode the composite is called with
+     * @param source the buffer the source pixel comes from
+     * @param target the buffer the destination pixel is in
+     * @return the pixel the composite writes
+     */
+    private static int laid(int src, int dst, BlendMode mode, PixelBuffer source, PixelBuffer target) {
+        AlphaMode from = source.alphaMode();
+        AlphaMode to = target.alphaMode();
+        int straightSource = source.hasAlpha() && from == AlphaMode.PREMULTIPLIED ? converted(src, from, AlphaMode.STRAIGHT) : src;
+
+        return switch (mode) {
+            case NORMAL, PREMULTIPLIED, STRAIGHT -> to == AlphaMode.STRAIGHT && target.hasAlpha()
+                ? ColorMath.blend(straightSource, dst, BlendMode.STRAIGHT)
+                : ColorMath.blend(src, dst, from == AlphaMode.PREMULTIPLIED ? BlendMode.PREMULTIPLIED : BlendMode.NORMAL);
+            case REPLACE -> source.hasAlpha() ? converted(src, from, to) : src;
+            case MULTIPLY -> ColorMath.blend(straightSource, dst, mode);
+            case ADD, QUADRATIC_ADD -> laidIn(AlphaMode.PREMULTIPLIED, straightSource, dst, mode, target);
+            case OVERLAY -> laidIn(AlphaMode.STRAIGHT, straightSource, dst, mode, target);
+        };
+    }
+
+    /**
+     * Blends a straight source pixel over a destination pixel converted into the convention a
+     * formula reads, and converts the result back into the destination's.
+     *
+     * @param working the convention the formula reads the destination in
+     * @param src the straight source pixel
+     * @param dst the destination pixel, as its buffer holds it
+     * @param mode the blend mode
+     * @param target the buffer the destination pixel is in
+     * @return the blended pixel, in the destination's convention
+     */
+    private static int laidIn(AlphaMode working, int src, int dst, BlendMode mode, PixelBuffer target) {
+        if (!target.hasAlpha() || target.alphaMode() == working)
+            return ColorMath.blend(src, dst, mode);
+
+        return converted(ColorMath.blend(src, converted(dst, target.alphaMode(), working), mode), working, target.alphaMode());
+    }
+
+    /**
+     * Converts one pixel between conventions through {@link PixelBuffer#toAlphaMode}.
+     *
+     * @param pixel the pixel, held in {@code from}
+     * @param from the convention the pixel is held in
+     * @param to the convention to hold it in
+     * @return the pixel held in {@code to}
+     */
+    private static int converted(int pixel, AlphaMode from, AlphaMode to) {
+        return held(from, new int[]{ pixel }, 1, 1, true).toAlphaMode(to).getPixel(0, 0);
     }
 
     /**

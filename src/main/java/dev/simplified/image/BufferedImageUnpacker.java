@@ -1,7 +1,6 @@
 package dev.simplified.image;
 
 import dev.simplified.annotations.UtilityClass;
-import dev.simplified.image.pixel.AlphaMode;
 import org.jetbrains.annotations.NotNull;
 
 import java.awt.Graphics2D;
@@ -18,9 +17,11 @@ import java.awt.image.Raster;
 
 /**
  * Per-layout {@link BufferedImage}-to-ARGB unpackers used by
- * {@link PixelBuffer#wrap(BufferedImage)}. Each method handles one source layout, packs the
- * raster into a fresh ARGB {@code int[]} (or reuses the existing one for the zero-copy case),
- * and returns the wrapping {@link PixelBuffer}, holding {@link AlphaMode#STRAIGHT} colour.
+ * {@link PixelBuffer#wrap(BufferedImage)}. Each method handles one source layout and answers its
+ * pixels as {@code 0xAARRGGBB} ints - packed into a fresh array, or the image's own array in the
+ * zero-copy case - each channel as the image holds it, so a premultiplied image's colour stays
+ * premultiplied. {@link PixelBuffer#wrap(BufferedImage)} reads the convention off the image and wraps
+ * the array in it.
  * <p>
  * Package-private because the methods make assumptions about the source layout that callers
  * outside this package shouldn't have to enforce - {@link PixelBuffer#wrap(BufferedImage)} is
@@ -30,44 +31,42 @@ import java.awt.image.Raster;
 class BufferedImageUnpacker {
 
     /**
-     * Source is already {@code 0xAARRGGBB} packed ints - share the backing array directly,
-     * no copy.
+     * Answers the backing array of an image already held as {@code 0xAARRGGBB} packed ints, straight
+     * or premultiplied, shared with the image rather than copied.
+     *
+     * @param image the image, of type {@link BufferedImage#TYPE_INT_ARGB} or {@link BufferedImage#TYPE_INT_ARGB_PRE}
+     * @return the {@code 0xAARRGGBB} pixels, each channel as the image holds it
      */
-    static @NotNull PixelBuffer intArgb(@NotNull BufferedImage image, int w, int h, boolean alpha) {
-        int[] data = ((DataBufferInt) image.getRaster().getDataBuffer()).getData();
-        return new PixelBuffer(data, w, h, alpha, AlphaMode.STRAIGHT);
+    static int @NotNull [] intArgb(@NotNull BufferedImage image) {
+        return ((DataBufferInt) image.getRaster().getDataBuffer()).getData();
     }
 
     /**
-     * Source is {@code 0xAARRGGBB} packed ints holding each colour already scaled by its alpha.
-     * Read the backing array as premultiplied colour and convert it with
-     * {@link PixelBuffer#toAlphaMode(AlphaMode)}, which copies it, since the straight colour cannot
-     * share the source's array, and divides each channel back by its alpha.
+     * Repacks an image of {@code 0x__RRGGBB} packed ints, whose alpha byte is unused, into a fresh
+     * array, forcing the alpha byte to {@code 0xFF}.
+     *
+     * @param image the image, of type {@link BufferedImage#TYPE_INT_RGB}
+     * @return the {@code 0xAARRGGBB} pixels, each channel as the image holds it and alpha {@code 0xFF}
      */
-    static @NotNull PixelBuffer intArgbPre(@NotNull BufferedImage image, int w, int h, boolean alpha) {
-        int[] src = ((DataBufferInt) image.getRaster().getDataBuffer()).getData();
-        return new PixelBuffer(src, w, h, alpha, AlphaMode.PREMULTIPLIED).toAlphaMode(AlphaMode.STRAIGHT);
-    }
-
-    /**
-     * Source is {@code 0x__RRGGBB} packed ints (alpha byte unused). Force the alpha byte to
-     * {@code 0xFF} so the result is a valid {@code 0xFFRRGGBB} ARGB pixel.
-     */
-    static @NotNull PixelBuffer intRgb(@NotNull BufferedImage image, int w, int h, boolean alpha) {
+    static int @NotNull [] intRgb(@NotNull BufferedImage image) {
         int[] src = ((DataBufferInt) image.getRaster().getDataBuffer()).getData();
         int[] dst = new int[src.length];
 
         for (int i = 0; i < src.length; i++)
             dst[i] = (src[i] & 0x00FFFFFF) | 0xFF000000;
 
-        return new PixelBuffer(dst, w, h, alpha, AlphaMode.STRAIGHT);
+        return dst;
     }
 
     /**
-     * Source is {@code 0x__BBGGRR} packed ints (alpha byte unused). Swap the R and B bytes to
-     * land in ARGB order and force the alpha byte to {@code 0xFF}.
+     * Repacks an image of {@code 0x__BBGGRR} packed ints, whose alpha byte is unused, into a fresh
+     * array, swapping the red and blue bytes into ARGB order and forcing the alpha byte to
+     * {@code 0xFF}.
+     *
+     * @param image the image, of type {@link BufferedImage#TYPE_INT_BGR}
+     * @return the {@code 0xAARRGGBB} pixels, each channel as the image holds it and alpha {@code 0xFF}
      */
-    static @NotNull PixelBuffer intBgr(@NotNull BufferedImage image, int w, int h, boolean alpha) {
+    static int @NotNull [] intBgr(@NotNull BufferedImage image) {
         int[] src = ((DataBufferInt) image.getRaster().getDataBuffer()).getData();
         int[] dst = new int[src.length];
 
@@ -79,14 +78,19 @@ class BufferedImageUnpacker {
             dst[i] = 0xFF000000 | (r << 16) | (g << 8) | b;
         }
 
-        return new PixelBuffer(dst, w, h, alpha, AlphaMode.STRAIGHT);
+        return dst;
     }
 
     /**
-     * Source is a flat {@code byte[]} with 4 bytes per pixel in A, B, G, R order. Read them as
-     * unsigned and repack into {@code 0xAARRGGBB}.
+     * Repacks an image held as a flat {@code byte[]} of 4 bytes per pixel in A, B, G, R order,
+     * straight or premultiplied, into a fresh array, reading each byte unsigned.
+     *
+     * @param image the image, of type {@link BufferedImage#TYPE_4BYTE_ABGR} or {@link BufferedImage#TYPE_4BYTE_ABGR_PRE}
+     * @param w the image width
+     * @param h the image height
+     * @return the {@code 0xAARRGGBB} pixels, each channel as the image holds it
      */
-    static @NotNull PixelBuffer fourByteAbgr(@NotNull BufferedImage image, int w, int h, boolean alpha) {
+    static int @NotNull [] fourByteAbgr(@NotNull BufferedImage image, int w, int h) {
         byte[] src = ((DataBufferByte) image.getRaster().getDataBuffer()).getData();
         int[] dst = new int[w * h];
 
@@ -98,25 +102,19 @@ class BufferedImageUnpacker {
             dst[i] = (a << 24) | (r << 16) | (g << 8) | b;
         }
 
-        return new PixelBuffer(dst, w, h, alpha, AlphaMode.STRAIGHT);
+        return dst;
     }
 
     /**
-     * Source is a flat {@code byte[]} with 4 bytes per pixel in A, B, G, R order, each colour
-     * already scaled by its alpha. Repack them as {@link #fourByteAbgr} does, read the repacked
-     * array as premultiplied colour and convert it with {@link PixelBuffer#toAlphaMode(AlphaMode)},
-     * which divides each channel back by its alpha.
+     * Repacks an image held as a flat {@code byte[]} of 3 bytes per pixel in B, G, R order, with no
+     * alpha, into a fresh array of {@code 0xFFRRGGBB} pixels.
+     *
+     * @param image the image, of type {@link BufferedImage#TYPE_3BYTE_BGR}
+     * @param w the image width
+     * @param h the image height
+     * @return the {@code 0xAARRGGBB} pixels, each channel as the image holds it and alpha {@code 0xFF}
      */
-    static @NotNull PixelBuffer fourByteAbgrPre(@NotNull BufferedImage image, int w, int h, boolean alpha) {
-        int[] repacked = fourByteAbgr(image, w, h, alpha).data();
-        return new PixelBuffer(repacked, w, h, alpha, AlphaMode.PREMULTIPLIED).toAlphaMode(AlphaMode.STRAIGHT);
-    }
-
-    /**
-     * Source is a flat {@code byte[]} with 3 bytes per pixel in B, G, R order (no alpha). Repack
-     * into {@code 0xFFRRGGBB}.
-     */
-    static @NotNull PixelBuffer threeByteBgr(@NotNull BufferedImage image, int w, int h, boolean alpha) {
+    static int @NotNull [] threeByteBgr(@NotNull BufferedImage image, int w, int h) {
         byte[] src = ((DataBufferByte) image.getRaster().getDataBuffer()).getData();
         int[] dst = new int[w * h];
 
@@ -127,15 +125,20 @@ class BufferedImageUnpacker {
             dst[i] = 0xFF000000 | (r << 16) | (g << 8) | b;
         }
 
-        return new PixelBuffer(dst, w, h, alpha, AlphaMode.STRAIGHT);
+        return dst;
     }
 
     /**
-     * Source pixel sample is a palette index; resolve each index through
-     * {@link IndexColorModel#getRGB(int)} - a flat lookup with no colour-space conversion -
-     * rather than letting {@code drawImage}'s compositor inflate the bytes.
+     * Resolves each palette index of an indexed image through {@link IndexColorModel#getRGB(int)} - a
+     * flat lookup with no colour-space conversion - rather than letting {@code drawImage}'s compositor
+     * inflate the bytes.
+     *
+     * @param image the image, its colour model an {@link IndexColorModel}
+     * @param w the image width
+     * @param h the image height
+     * @return the {@code 0xAARRGGBB} pixels, each channel as the palette holds it
      */
-    static @NotNull PixelBuffer indexed(@NotNull BufferedImage image, int w, int h, boolean alpha) {
+    static int @NotNull [] indexed(@NotNull BufferedImage image, int w, int h) {
         IndexColorModel indexed = (IndexColorModel) image.getColorModel();
         Raster raster = image.getRaster();
         int[] sample = new int[1];
@@ -148,17 +151,22 @@ class BufferedImageUnpacker {
             }
         }
 
-        return new PixelBuffer(dst, w, h, alpha, AlphaMode.STRAIGHT);
+        return dst;
     }
 
     /**
-     * Reads the grayscale raster's bands directly (one band for opaque gray, two for
-     * gray+alpha), replicating the gray sample across R, G, B and pulling alpha from the
-     * second band when present. Going through {@code drawImage} or
-     * {@link BufferedImage#getRGB(int, int) getRGB} would apply the compositor's sRGB-gamma
-     * transform and inflate dark bytes (raw {@code 170} inflates to {@code 213}).
+     * Reads a grayscale image's raster bands directly (one band for opaque gray, two for gray and
+     * alpha), replicating the gray sample across R, G and B and taking alpha from the second band when
+     * there is one. Going through {@code drawImage} or {@link BufferedImage#getRGB(int, int) getRGB}
+     * would apply the compositor's sRGB-gamma transform and inflate dark bytes (raw {@code 170}
+     * inflates to {@code 213}).
+     *
+     * @param image the image, its colour model a {@link ComponentColorModel} of {@link ColorSpace#TYPE_GRAY}
+     * @param w the image width
+     * @param h the image height
+     * @return the {@code 0xAARRGGBB} pixels, each channel as the image holds it and alpha {@code 0xFF} without an alpha band
      */
-    static @NotNull PixelBuffer grayscale(@NotNull BufferedImage image, int w, int h, boolean alpha) {
+    static int @NotNull [] grayscale(@NotNull BufferedImage image, int w, int h) {
         Raster raster = image.getRaster();
         int numBands = raster.getNumBands();
         int[] sample = new int[numBands];
@@ -173,41 +181,52 @@ class BufferedImageUnpacker {
             }
         }
 
-        return new PixelBuffer(dst, w, h, alpha, AlphaMode.STRAIGHT);
+        return dst;
     }
 
     /**
-     * Catches layouts that don't match a standard {@link BufferedImage#getType() getType()} code
-     * but still carry a recognised {@link ColorModel} - notably
-     * {@link BufferedImage#TYPE_BYTE_BINARY} (1/2/4-bpp packed pixels with an
-     * {@link IndexColorModel}; reports {@code getType() == 12} so the {@code TYPE_BYTE_INDEXED}
-     * case in {@link PixelBuffer#wrap wrap}'s switch does not match) and
+     * Reads a layout that matches no standard {@link BufferedImage#getType() getType()} code by the
+     * {@link ColorModel} it carries - notably {@link BufferedImage#TYPE_BYTE_BINARY} (1/2/4-bpp packed
+     * pixels with an {@link IndexColorModel}; reports {@code getType() == 12} so the
+     * {@code TYPE_BYTE_INDEXED} case in {@link PixelBuffer#wrap wrap}'s switch does not match) and
      * {@link BufferedImage#TYPE_CUSTOM} with a {@link ComponentColorModel} of
-     * {@link ColorSpace#TYPE_GRAY} (2-band tRNS-keyed grayscale). Anything else falls through
-     * to {@link #viaDrawImage}.
+     * {@link ColorSpace#TYPE_GRAY} (2-band tRNS-keyed grayscale). Anything else is drawn through
+     * {@link #viaDrawImage}.
+     *
+     * @param image the image
+     * @param w the image width
+     * @param h the image height
+     * @return the {@code 0xAARRGGBB} pixels, each channel as the image holds it
      */
-    static @NotNull PixelBuffer byColorModel(@NotNull BufferedImage image, int w, int h, boolean alpha) {
+    static int @NotNull [] byColorModel(@NotNull BufferedImage image, int w, int h) {
         ColorModel cm = image.getColorModel();
 
         if (cm instanceof IndexColorModel)
-            return indexed(image, w, h, alpha);
+            return indexed(image, w, h);
 
         if (cm instanceof ComponentColorModel && cm.getColorSpace().getType() == ColorSpace.TYPE_GRAY)
-            return grayscale(image, w, h, alpha);
+            return grayscale(image, w, h);
 
-        return viaDrawImage(image, w, h, alpha);
+        return viaDrawImage(image, w, h);
     }
 
     /**
-     * Final fallback for uncommon layouts (16-bit colour, custom colour models, premultiplied ones
-     * included, ...): rely on the AWT compositor to convert into a fresh
-     * {@link BufferedImage#TYPE_INT_ARGB} scratch image via
-     * {@link Graphics2D#drawImage(Image, int, int, ImageObserver) drawImage}. The
-     * premultiply/un-premultiply roundtrip can drop one LSB per channel at partial alpha but
-     * is faithful for fully opaque or fully transparent pixels.
+     * Draws an uncommon layout (16-bit colour, a custom colour model, ...) into a fresh scratch image
+     * of the source's convention with {@link Graphics2D#drawImage(Image, int, int, ImageObserver)
+     * drawImage}, the AWT compositor converting it - {@link BufferedImage#TYPE_INT_ARGB_PRE} for a
+     * premultiplied source, so its colour is copied as premultiplied colour rather than divided back,
+     * and {@link BufferedImage#TYPE_INT_ARGB} otherwise, whose premultiply/un-premultiply roundtrip can
+     * drop one LSB per channel at partial alpha but is faithful for fully opaque or fully transparent
+     * pixels.
+     *
+     * @param image the image
+     * @param w the image width
+     * @param h the image height
+     * @return the {@code 0xAARRGGBB} pixels, in the convention the image holds
      */
-    static @NotNull PixelBuffer viaDrawImage(@NotNull BufferedImage image, int w, int h, boolean alpha) {
-        BufferedImage argb = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
+    static int @NotNull [] viaDrawImage(@NotNull BufferedImage image, int w, int h) {
+        int type = image.isAlphaPremultiplied() ? BufferedImage.TYPE_INT_ARGB_PRE : BufferedImage.TYPE_INT_ARGB;
+        BufferedImage argb = new BufferedImage(w, h, type);
         Graphics2D g = argb.createGraphics();
 
         try {
@@ -216,7 +235,7 @@ class BufferedImageUnpacker {
             g.dispose();
         }
 
-        return intArgb(argb, w, h, alpha);
+        return intArgb(argb);
     }
 
 }

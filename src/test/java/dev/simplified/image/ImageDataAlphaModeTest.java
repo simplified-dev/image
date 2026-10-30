@@ -259,6 +259,24 @@ class ImageDataAlphaModeTest {
         assertThat(pixels.getPixel(0, 0), equalTo(0xFF000000));
     }
 
+    @Test
+    @DisplayName("wrapping a buffer's buffered image answers its pixel array in its convention, in both conventions")
+    void wrapOfToBufferedImageIsZeroCopyInBothConventions() {
+        for (AlphaMode mode : AlphaMode.values()) {
+            PixelBuffer pixels = row(PREMULTIPLIED, mode);
+            PixelBuffer wrapped = PixelBuffer.wrap(pixels.toBufferedImage());
+
+            assertThat(mode.name(), wrapped.data(), sameInstance(pixels.data()));
+            assertThat(mode.name(), wrapped.alphaMode(), equalTo(mode));
+            assertThat(mode.name(), wrapped, equalTo(pixels));
+
+            ImageData image = StaticImageData.of(pixels);
+            ImageData rewrapped = StaticImageData.of(image.toBufferedImage());
+            assertThat(mode.name(), rewrapped.getAlphaMode(), equalTo(mode));
+            assertThat(mode.name(), rewrapped.toPixelBuffer().data(), sameInstance(pixels.data()));
+        }
+    }
+
     // ──── fixtures ────
 
     /**

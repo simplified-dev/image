@@ -36,10 +36,11 @@ public final class FrameNormalizer {
     /**
      * Normalizes frames to a common canvas with configurable strategy.
      * <p>
-     * Frames are scaled bicubically in the convention {@code data} is held in, and the background fill,
-     * given as straight colour, is premultiplied for an animation held in {@link AlphaMode#PREMULTIPLIED}.
-     * A scaled frame replaces the fill it covers, transparent pixels included. Every frame of the result
-     * holds the convention {@code data} holds.
+     * Frames are scaled bicubically in the convention {@code data} is held in, onto a canvas of that
+     * convention, and the background fill, given as straight colour, is laid in it as
+     * {@link PixelBuffer#fill(int)} lays it - premultiplied for an animation held in
+     * {@link AlphaMode#PREMULTIPLIED}. A scaled frame replaces the fill it covers, transparent pixels
+     * included. Every frame of the result holds the convention {@code data} holds.
      *
      * @param data the animated image data containing frames to normalize
      * @param targetWidth the target canvas width, or null to derive from frames
@@ -123,9 +124,11 @@ public final class FrameNormalizer {
                 }
             }
 
-            PixelBuffer fill = PixelBuffer.create(canvasW, canvasH);
-            fill.fill(backgroundColor.getRGB());
-            PixelBuffer canvas = fill.toAlphaMode(alphaMode);
+            PixelBuffer canvas = switch (alphaMode) {
+                case STRAIGHT -> PixelBuffer.create(canvasW, canvasH);
+                case PREMULTIPLIED -> PixelBuffer.canvas(canvasW, canvasH);
+            };
+            canvas.fill(backgroundColor.getRGB());
 
             PixelBuffer scaled = src.resize(dw, dh, Resample.BICUBIC);
             replace(canvas, scaled, dx, dy);

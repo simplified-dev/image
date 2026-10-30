@@ -47,6 +47,30 @@ class BackgroundTest {
     }
 
     @Test
+    @DisplayName("a checkerboard lays its straight cell colours premultiplied onto a canvas and as given onto a straight buffer")
+    void checkerboardOnACanvasLaysPremultipliedCells() {
+        // 80336699 premultiplies to 801A334D and 40FFFFFF to 40404040; cells of two pixels from the
+        // origin, the last column and row cut short.
+        Background board = Background.checkerboard(0x80336699, 0x40FFFFFF, 2);
+
+        PixelBuffer canvas = PixelBuffer.canvas(3, 3);
+        board.fill(canvas);
+        assertThat(canvas.data(), is(new int[]{
+            0x801A334D, 0x801A334D, 0x40404040,
+            0x801A334D, 0x801A334D, 0x40404040,
+            0x40404040, 0x40404040, 0x801A334D
+        }));
+
+        PixelBuffer straight = PixelBuffer.create(3, 3);
+        board.fill(straight);
+        assertThat(straight.data(), is(new int[]{
+            0x80336699, 0x80336699, 0x40FFFFFF,
+            0x80336699, 0x80336699, 0x40FFFFFF,
+            0x40FFFFFF, 0x40FFFFFF, 0x80336699
+        }));
+    }
+
+    @Test
     @DisplayName("composite is a no-op for a transparent background")
     void transparentNoOp() {
         ImageData image = StaticImageData.of(PixelBuffer.create(4, 4));
