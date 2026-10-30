@@ -27,6 +27,14 @@ In asset-renderer the change deletes the `AlphaMode` argument of `Timeline#wrap`
 - Type: **RISK**
 - Status: **OPEN**
 
+## PixelGraphics' fills and shapes overwrite the pixel while it reports `SrcOver`
+`PixelGraphics` extends `Graphics2D`, starts with `AlphaComposite.SrcOver` and hands back from `getComposite` whatever `setComposite` stored, but no colour draw reads it. `fillDeviceRect` sends every rectangle and every row a fill, outline or shape lays at once to `PixelBuffer#fillRect(int, int, int, int, int)`, an overwrite, and `setPixelSafe` sends each pixel a line, oval, arc (`fillArc` included) or rounded corner plots alone to `setPixel`; only the `drawImage` forms composite, with `BlendMode.NORMAL`. A translucent colour therefore replaces what lies beneath it rather than laying over it: a `0x80FF0000` fill over a premultiplied `F00F000F` stores `80FF0000`, where `BlendMode.NORMAL`, and Java2D's `SrcOver` on a `TYPE_INT_ARGB_PRE` image, store `F8870007`. Several draws also plot a pixel more than once in one call, which an overwrite hides and a composite would not, since a pixel laid twice takes the colour twice: `drawRect`'s four edges share their corners (and lie one on another when it has no width or height), `drawOval` plots the points on each axis twice, `drawRoundRect`'s corner arcs repeat the end pixels of its straight edges (with both arc sizes below 2 its edges meet at their corners as `drawRect`'s do), `fillRoundRect`'s body shares its top and bottom rows with the corner bands, `drawPolyline` and `drawPolygon` repeat each shared vertex, `fillPolygon` can repeat a node two spans share, `drawArc`'s sampled points can repeat, and `draw(Shape)` repeats the point where two of its segments meet, a curve being drawn as many short lines. No workspace caller draws a translucent fill or shape through a `PixelGraphics`: asset-renderer's text decorations go through minecraft-text's own `fillEffect`, and minecraft-text calls none of the fills it inherits. HIGH once a caller draws a translucent fill or shape through one.
+
+- Affected: `src/main/java/dev/simplified/image/pixel/PixelGraphics.java:124-127` (`setPixelSafe`), `:150-162` (`fillDeviceRect`), `:291-298` (`fillRect`, `clearRect`), `:301-692` (outlines and shapes), `:699-727` (`drawQuadCurve`, `drawCubicCurve`), `:966-973` (`setComposite`, `getComposite`)
+- Severity: **MEDIUM**
+- Type: **BUG**
+- Status: **OPEN**
+
 ## No ICC / Exif / XMP metadata model; WebP ICC profiles are dropped
 `WebPChunk.Type` names `ICCP`, `EXIF` and `XMP `, but no reader or writer carries them and `ImageData` has no metadata field, so colour profiles and Exif are lost on every WebP round trip. MEDIUM once a wide-gamut or HDR format depends on its colour metadata.
 
