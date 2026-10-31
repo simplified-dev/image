@@ -59,7 +59,8 @@ import java.util.stream.IntStream;
  * {@link #fill(int)} and the {@code fillRect} forms, is straight colour, laid in the convention this
  * buffer holds. The raw reads and writes - {@link #getPixel}, {@link #setPixel}, {@link #setPixels},
  * {@link #setRow} and {@code data()} - pass the stored ints as they are, so a caller writing through
- * them writes in the buffer's convention.
+ * them writes in the buffer's convention. {@link #sourceOverFormula()} names the formula such a caller
+ * lays straight colour source-over by.
  *
  * <h2>SIMD acceleration</h2>
  * <p>
@@ -752,7 +753,8 @@ public class PixelBuffer {
      * and {@link BlendMode#QUADRATIC_ADD} read each pixel in the convention their formula takes.
      * {@link BlendMode#REPLACE} is the one mode the two part on: it writes the colour in this buffer's
      * convention whatever its alpha, as {@link #fillRect(int, int, int, int, int)} does, where a blit
-     * discards a source pixel of alpha {@code 0}.
+     * discards a source pixel of alpha {@code 0}. {@link #sourceOverFormula()} names the formula
+     * {@code NORMAL} lays a colour by here, for a caller laying pixels itself.
      * <p>
      * {@link BlendMode#PREMULTIPLIED} and {@link BlendMode#STRAIGHT} name the convention a source holds,
      * which a colour argument, straight by contract, has no buffer to say, so a fill refuses them.
@@ -793,6 +795,35 @@ public class PixelBuffer {
             for (int i = offset + x0; i < offset + x1; i++)
                 this.data[i] = pairing.lay(argb, this.data[i], mode);
         });
+    }
+
+    /**
+     * Names the blend mode whose {@link ColorMath#blend(int, int, BlendMode)} formula lays a straight
+     * colour source-over onto a pixel of this buffer as it is held - the formula
+     * {@link #fillRect(int, int, int, int, int, BlendMode)} lays a colour by under
+     * {@link BlendMode#NORMAL}. That is {@link BlendMode#STRAIGHT}'s onto straight colour whose alpha
+     * carries data, and {@link BlendMode#NORMAL}'s onto premultiplied colour or a buffer whose alpha
+     * carries no data.
+     * <p>
+     * The answer is fixed with the convention this buffer holds, so a caller laying pixels one at a
+     * time through {@link #getPixel} and {@link #setPixel} reads it once and pays only the formula per
+     * pixel:
+     * <pre>{@code
+     * BlendMode sourceOver = buffer.sourceOverFormula();
+     * buffer.setPixel(x, y, ColorMath.blend(argb, buffer.getPixel(x, y), sourceOver));
+     * }</pre>
+     * Each pixel laid that way holds what a one-pixel {@code fillRect} of the colour under
+     * {@code NORMAL} leaves there, and a colour of alpha {@code 0} leaves it as it was. Neither raw
+     * access clips, so the caller keeps each pixel inside the buffer.
+     * <p>
+     * The answer is a formula for {@link ColorMath#blend(int, int, BlendMode)}, not a mode to composite
+     * with: a fill refuses {@link BlendMode#STRAIGHT}, which this answers for straight colour whose
+     * alpha carries data.
+     *
+     * @return {@link BlendMode#STRAIGHT} for straight colour whose alpha carries data, otherwise {@link BlendMode#NORMAL}
+     */
+    public @NotNull BlendMode sourceOverFormula() {
+        return Pairing.colour(this).sourceOverFormula();
     }
 
     /**
@@ -926,7 +957,8 @@ public class PixelBuffer {
      * A buffer whose alpha carries no data holds the same colour in either convention, so none of its
      * pixels is converted, and a source laid over one source-over lays as over premultiplied colour,
      * the buffer counting as opaque. {@link ColorMath#blend(int, int, BlendMode)} applies each mode's own
-     * formula to raw ints, for a caller writing pixels itself.
+     * formula to raw ints, for a caller writing pixels itself, and {@link #sourceOverFormula()} names the
+     * one straight colour is laid source-over by onto this buffer.
      * <p>
      * Fast paths are taken under a source-over mode: a source whose alpha carries no data is copied a
      * row at a time with {@link System#arraycopy}, and an opaque source pixel, the same int in either
@@ -1556,22 +1588,37 @@ public class PixelBuffer {
         }
 
         /**
-         * Lays one pixel of the source over one pixel of the target source-over: by
-         * {@link BlendMode#STRAIGHT}'s formula for the source read as straight colour onto straight
-         * colour whose alpha carries data, and otherwise by {@link BlendMode#NORMAL}'s for a straight
-         * source and {@link BlendMode#PREMULTIPLIED}'s for a premultiplied one. A target whose alpha
-         * carries no data counts as opaque, which premultiplied colour and straight colour alike are, and
-         * its alpha byte feeds only the alpha laid.
+         * Names the formula a source-over composite lays the source by: {@link BlendMode#STRAIGHT}'s,
+         * the source read as straight colour, onto straight colour whose alpha carries data, and
+         * otherwise {@link BlendMode#NORMAL}'s for a straight source and {@link BlendMode#PREMULTIPLIED}'s
+         * for a premultiplied one. A target whose alpha carries no data counts as opaque, which
+         * premultiplied colour and straight colour alike are, and its alpha byte feeds only the alpha
+         * laid.
+         *
+         * @return the blend mode whose {@link ColorMath#blend(int, int, BlendMode)} formula lays the source source-over, the source read as straight colour where it is {@link BlendMode#STRAIGHT}
+         */
+        @NotNull BlendMode sourceOverFormula() {
+            if (this.target == AlphaMode.STRAIGHT && this.convertsTarget)
+                return BlendMode.STRAIGHT;
+
+            return this.source == AlphaMode.PREMULTIPLIED ? BlendMode.PREMULTIPLIED : BlendMode.NORMAL;
+        }
+
+        /**
+         * Lays one pixel of the source over one pixel of the target source-over, by the formula
+         * {@link #sourceOverFormula()} names, the source read as straight colour where that formula is
+         * {@link BlendMode#STRAIGHT}'s.
          *
          * @param src the laid pixel, as the source holds it
          * @param dst the pixel laid onto, as the target holds it
          * @return the pixel the target takes, in its convention
          */
         int sourceOver(int src, int dst) {
-            if (this.target == AlphaMode.STRAIGHT && this.convertsTarget)
+            BlendMode formula = sourceOverFormula();
+            if (formula == BlendMode.STRAIGHT)
                 return ColorMath.blend(asStraight(src), dst, BlendMode.STRAIGHT);
 
-            return ColorMath.blend(src, dst, this.source == AlphaMode.PREMULTIPLIED ? BlendMode.PREMULTIPLIED : BlendMode.NORMAL);
+            return ColorMath.blend(src, dst, formula);
         }
 
         /**

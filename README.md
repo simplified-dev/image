@@ -230,12 +230,18 @@ the buffer it lays onto, and a fill colour is straight colour, laid in the buffe
 
 ```java
 import dev.simplified.image.PixelBuffer;
+import dev.simplified.image.pixel.BlendMode;
+import dev.simplified.image.pixel.ColorMath;
 
 PixelBuffer buffer = image.toPixelBuffer();
 
 // Direct zero-copy pixel access.
 int argb = buffer.getPixel(x, y);
 buffer.setPixel(x, y, 0xFFFF0000); // solid red
+
+// One straight colour laid source-over onto one pixel, by the formula the buffer's convention gives.
+BlendMode sourceOver = buffer.sourceOverFormula();
+buffer.setPixel(x, y, ColorMath.blend(0x80FF0000, buffer.getPixel(x, y), sourceOver)); // red at half alpha
 
 // Apply FXAA anti-aliasing (parallel scanline processing) in the convention the buffer holds -
 // straight colour, as a decoded image holds.

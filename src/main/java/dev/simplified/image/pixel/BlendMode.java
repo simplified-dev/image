@@ -10,7 +10,8 @@ import dev.simplified.image.PixelBuffer;
  * Mode semantics operate on ARGB pixel pairs where {@code src} is the incoming pixel and
  * {@code dst} is the pixel already on the surface. Each constant names the formula
  * {@link ColorMath#blend(int, int, BlendMode)} applies to raw ints, and states which convention that
- * formula reads and answers its colour in, for a caller writing pixels itself.
+ * formula reads and answers its colour in, for a caller writing pixels itself;
+ * {@link PixelBuffer#sourceOverFormula()} names the one a buffer lays straight colour source-over by.
  * <p>
  * A composite of one {@link PixelBuffer} onto another, and a colour filled into one, take the formula
  * from the conventions the buffers hold instead, as {@link PixelBuffer#blit(PixelBuffer, int, int, BlendMode)}

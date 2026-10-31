@@ -472,6 +472,42 @@ class PixelBufferTest {
     }
 
     @Test
+    @DisplayName("sourceOverFormula names the formula a one-pixel NORMAL fill lays a straight colour by, in every convention")
+    void sourceOverFormulaLaysWhatAOnePixelFillLays() {
+        // The backdrop holds no alpha over colour bits, full alpha and partial alpha, in either
+        // convention, with and without alpha data. Every pixel is laid once by each side, at every
+        // alpha a colour can carry - 0, where the fill skips, and FF, where it writes the colour as
+        // given, included.
+        int width = 9, height = 7;
+        int[] backdrop = texels(width, height, 9);
+
+        for (AlphaMode alphaMode : AlphaMode.values())
+            for (boolean hasAlpha : new boolean[]{ true, false })
+                for (int alpha = 0; alpha <= 0xFF; alpha++)
+                    for (int rgb : new int[]{ 0x000000, 0xFFFFFF, 0x5000FF, 0x100010 }) {
+                        int colour = ColorMath.withAlpha(rgb, alpha);
+                        String label = "%08X onto %s%s".formatted(colour, alphaMode, hasAlpha ? "" : " without alpha");
+
+                        PixelBuffer filled = held(alphaMode, backdrop.clone(), width, height, hasAlpha);
+                        PixelBuffer laid = held(alphaMode, backdrop.clone(), width, height, hasAlpha);
+                        BlendMode sourceOver = laid.sourceOverFormula();
+                        for (int py = 0; py < height; py++)
+                            for (int px = 0; px < width; px++) {
+                                filled.fillRect(px, py, 1, 1, colour, BlendMode.NORMAL);
+                                laid.setPixel(px, py, ColorMath.blend(colour, laid.getPixel(px, py), sourceOver));
+                            }
+
+                        assertArrayEquals(filled.data(), laid.data(), label);
+                    }
+
+        // STRAIGHT's formula onto straight colour whose alpha carries data, NORMAL's onto everything else.
+        assertThat(PixelBuffer.canvas(1, 1).sourceOverFormula(), is(BlendMode.NORMAL));
+        assertThat(PixelBuffer.straight(1, 1).sourceOverFormula(), is(BlendMode.STRAIGHT));
+        assertThat(PixelBuffer.ofStraight(new int[1], 1, 1, false).sourceOverFormula(), is(BlendMode.NORMAL));
+        assertThat(held(AlphaMode.PREMULTIPLIED, new int[1], 1, 1, false).sourceOverFormula(), is(BlendMode.NORMAL));
+    }
+
+    @Test
     @DisplayName("contains reports in-bounds coordinates")
     void containsCoordinates() {
         PixelBuffer buffer = PixelBuffer.straight(4, 4);
