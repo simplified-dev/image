@@ -221,11 +221,12 @@ ImageFactory.toFiles(images, ImageFormat.PNG, outputFiles);
 compositing and drawing work on it comes from `dev.simplified.image.pixel`.
 
 Every buffer holds its pixels in one alpha convention, fixed when it is made and reported by
-`alphaMode()`: a decoded image, `PixelBuffer.create` and `PixelBuffer.ofStraight` hold straight
-colour, `PixelBuffer.canvas` and `PixelBuffer.ofPremultiplied` hold colour already scaled by
-alpha, what drawing onto transparency leaves, and `PixelBuffer.wrap` holds the convention the
-`BufferedImage` holds. `toAlphaMode` converts. A composite lays its source in the convention of the
-buffer it lays onto, and a fill colour is straight colour, laid in the buffer's convention.
+`alphaMode()`. A decoded image holds straight colour; `PixelBuffer.straight` makes a blank buffer
+of it and `PixelBuffer.ofStraight` wraps an array of it. `PixelBuffer.canvas` makes a blank buffer
+of colour already scaled by alpha, what drawing onto transparency leaves, and
+`PixelBuffer.ofPremultiplied` wraps an array of it. `PixelBuffer.wrap` holds the convention the
+`BufferedImage` holds, and `toAlphaMode` converts. A composite lays its source in the convention of
+the buffer it lays onto, and a fill colour is straight colour, laid in the buffer's convention.
 
 ```java
 import dev.simplified.image.PixelBuffer;

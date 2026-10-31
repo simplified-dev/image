@@ -126,7 +126,7 @@ public sealed interface Background permits Background.Solid, Background.Checkerb
      */
     private @NotNull PixelBuffer over(@NotNull PixelBuffer rendered) {
         PixelBuffer out = switch (rendered.alphaMode()) {
-            case STRAIGHT -> PixelBuffer.create(rendered.width(), rendered.height());
+            case STRAIGHT -> PixelBuffer.straight(rendered.width(), rendered.height());
             case PREMULTIPLIED -> PixelBuffer.canvas(rendered.width(), rendered.height());
         };
 

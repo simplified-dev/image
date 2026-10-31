@@ -8,6 +8,7 @@ import dev.simplified.image.PixelBuffer;
 import dev.simplified.image.StaticImageData;
 import dev.simplified.image.exception.ImageDecodeException;
 import dev.simplified.image.frame.ImageFrame;
+import dev.simplified.image.pixel.AlphaMode;
 import org.jetbrains.annotations.NotNull;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -134,13 +135,14 @@ class GifCanvasTest {
     // ──── a still ────
 
     @Test
-    @DisplayName("a still whose frame does not span its logical screen is laid on it at its offset")
+    @DisplayName("a still whose frame does not span its logical screen is laid on it at its offset, in straight colour")
     void stillIsLaidOnItsScreen() {
         ImageData decoded = read(HandBuiltGif.screen(8, 8)
             .frame(3, 3, 2, 2, R, B, G, T)
             .bytes());
 
         assertThat(decoded, instanceOf(StaticImageData.class));
+        assertThat(decoded.toPixelBuffer().alphaMode(), is(AlphaMode.STRAIGHT));
         assertThat(picture(decoded.toPixelBuffer()), contains(
             "........",
             "........",

@@ -274,7 +274,7 @@ class GifDisposalTest {
     }
 
     private static @NotNull PixelBuffer fill(int width, int height, int argb) {
-        PixelBuffer pixels = PixelBuffer.create(width, height);
+        PixelBuffer pixels = PixelBuffer.straight(width, height);
         pixels.fill(argb);
         return pixels;
     }

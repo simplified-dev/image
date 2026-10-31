@@ -18,7 +18,10 @@ import java.awt.image.DirectColorModel;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Random;
 
 import static org.hamcrest.MatcherAssert.assertThat;
@@ -105,17 +108,19 @@ class PixelBufferTest {
     @Test
     @DisplayName("getPixel / setPixel roundtrip")
     void pixelRoundtrip() {
-        PixelBuffer buffer = PixelBuffer.create(4, 4);
+        PixelBuffer buffer = PixelBuffer.straight(4, 4);
         buffer.setPixel(2, 3, 0xDEADBEEF);
         assertThat(buffer.getPixel(2, 3), equalTo(0xDEADBEEF));
     }
 
     @Test
-    @DisplayName("create refuses dimensions whose pixel count overflows an int")
-    void createRefusesAnOverflowingPixelCount() {
+    @DisplayName("straight and canvas refuse dimensions whose pixel count overflows an int")
+    void aBlankBufferRefusesAnOverflowingPixelCount() {
         // 65535 * 65535 wraps to a negative count, 65536 * 65537 to the positive 65536.
-        assertThrows(ArithmeticException.class, () -> PixelBuffer.create(65535, 65535));
-        assertThrows(ArithmeticException.class, () -> PixelBuffer.create(65536, 65537));
+        assertThrows(ArithmeticException.class, () -> PixelBuffer.straight(65535, 65535));
+        assertThrows(ArithmeticException.class, () -> PixelBuffer.straight(65536, 65537));
+        assertThrows(ArithmeticException.class, () -> PixelBuffer.canvas(65535, 65535));
+        assertThrows(ArithmeticException.class, () -> PixelBuffer.canvas(65536, 65537));
     }
 
     @Test
@@ -131,16 +136,15 @@ class PixelBufferTest {
     void aBufferHoldsTheConventionItWasMadeIn() {
         int[] pixels = { 0x80800000, 0xFF336699 };
 
-        PixelBuffer created = PixelBuffer.create(3, 2);
-        assertThat(created.alphaMode(), is(AlphaMode.STRAIGHT));
-        assertThat(created.hasAlpha(), is(true));
-        assertArrayEquals(new int[6], created.data());
+        PixelBuffer blank = PixelBuffer.straight(3, 2);
+        assertThat(blank.alphaMode(), is(AlphaMode.STRAIGHT));
+        assertThat(blank.hasAlpha(), is(true));
+        assertArrayEquals(new int[6], blank.data());
 
         PixelBuffer canvas = PixelBuffer.canvas(3, 2);
         assertThat(canvas.alphaMode(), is(AlphaMode.PREMULTIPLIED));
         assertThat(canvas.hasAlpha(), is(true));
         assertArrayEquals(new int[6], canvas.data());
-        assertThrows(ArithmeticException.class, () -> PixelBuffer.canvas(65535, 65535));
 
         PixelBuffer straight = PixelBuffer.ofStraight(pixels, 2, 1);
         assertThat(straight.alphaMode(), is(AlphaMode.STRAIGHT));
@@ -156,6 +160,25 @@ class PixelBufferTest {
         assertThat(premultiplied.alphaMode(), is(AlphaMode.PREMULTIPLIED));
         assertThat(premultiplied.hasAlpha(), is(true));
         assertThat(premultiplied.data(), is(sameInstance(pixels)));
+    }
+
+    @Test
+    @DisplayName("every blank factory is named for the convention it answers: straight and canvas, and no other")
+    void everyBlankFactoryNamesItsConvention() {
+        // A public static method that takes a width and a height and answers a buffer makes a blank
+        // one. Each answers one convention and is named for it, so a blank under any other name holds
+        // a convention its name does not say.
+        List<String> blanks = Arrays.stream(PixelBuffer.class.getDeclaredMethods())
+            .filter(method -> Modifier.isPublic(method.getModifiers()) && Modifier.isStatic(method.getModifiers()))
+            .filter(method -> method.getReturnType() == PixelBuffer.class)
+            .filter(method -> Arrays.equals(method.getParameterTypes(), new Class<?>[]{ int.class, int.class }))
+            .map(Method::getName)
+            .sorted()
+            .toList();
+
+        assertThat(blanks, contains("canvas", "straight"));
+        assertThat(PixelBuffer.straight(1, 1).alphaMode(), is(AlphaMode.STRAIGHT));
+        assertThat(PixelBuffer.canvas(1, 1).alphaMode(), is(AlphaMode.PREMULTIPLIED));
     }
 
     @Test
@@ -233,7 +256,7 @@ class PixelBufferTest {
     @Test
     @DisplayName("getRow / setRow roundtrip")
     void rowRoundtrip() {
-        PixelBuffer buffer = PixelBuffer.create(3, 2);
+        PixelBuffer buffer = PixelBuffer.straight(3, 2);
         int[] row = { 0x11111111, 0x22222222, 0x33333333 };
         buffer.setRow(1, row);
         assertArrayEquals(row, buffer.getRow(1));
@@ -245,7 +268,7 @@ class PixelBufferTest {
         PixelBuffer buffer = gradient(8, 8);
         int[] region = buffer.getPixels(2, 2, 3, 3, null, 0, 0);
 
-        PixelBuffer target = PixelBuffer.create(8, 8);
+        PixelBuffer target = PixelBuffer.straight(8, 8);
         target.setPixels(2, 2, 3, 3, region, 0, 3);
         assertThat(target.getPixel(3, 3), equalTo(buffer.getPixel(3, 3)));
         assertThat(target.getPixel(0, 0), equalTo(0));
@@ -254,7 +277,7 @@ class PixelBufferTest {
     @Test
     @DisplayName("fillRect clips out-of-bounds regions")
     void fillRectClips() {
-        PixelBuffer buffer = PixelBuffer.create(4, 4);
+        PixelBuffer buffer = PixelBuffer.straight(4, 4);
         buffer.fillRect(-2, -2, 4, 4, 0xFF00FF00);
         assertThat(buffer.getPixel(0, 0), equalTo(0xFF00FF00));
         assertThat(buffer.getPixel(2, 2), equalTo(0));
@@ -329,7 +352,7 @@ class PixelBufferTest {
 
             for (int colour : new int[]{ 0xF0100010, 0x505000FF, 0xFF336699 }) {
                 String label = "%dx%d at (%d, %d), %08X".formatted(w, h, x, y, colour);
-                PixelBuffer covered = PixelBuffer.create(8, 7);
+                PixelBuffer covered = PixelBuffer.straight(8, 7);
                 covered.fillRect(x, y, w, h, 0xFFFFFFFF);
 
                 int[] expected = backdrop.clone();
@@ -409,7 +432,7 @@ class PixelBufferTest {
         canvas.fillRect(0, 1, 1, 1, 0x00123456);
         assertArrayEquals(new int[]{ 0xF00F000F, 0x80800000, 0x80800000, 0x00000000, 0xF00F000F, 0xF00F000F }, canvas.data());
 
-        PixelBuffer straight = PixelBuffer.create(3, 2);
+        PixelBuffer straight = PixelBuffer.straight(3, 2);
         straight.fill(0xF0100010);
         for (int pixel : straight.data())
             assertThat(hex(pixel), equalTo(hex(0xF0100010)));
@@ -439,7 +462,7 @@ class PixelBufferTest {
         // that name a source's convention are refused before anything is laid, a colour of alpha 0
         // and a rectangle of no size included.
         for (BlendMode mode : new BlendMode[]{ BlendMode.PREMULTIPLIED, BlendMode.STRAIGHT })
-            for (PixelBuffer buffer : new PixelBuffer[]{ PixelBuffer.canvas(2, 1), PixelBuffer.create(2, 1) })
+            for (PixelBuffer buffer : new PixelBuffer[]{ PixelBuffer.canvas(2, 1), PixelBuffer.straight(2, 1) })
                 for (int[] fill : new int[][]{ { 0, 0, 2, 1, 0x80FF0000 }, { 0, 0, 2, 1, 0x00123456 }, { 0, 0, 0, 0, 0x80FF0000 } }) {
                     IllegalArgumentException refused = assertThrows(IllegalArgumentException.class,
                         () -> buffer.fillRect(fill[0], fill[1], fill[2], fill[3], fill[4], mode));
@@ -451,7 +474,7 @@ class PixelBufferTest {
     @Test
     @DisplayName("contains reports in-bounds coordinates")
     void containsCoordinates() {
-        PixelBuffer buffer = PixelBuffer.create(4, 4);
+        PixelBuffer buffer = PixelBuffer.straight(4, 4);
         assertThat(buffer.contains(0, 0), is(true));
         assertThat(buffer.contains(3, 3), is(true));
         assertThat(buffer.contains(4, 3), is(false));
@@ -514,7 +537,7 @@ class PixelBufferTest {
     @Test
     @DisplayName("crop rejects out-of-bounds regions")
     void cropRejectsOutOfBounds() {
-        PixelBuffer a = PixelBuffer.create(4, 4);
+        PixelBuffer a = PixelBuffer.straight(4, 4);
         assertThrows(IllegalArgumentException.class, () -> a.crop(2, 2, 5, 5));
     }
 
@@ -524,7 +547,7 @@ class PixelBufferTest {
         PixelBuffer a = gradient(6, 6);
         PixelBuffer nearest = a.resize(3, 3, Resample.NEAREST);
 
-        PixelBuffer scaled = PixelBuffer.create(3, 3);
+        PixelBuffer scaled = PixelBuffer.straight(3, 3);
         scaled.blitScaled(a, 0, 0, 3, 3);
         assertThat(nearest, equalTo(scaled));
     }
@@ -532,7 +555,7 @@ class PixelBufferTest {
     @Test
     @DisplayName("resize NEAREST takes the top-left source pixel of each output pixel's footprint")
     void resizeNearestTakesTheTopLeftOfEachFootprint() {
-        PixelBuffer row = PixelBuffer.create(9, 1);
+        PixelBuffer row = PixelBuffer.straight(9, 1);
         for (int x = 0; x < 9; x++)
             row.setPixel(x, 0, 0xFF000000 | x);
 
@@ -678,11 +701,11 @@ class PixelBufferTest {
         PixelBuffer src = gradient(4, 4);
         PixelBuffer opaqueSrc = PixelBuffer.ofStraight(src.data().clone(), 4, 4, false);
 
-        PixelBuffer fast = PixelBuffer.create(8, 8);
+        PixelBuffer fast = PixelBuffer.straight(8, 8);
         fast.fill(0x80204060);
         fast.blit(opaqueSrc, 2, 2, BlendMode.PREMULTIPLIED);
 
-        PixelBuffer generic = PixelBuffer.create(8, 8);
+        PixelBuffer generic = PixelBuffer.straight(8, 8);
         generic.fill(0x80204060);
         generic.blit(src, 2, 2, BlendMode.PREMULTIPLIED);
 
@@ -889,7 +912,7 @@ class PixelBufferTest {
         // Four taps whose weights sum to one in float can land a hair under 255; rounding keeps them
         // there, where truncating would leave 254.
         for (int size = 2; size <= 12; size++) {
-            PixelBuffer white = PixelBuffer.create(size, size);
+            PixelBuffer white = PixelBuffer.straight(size, size);
             white.fill(0xFFFFFFFF);
 
             for (int target = 1; target <= 24; target++)
@@ -901,7 +924,7 @@ class PixelBufferTest {
     @Test
     @DisplayName("resize BILINEAR keeps a straight pixel's colour beside a transparent one, and mixes premultiplied pixels as held")
     void resizeBilinearHonoursTheConvention() {
-        PixelBuffer straight = PixelBuffer.create(2, 1);
+        PixelBuffer straight = PixelBuffer.straight(2, 1);
         straight.setPixel(0, 0, 0xFFFF0000);
         PixelBuffer premultiplied = PixelBuffer.canvas(2, 1);
         premultiplied.setPixel(0, 0, 0xFFFF0000);
@@ -920,7 +943,7 @@ class PixelBufferTest {
     @DisplayName("resize BICUBIC of premultiplied pixels holds every colour at or under its alpha, and of straight pixels keeps the colour")
     void resizeBicubicPremultipliedStaysPremultiplied() {
         PixelBuffer premultiplied = PixelBuffer.canvas(8, 4);
-        PixelBuffer straight = PixelBuffer.create(8, 4);
+        PixelBuffer straight = PixelBuffer.straight(8, 4);
         for (int y = 0; y < 4; y++)
             for (int x = 0; x < 4; x++) {
                 premultiplied.setPixel(x, y, 0xFFFF0000);
@@ -1012,7 +1035,7 @@ class PixelBufferTest {
         // The area average weighs straight colour by alpha and mixes premultiplied colour as held, so
         // the source's convention decides the resampled pixels, which REPLACE writes as they are onto
         // a buffer of that convention.
-        PixelBuffer fromStraight = PixelBuffer.create(4, 4);
+        PixelBuffer fromStraight = PixelBuffer.straight(4, 4);
         fromStraight.blitScaled(straight, 0, 0, 4, 4, BlendMode.REPLACE, Resample.AREA);
         PixelBuffer fromPremultiplied = PixelBuffer.canvas(4, 4);
         fromPremultiplied.blitScaled(straight.toAlphaMode(AlphaMode.PREMULTIPLIED), 0, 0, 4, 4, BlendMode.REPLACE, Resample.AREA);
@@ -1025,7 +1048,7 @@ class PixelBufferTest {
     void resizeBilinearClampsToTheEdgePixel() {
         // A ramp over four columns, doubled: the outermost outputs sit a quarter pixel past the first
         // and last columns, so each is that column exactly rather than a mix shifted one inward.
-        PixelBuffer ramp = PixelBuffer.create(4, 1);
+        PixelBuffer ramp = PixelBuffer.straight(4, 1);
         for (int x = 0; x < 4; x++)
             ramp.setPixel(x, 0, ColorMath.pack(255, 0x40 * x, 0, 0));
 
@@ -1037,7 +1060,7 @@ class PixelBufferTest {
     @Test
     @DisplayName("resize BILINEAR samples a one-pixel-wide source as its one column")
     void resizeBilinearAcceptsAOnePixelWideSource() {
-        PixelBuffer column = PixelBuffer.create(1, 3);
+        PixelBuffer column = PixelBuffer.straight(1, 3);
         column.fill(0xFF336699);
 
         for (int pixel : column.resize(4, 6, Resample.BILINEAR).data())
@@ -1069,14 +1092,14 @@ class PixelBufferTest {
     @Test
     @DisplayName("resize rejects non-positive dimensions")
     void resizeRejectsInvalidDimensions() {
-        PixelBuffer a = PixelBuffer.create(4, 4);
+        PixelBuffer a = PixelBuffer.straight(4, 4);
         assertThrows(IllegalArgumentException.class, () -> a.resize(0, 4, Resample.NEAREST));
     }
 
     @Test
     @DisplayName("invert XORs RGB, preserving alpha")
     void invertPreservesAlpha() {
-        PixelBuffer a = PixelBuffer.create(1, 1);
+        PixelBuffer a = PixelBuffer.straight(1, 1);
         a.setPixel(0, 0, 0x80112233);
         a.invert();
         assertThat(a.getPixel(0, 0), equalTo(0x80EEDDCC));
@@ -1102,7 +1125,7 @@ class PixelBufferTest {
     @Test
     @DisplayName("grayscale produces equal RGB channels")
     void grayscaleUniformChannels() {
-        PixelBuffer a = PixelBuffer.create(1, 1);
+        PixelBuffer a = PixelBuffer.straight(1, 1);
         a.setPixel(0, 0, ColorMath.pack(255, 200, 100, 50));
         a.grayscale();
         int p = a.getPixel(0, 0);
@@ -1147,7 +1170,7 @@ class PixelBufferTest {
     @Test
     @DisplayName("multiplyAlpha halves alpha and preserves RGB")
     void multiplyAlphaHalves() {
-        PixelBuffer a = PixelBuffer.create(1, 1);
+        PixelBuffer a = PixelBuffer.straight(1, 1);
         a.setPixel(0, 0, 0xFF112233);
         a.multiplyAlpha(0.5f);
         int p = a.getPixel(0, 0);
@@ -1296,7 +1319,7 @@ class PixelBufferTest {
     @Test
     @DisplayName("opaqueBounds finds the tight box")
     void opaqueBoundsTight() {
-        PixelBuffer a = PixelBuffer.create(10, 10);
+        PixelBuffer a = PixelBuffer.straight(10, 10);
         a.fillRect(2, 3, 4, 5, 0xFFFF0000);
         Rectangle r = a.opaqueBounds();
         assertThat(r, equalTo(new Rectangle(2, 3, 4, 5)));
@@ -1305,7 +1328,7 @@ class PixelBufferTest {
     @Test
     @DisplayName("opaqueBounds is zero-size for fully transparent buffer")
     void opaqueBoundsEmpty() {
-        PixelBuffer a = PixelBuffer.create(4, 4);
+        PixelBuffer a = PixelBuffer.straight(4, 4);
         Rectangle r = a.opaqueBounds();
         assertThat(r.width, equalTo(0));
         assertThat(r.height, equalTo(0));
@@ -1314,7 +1337,7 @@ class PixelBufferTest {
     @Test
     @DisplayName("trim crops to opaque bounds")
     void trimCropsToOpaque() {
-        PixelBuffer a = PixelBuffer.create(10, 10);
+        PixelBuffer a = PixelBuffer.straight(10, 10);
         a.fillRect(2, 3, 4, 5, 0xFFFF0000);
         PixelBuffer t = a.trim();
         assertThat(t.width(), equalTo(4));
@@ -1327,10 +1350,10 @@ class PixelBufferTest {
         PixelBuffer src = gradient(4, 4);
         PixelBuffer opaqueSrc = PixelBuffer.ofStraight(src.data().clone(), 4, 4, false);
 
-        PixelBuffer fast = PixelBuffer.create(8, 8);
+        PixelBuffer fast = PixelBuffer.straight(8, 8);
         fast.blit(opaqueSrc, 2, 2, BlendMode.NORMAL);
 
-        PixelBuffer generic = PixelBuffer.create(8, 8);
+        PixelBuffer generic = PixelBuffer.straight(8, 8);
         generic.blit(src, 2, 2, BlendMode.NORMAL);
 
         assertThat(fast, equalTo(generic));

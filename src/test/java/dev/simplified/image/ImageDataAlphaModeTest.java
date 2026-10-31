@@ -60,7 +60,7 @@ class ImageDataAlphaModeTest {
             );
         }
 
-        assertThat(StaticImageData.of(PixelBuffer.create(2, 2)).getAlphaMode(), equalTo(AlphaMode.STRAIGHT));
+        assertThat(StaticImageData.of(PixelBuffer.straight(2, 2)).getAlphaMode(), equalTo(AlphaMode.STRAIGHT));
         assertThat(StaticImageData.of(PixelBuffer.canvas(2, 2)).getAlphaMode(), equalTo(AlphaMode.PREMULTIPLIED));
         assertThat(StaticImageData.of(new BufferedImage(2, 2, BufferedImage.TYPE_INT_ARGB)).getAlphaMode(), equalTo(AlphaMode.STRAIGHT));
     }
@@ -337,7 +337,7 @@ class ImageDataAlphaModeTest {
     }
 
     private static @NotNull PixelBuffer square(int size, int argb) {
-        PixelBuffer pixels = PixelBuffer.create(size, size);
+        PixelBuffer pixels = PixelBuffer.straight(size, size);
         pixels.fill(argb);
         return pixels;
     }

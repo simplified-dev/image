@@ -303,7 +303,7 @@ public class PixelGraphics extends Graphics2D {
      */
     private static @NotNull PixelBuffer blankLike(@NotNull PixelBuffer image, int width, int height) {
         return switch (image.alphaMode()) {
-            case STRAIGHT -> PixelBuffer.create(width, height);
+            case STRAIGHT -> PixelBuffer.straight(width, height);
             case PREMULTIPLIED -> PixelBuffer.canvas(width, height);
         };
     }

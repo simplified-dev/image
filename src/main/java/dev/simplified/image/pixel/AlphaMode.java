@@ -16,7 +16,7 @@ public enum AlphaMode {
 
     /**
      * Colour held at full strength, independent of alpha - what an image decoded from a file holds,
-     * and what {@link PixelBuffer#create(int, int)} and {@link PixelBuffer#ofStraight(int[], int, int)}
+     * and what {@link PixelBuffer#straight(int, int)} and {@link PixelBuffer#ofStraight(int[], int, int)}
      * make. A fully transparent pixel's colour channels carry nothing.
      */
     STRAIGHT,

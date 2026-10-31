@@ -28,7 +28,7 @@ class BackgroundTest {
         assertThat(Background.solid(0x00123456).isTransparent(), is(true));
         assertThat(Background.solid(0xFF112233).isTransparent(), is(false));
 
-        PixelBuffer buffer = PixelBuffer.create(2, 2);
+        PixelBuffer buffer = PixelBuffer.straight(2, 2);
         Background.solid(0xFF112233).fill(buffer);
         for (int y = 0; y < 2; y++)
             for (int x = 0; x < 2; x++)
@@ -38,7 +38,7 @@ class BackgroundTest {
     @Test
     @DisplayName("checkerboard alternates colour every cell from the top-left origin")
     void checkerboardPattern() {
-        PixelBuffer buffer = PixelBuffer.create(16, 16);
+        PixelBuffer buffer = PixelBuffer.straight(16, 16);
         Background.checkerboard(0xFFAAAAAA, 0xFF555555, 8).fill(buffer);
         assertThat(buffer.getPixel(0, 0), is(0xFFAAAAAA));
         assertThat(buffer.getPixel(8, 0), is(0xFF555555));
@@ -61,7 +61,7 @@ class BackgroundTest {
             0x40404040, 0x40404040, 0x801A334D
         }));
 
-        PixelBuffer straight = PixelBuffer.create(3, 3);
+        PixelBuffer straight = PixelBuffer.straight(3, 3);
         board.fill(straight);
         assertThat(straight.data(), is(new int[]{
             0x80336699, 0x80336699, 0x40FFFFFF,
@@ -73,14 +73,14 @@ class BackgroundTest {
     @Test
     @DisplayName("composite is a no-op for a transparent background")
     void transparentNoOp() {
-        ImageData image = StaticImageData.of(PixelBuffer.create(4, 4));
+        ImageData image = StaticImageData.of(PixelBuffer.straight(4, 4));
         assertThat(Background.TRANSPARENT.composite(image), is(sameInstance(image)));
     }
 
     @Test
     @DisplayName("composite blits the render source-over a solid fill")
     void compositesOverSolid() {
-        PixelBuffer rendered = PixelBuffer.create(2, 1);
+        PixelBuffer rendered = PixelBuffer.straight(2, 1);
         rendered.setPixel(0, 0, 0x00000000); // transparent - background shows through
         rendered.setPixel(1, 0, 0xFF0000FF); // opaque blue - stays blue
 
@@ -106,7 +106,7 @@ class BackgroundTest {
     @Test
     @DisplayName("composite lays a straight image down as straight colour")
     void compositesStraightImageAsStraightColour() {
-        PixelBuffer rendered = PixelBuffer.create(1, 1);
+        PixelBuffer rendered = PixelBuffer.straight(1, 1);
         rendered.setPixel(0, 0, 0x80FF0000);
 
         PixelBuffer result = Background.solid(0xFF0000FF).composite(StaticImageData.of(rendered)).toPixelBuffer();
@@ -117,8 +117,8 @@ class BackgroundTest {
     @DisplayName("composite preserves animated frame count and per-frame timing")
     void preservesAnimation() {
         ImageData animated = AnimatedImageData.builder()
-            .withFrame(ImageFrame.of(PixelBuffer.create(2, 2), 40))
-            .withFrame(ImageFrame.of(PixelBuffer.create(2, 2), 60))
+            .withFrame(ImageFrame.of(PixelBuffer.straight(2, 2), 40))
+            .withFrame(ImageFrame.of(PixelBuffer.straight(2, 2), 60))
             .build();
 
         ImageData out = Background.solid(0xFF222222).composite(animated);
@@ -171,8 +171,8 @@ class BackgroundTest {
         AnimatedImageData animated = AnimatedImageData.builder()
             .withWidth(8)
             .withHeight(6)
-            .withFrame(ImageFrame.of(PixelBuffer.create(2, 2), 40, 4, 2, FrameDisposal.DO_NOT_DISPOSE, FrameBlend.OVER))
-            .withFrame(ImageFrame.of(PixelBuffer.create(2, 2), 40, 0, 0, FrameDisposal.DO_NOT_DISPOSE, FrameBlend.OVER))
+            .withFrame(ImageFrame.of(PixelBuffer.straight(2, 2), 40, 4, 2, FrameDisposal.DO_NOT_DISPOSE, FrameBlend.OVER))
+            .withFrame(ImageFrame.of(PixelBuffer.straight(2, 2), 40, 0, 0, FrameDisposal.DO_NOT_DISPOSE, FrameBlend.OVER))
             .build();
 
         PixelBuffer solid = Background.solid(0xFF222222).composite(animated).getFrames().getFirst().pixels();
@@ -187,13 +187,13 @@ class BackgroundTest {
     @Test
     @DisplayName("a partly transparent OVER frame shows the frame beneath it, not the fill")
     void overFrameShowsTheFrameBeneath() {
-        PixelBuffer red = PixelBuffer.create(4, 4);
+        PixelBuffer red = PixelBuffer.straight(4, 4);
         red.fill(0xFFFF0000);
         AnimatedImageData animated = AnimatedImageData.builder()
             .withWidth(4)
             .withHeight(4)
             .withFrame(ImageFrame.of(red, 40, 0, 0, FrameDisposal.DO_NOT_DISPOSE, FrameBlend.SOURCE))
-            .withFrame(ImageFrame.of(PixelBuffer.create(2, 2), 40, 0, 0, FrameDisposal.DO_NOT_DISPOSE, FrameBlend.OVER))
+            .withFrame(ImageFrame.of(PixelBuffer.straight(2, 2), 40, 0, 0, FrameDisposal.DO_NOT_DISPOSE, FrameBlend.OVER))
             .build();
 
         PixelBuffer second = Background.solid(0xFF222222).composite(animated).getFrames().getLast().pixels();
@@ -253,14 +253,14 @@ class BackgroundTest {
     @Test
     @DisplayName("a translucent fill under a straight image is laid down as given")
     void translucentFillUnderStraightImage() {
-        PixelBuffer result = Background.solid(0x80336699).composite(StaticImageData.of(PixelBuffer.create(1, 1))).toPixelBuffer();
+        PixelBuffer result = Background.solid(0x80336699).composite(StaticImageData.of(PixelBuffer.straight(1, 1))).toPixelBuffer();
         assertThat(result.getPixel(0, 0), is(0x80336699));
     }
 
     @Test
     @DisplayName("a straight image and its premultiplied copy composite to the same colours over an opaque fill")
     void straightAndPremultipliedCompositeAlike() {
-        PixelBuffer straight = PixelBuffer.create(4, 4);
+        PixelBuffer straight = PixelBuffer.straight(4, 4);
         for (int i = 0; i < 16; i++)
             straight.data()[i] = ((i * 17) << 24) | ((i * 7) << 16) | ((i * 3) << 8) | i;
         PixelBuffer premultiplied = straight.toAlphaMode(AlphaMode.PREMULTIPLIED);
@@ -282,7 +282,7 @@ class BackgroundTest {
      */
     private static PixelBuffer blank(AlphaMode alphaMode) {
         return switch (alphaMode) {
-            case STRAIGHT -> PixelBuffer.create(2, 2);
+            case STRAIGHT -> PixelBuffer.straight(2, 2);
             case PREMULTIPLIED -> PixelBuffer.canvas(2, 2);
         };
     }

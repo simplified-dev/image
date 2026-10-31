@@ -109,7 +109,7 @@ class VP8LibvpxParityTest {
     }
 
     private static PixelBuffer gradient(int width, int height) {
-        PixelBuffer pixels = PixelBuffer.create(width, height);
+        PixelBuffer pixels = PixelBuffer.straight(width, height);
         for (int y = 0; y < height; y++)
             for (int x = 0; x < width; x++)
                 pixels.setPixel(x, y, 0xFF000000 | (x * 4) << 16 | (y * 5) << 8 | (x + y) * 2);
@@ -121,7 +121,7 @@ class VP8LibvpxParityTest {
      * than the band above.
      */
     private static PixelBuffer shear(int width, int height, int frame) {
-        PixelBuffer pixels = PixelBuffer.create(width, height);
+        PixelBuffer pixels = PixelBuffer.straight(width, height);
         for (int y = 0; y < height; y++) {
             for (int x = 0; x < width; x++) {
                 int sx = x - (y / 8) * frame;
@@ -138,7 +138,7 @@ class VP8LibvpxParityTest {
      * slides right three.
      */
     private static PixelBuffer opposed(int width, int height, int frame) {
-        PixelBuffer pixels = PixelBuffer.create(width, height);
+        PixelBuffer pixels = PixelBuffer.straight(width, height);
         for (int y = 0; y < height; y++) {
             for (int x = 0; x < width; x++) {
                 int sx = y < height / 2 + 3 ? x - 2 * frame : x + 3 * frame;

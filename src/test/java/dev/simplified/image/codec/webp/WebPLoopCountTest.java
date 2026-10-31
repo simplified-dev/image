@@ -140,7 +140,7 @@ class WebPLoopCountTest {
     }
 
     private static @NotNull PixelBuffer fill(int argb) {
-        PixelBuffer pixels = PixelBuffer.create(4, 4);
+        PixelBuffer pixels = PixelBuffer.straight(4, 4);
         pixels.fill(argb);
         return pixels;
     }

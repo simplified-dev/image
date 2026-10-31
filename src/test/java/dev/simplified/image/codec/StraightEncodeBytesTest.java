@@ -39,14 +39,14 @@ import static org.hamcrest.Matchers.equalTo;
 
 /**
  * Pins the bytes every writer writes for straight colour, which a buffer holds when
- * {@link PixelBuffer#create(int, int)} makes it blank, though the name does not say so, and when
+ * {@link PixelBuffer#straight(int, int)} makes it blank and when
  * {@link PixelBuffer#ofStraight(int[], int, int)} wraps it.
  * <p>
  * The digests cover the writers whose bytes come from this library's own code or ImageIO's Java
  * plugins: QOI, TGA, PNM, BMP, GIF, uncompressed TIFF and the WebP paths. PNG, ICO's embedded PNG,
  * Deflate-compressed TIFF and JPEG compress through the JDK's zlib and libjpeg, and a JDK built against
  * the system's copies of those writes other bytes for the same pixels, so those four are held only to
- * the bytes the same JVM writes for the same image declared straight, and through the factory.
+ * the bytes the same JVM writes for the same image wrapped straight, and through the factory.
  */
 class StraightEncodeBytesTest {
 
@@ -120,7 +120,7 @@ class StraightEncodeBytesTest {
     }
 
     @TestFactory
-    Stream<DynamicTest> declaredStraightWritesTheDefaultBytes() {
+    Stream<DynamicTest> aDrawnImageWritesTheWrappedImagesBytes() {
         return CASES.stream()
             .map(entry -> DynamicTest.dynamicTest(entry.name(), () ->
                 assertThat(entry.write(image(entry.animated(), true)), equalTo(entry.write(image(entry.animated(), false))))
@@ -140,17 +140,17 @@ class StraightEncodeBytesTest {
 
     /**
      * The still fixture, or the three-frame animation when {@code animated} is set, each frame drawn
-     * into a {@link PixelBuffer#create(int, int)} buffer, the factory that does not name its convention,
-     * or wrapped by {@link PixelBuffer#ofStraight(int[], int, int)} when {@code declared} is set.
+     * into a {@link PixelBuffer#straight(int, int)} buffer, or wrapped by
+     * {@link PixelBuffer#ofStraight(int[], int, int)} when {@code wrapped} is set.
      */
-    private static @NotNull ImageData image(boolean animated, boolean declared) {
+    private static @NotNull ImageData image(boolean animated, boolean wrapped) {
         if (!animated)
-            return StaticImageData.of(frame(0, declared));
+            return StaticImageData.of(frame(0, wrapped));
 
         AnimatedImageData.Builder builder = AnimatedImageData.builder();
 
         for (int index = 0; index < 3; index++)
-            builder.withFrame(ImageFrame.of(frame(index, declared), 100, 0, 0, FrameDisposal.RESTORE_TO_BACKGROUND, FrameBlend.SOURCE));
+            builder.withFrame(ImageFrame.of(frame(index, wrapped), 100, 0, 0, FrameDisposal.RESTORE_TO_BACKGROUND, FrameBlend.SOURCE));
 
         return builder.build();
     }
@@ -158,10 +158,10 @@ class StraightEncodeBytesTest {
     /**
      * A frame whose first row is {@link #ROW} twice over and whose other rows are a pattern of partial
      * alpha. Frame {@code index} differs from frame 0 only in a 4x4 block, so consecutive frames of the
-     * animation differ in part of the canvas. It is wrapped straight when {@code declared} is set and
-     * drawn into a {@link PixelBuffer#create(int, int)} buffer otherwise.
+     * animation differ in part of the canvas. It is wrapped straight when {@code wrapped} is set and
+     * drawn into a {@link PixelBuffer#straight(int, int)} buffer otherwise.
      */
-    private static @NotNull PixelBuffer frame(int index, boolean declared) {
+    private static @NotNull PixelBuffer frame(int index, boolean wrapped) {
         int[] pixels = new int[WIDTH * HEIGHT];
 
         for (int y = 0; y < HEIGHT; y++) {
@@ -171,10 +171,10 @@ class StraightEncodeBytesTest {
             }
         }
 
-        if (declared)
+        if (wrapped)
             return PixelBuffer.ofStraight(pixels, WIDTH, HEIGHT);
 
-        PixelBuffer drawn = PixelBuffer.create(WIDTH, HEIGHT);
+        PixelBuffer drawn = PixelBuffer.straight(WIDTH, HEIGHT);
         drawn.setPixels(0, 0, WIDTH, HEIGHT, pixels, 0, WIDTH);
         return drawn;
     }

@@ -85,7 +85,7 @@ public class PixelDiff {
         b = b.toAlphaMode(AlphaMode.STRAIGHT);
         int w = Math.min(a.width(), b.width());
         int h = Math.min(a.height(), b.height());
-        PixelBuffer out = PixelBuffer.create(w, h);
+        PixelBuffer out = PixelBuffer.straight(w, h);
         for (int y = 0; y < h; y++) {
             for (int x = 0; x < w; x++) {
                 int pa = a.getPixel(x, y);
@@ -125,7 +125,7 @@ public class PixelDiff {
         b = b.toAlphaMode(AlphaMode.STRAIGHT);
         int w = Math.min(a.width(), b.width());
         int h = Math.min(a.height(), b.height());
-        PixelBuffer out = PixelBuffer.create(w, h);
+        PixelBuffer out = PixelBuffer.straight(w, h);
         for (int y = 0; y < h; y++) {
             for (int x = 0; x < w; x++) {
                 int pa = a.getPixel(x, y);
@@ -170,7 +170,7 @@ public class PixelDiff {
         b = b.toAlphaMode(AlphaMode.STRAIGHT);
         int w = Math.min(a.width(), b.width());
         int h = Math.min(a.height(), b.height());
-        PixelBuffer out = PixelBuffer.create(w, h);
+        PixelBuffer out = PixelBuffer.straight(w, h);
         for (int y = 0; y < h; y++) {
             for (int x = 0; x < w; x++) {
                 int pa = a.getPixel(x, y);
@@ -218,7 +218,7 @@ public class PixelDiff {
         b = b.toAlphaMode(AlphaMode.STRAIGHT);
         int w = Math.min(a.width(), b.width());
         int h = Math.min(a.height(), b.height());
-        PixelBuffer out = PixelBuffer.create(w, h);
+        PixelBuffer out = PixelBuffer.straight(w, h);
         for (int y = 0; y < h; y++) {
             for (int x = 0; x < w; x++) {
                 int pa = a.getPixel(x, y);
@@ -256,7 +256,7 @@ public class PixelDiff {
     public static @NotNull PixelBuffer coverage(@NotNull PixelBuffer a, @NotNull PixelBuffer b) {
         int w = Math.min(a.width(), b.width());
         int h = Math.min(a.height(), b.height());
-        PixelBuffer out = PixelBuffer.create(w, h);
+        PixelBuffer out = PixelBuffer.straight(w, h);
         for (int y = 0; y < h; y++) {
             for (int x = 0; x < w; x++) {
                 int aa = ColorMath.alpha(a.getPixel(x, y));

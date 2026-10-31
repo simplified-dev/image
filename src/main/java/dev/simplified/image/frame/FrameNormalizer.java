@@ -125,7 +125,7 @@ public final class FrameNormalizer {
             }
 
             PixelBuffer canvas = switch (alphaMode) {
-                case STRAIGHT -> PixelBuffer.create(canvasW, canvasH);
+                case STRAIGHT -> PixelBuffer.straight(canvasW, canvasH);
                 case PREMULTIPLIED -> PixelBuffer.canvas(canvasW, canvasH);
             };
             canvas.fill(backgroundColor.getRGB());

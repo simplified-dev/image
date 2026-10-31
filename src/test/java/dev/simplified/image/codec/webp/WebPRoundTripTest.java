@@ -42,7 +42,7 @@ class WebPRoundTripTest {
     @Test
     @DisplayName("2x2 solid-color VP8L writes a non-empty file with RIFF/WEBP header")
     void solidColor2x2() throws IOException {
-        PixelBuffer buf = PixelBuffer.create(2, 2);
+        PixelBuffer buf = PixelBuffer.straight(2, 2);
         buf.fill(0xFFFF0000); // solid red
 
         ImageFrame frame = ImageFrame.of(buf);
@@ -59,7 +59,7 @@ class WebPRoundTripTest {
     @Test
     @DisplayName("16x16 gradient VP8L writes a non-empty file")
     void gradient16x16() throws IOException {
-        PixelBuffer buf = PixelBuffer.create(16, 16);
+        PixelBuffer buf = PixelBuffer.straight(16, 16);
         for (int y = 0; y < 16; y++)
             for (int x = 0; x < 16; x++)
                 buf.setPixel(x, y, 0xFF000000 | (x * 16 << 16) | (y * 16 << 8));
@@ -76,7 +76,7 @@ class WebPRoundTripTest {
     @Test
     @DisplayName("100x100 full-range gradient VP8L (255+ unique colors)")
     void gradient100x100() throws IOException {
-        PixelBuffer buf = PixelBuffer.create(100, 100);
+        PixelBuffer buf = PixelBuffer.straight(100, 100);
         for (int y = 0; y < 100; y++)
             for (int x = 0; x < 100; x++) {
                 int r = (x * 255) / 100;
@@ -93,7 +93,7 @@ class WebPRoundTripTest {
     @Test
     @DisplayName("454x260 with 200+ unique colors like a real tooltip with AA text")
     void tooltipWithManyColors() throws IOException {
-        PixelBuffer buf = PixelBuffer.create(454, 260);
+        PixelBuffer buf = PixelBuffer.straight(454, 260);
         // Generate 256 distinct colors with AA-like frequency distribution: one dominant
         // background color, a long tail of 1-10 pixel blips for each glyph-edge shade.
         for (int y = 0; y < 260; y++)
@@ -114,7 +114,7 @@ class WebPRoundTripTest {
     @Test
     @DisplayName("lossy VP8 32x32 writes a RIFF/WEBP file libwebp can parse")
     void lossyVp8WritesValidFile() throws IOException {
-        PixelBuffer buf = PixelBuffer.create(32, 32);
+        PixelBuffer buf = PixelBuffer.straight(32, 32);
         for (int y = 0; y < 32; y++)
             for (int x = 0; x < 32; x++)
                 buf.setPixel(x, y, 0xFF000000 | ((x * 8) << 16) | ((y * 8) << 8));
@@ -133,7 +133,7 @@ class WebPRoundTripTest {
     @Test
     @DisplayName("round-trip through our own VP8L decoder")
     void selfRoundTrip() {
-        PixelBuffer buf = PixelBuffer.create(32, 32);
+        PixelBuffer buf = PixelBuffer.straight(32, 32);
         for (int y = 0; y < 32; y++)
             for (int x = 0; x < 32; x++)
                 buf.setPixel(x, y, 0xFF000000 | ((x * 8) << 16) | ((y * 8) << 8) | ((x + y) * 4));
@@ -156,7 +156,7 @@ class WebPRoundTripTest {
     @DisplayName("lossy + alpha self round-trip: alpha plane survives encode/decode")
     void lossyAlphaSelfRoundTrip() {
         // 16x16 image with smooth alpha gradient + solid red color.
-        PixelBuffer buf = PixelBuffer.create(16, 16);
+        PixelBuffer buf = PixelBuffer.straight(16, 16);
         for (int y = 0; y < 16; y++)
             for (int x = 0; x < 16; x++) {
                 int alpha = ((x + y) * 255) / 30;     // ramps 0..255
@@ -186,7 +186,7 @@ class WebPRoundTripTest {
     @Test
     @DisplayName("lossy + alpha decodes through libwebp with bit-exact alpha")
     void lossyAlphaLibwebpRoundTrip() {
-        PixelBuffer buf = PixelBuffer.create(16, 16);
+        PixelBuffer buf = PixelBuffer.straight(16, 16);
         for (int y = 0; y < 16; y++)
             for (int x = 0; x < 16; x++) {
                 int alpha = ((x + y) * 255) / 30;
@@ -218,7 +218,7 @@ class WebPRoundTripTest {
         // 3-frame animation; each frame fills with a different alpha gradient, laid over the one before.
         ConcurrentList<ImageFrame> frames = Concurrent.newList();
         for (int f = 0; f < 3; f++) {
-            PixelBuffer fb = PixelBuffer.create(16, 16);
+            PixelBuffer fb = PixelBuffer.straight(16, 16);
             int phase = f * 40;
             for (int y = 0; y < 16; y++)
                 for (int x = 0; x < 16; x++) {
@@ -273,7 +273,7 @@ class WebPRoundTripTest {
         // encode as a P-frame with all MBs inter-skip.
         ConcurrentList<ImageFrame> frames = Concurrent.newList();
         for (int f = 0; f < 4; f++) {
-            PixelBuffer fb = PixelBuffer.create(32, 32);
+            PixelBuffer fb = PixelBuffer.straight(32, 32);
             for (int y = 0; y < 32; y++)
                 for (int x = 0; x < 32; x++)
                     fb.setPixel(x, y, 0xFF000000 | ((x * 8) << 16) | ((y * 8) << 8));
@@ -340,7 +340,7 @@ class WebPRoundTripTest {
         // bytes must drop below the autoSegment=false baseline, and the auto-segment
         // output must round-trip through the decoder with healthy PSNR.
         int W = 64, H = 64;
-        PixelBuffer buf = PixelBuffer.create(W, H);
+        PixelBuffer buf = PixelBuffer.straight(W, H);
         for (int y = 0; y < H; y++) {
             for (int x = 0; x < W; x++) {
                 int argb;
@@ -401,7 +401,7 @@ class WebPRoundTripTest {
         // segment path. Output files must therefore be byte-identical to the
         // autoSegment=false baseline - no wasted segment-tree emit.
         int W = 32, H = 32;
-        PixelBuffer buf = PixelBuffer.create(W, H);
+        PixelBuffer buf = PixelBuffer.straight(W, H);
         buf.fill(0xFF808080);
         StaticImageData image = new StaticImageData(ImageFrame.of(buf));
 
@@ -436,7 +436,7 @@ class WebPRoundTripTest {
         int W = 64, H = 64;
         ConcurrentList<ImageFrame> frames = Concurrent.newList();
         for (int f = 0; f < 3; f++) {
-            PixelBuffer fb = PixelBuffer.create(W, H);
+            PixelBuffer fb = PixelBuffer.straight(W, H);
             for (int y = 0; y < H; y++) {
                 for (int x = 0; x < W; x++) {
                     int argb;
@@ -607,7 +607,7 @@ class WebPRoundTripTest {
         int W = 96, H = 96;
         ConcurrentList<ImageFrame> frames = Concurrent.newList();
         for (int f = 0; f < 5; f++) {
-            PixelBuffer fb = PixelBuffer.create(W, H);
+            PixelBuffer fb = PixelBuffer.straight(W, H);
             for (int y = 0; y < H; y++) {
                 for (int x = 0; x < W; x++) {
                     int argb = 0xFF008080;   // static teal canvas
@@ -807,7 +807,7 @@ class WebPRoundTripTest {
         // no-op regardless of level. Output must match baseline lossless
         // byte-for-byte at all non-off levels.
         int w = 128, h = 128;
-        PixelBuffer buf = PixelBuffer.create(w, h);
+        PixelBuffer buf = PixelBuffer.straight(w, h);
         buf.fill(0xFF808080);
         StaticImageData image = new StaticImageData(ImageFrame.of(buf));
 
@@ -904,7 +904,7 @@ class WebPRoundTripTest {
      * mix of smooth and non-smooth regions.
      */
     private static @NotNull PixelBuffer buildGradientWithEdges(int w, int h) {
-        PixelBuffer buf = PixelBuffer.create(w, h);
+        PixelBuffer buf = PixelBuffer.straight(w, h);
         for (int y = 0; y < h; y++)
             for (int x = 0; x < w; x++) {
                 int v;
@@ -937,7 +937,7 @@ class WebPRoundTripTest {
         int W = 48, H = 48;
         ConcurrentList<ImageFrame> frames = Concurrent.newList();
         for (int f = 0; f < 3; f++) {
-            PixelBuffer fb = PixelBuffer.create(W, H);
+            PixelBuffer fb = PixelBuffer.straight(W, H);
             for (int y = 0; y < H; y++)
                 for (int x = 0; x < W; x++) {
                     int v = ((x + y + f) * 4) & 0xFF;
@@ -975,7 +975,7 @@ class WebPRoundTripTest {
         // inter-skip on stationary content. Still decodable round-trip.
         ConcurrentList<ImageFrame> frames = Concurrent.newList();
         for (int f = 0; f < 6; f++) {
-            PixelBuffer fb = PixelBuffer.create(32, 32);
+            PixelBuffer fb = PixelBuffer.straight(32, 32);
             for (int y = 0; y < 32; y++)
                 for (int x = 0; x < 32; x++)
                     fb.setPixel(x, y, 0xFF000000 | ((x * 8) << 16) | ((y * 8) << 8));
@@ -1029,7 +1029,7 @@ class WebPRoundTripTest {
         // the "short" branch and produce bit-identical output to explicit 0.
         ConcurrentList<ImageFrame> frames = Concurrent.newList();
         for (int f = 0; f < 6; f++) {
-            PixelBuffer fb = PixelBuffer.create(32, 32);
+            PixelBuffer fb = PixelBuffer.straight(32, 32);
             for (int y = 0; y < 32; y++)
                 for (int x = 0; x < 32; x++)
                     fb.setPixel(x, y, 0xFF000000 | ((x * 8) << 16) | ((y * 8) << 8));
@@ -1071,7 +1071,7 @@ class WebPRoundTripTest {
         // it must reconstruct bit-exactly.
         ConcurrentList<ImageFrame> frames = Concurrent.newList();
         for (int f = 0; f < 3; f++) {
-            PixelBuffer fb = PixelBuffer.create(16, 16);
+            PixelBuffer fb = PixelBuffer.straight(16, 16);
             int phase = f * 40;
             for (int y = 0; y < 16; y++)
                 for (int x = 0; x < 16; x++) {
@@ -1112,7 +1112,7 @@ class WebPRoundTripTest {
     @Test
     @DisplayName("uncompressed ALPH (compression=0) round-trips through our reader")
     void uncompressedAlphaSelfRoundTrip() {
-        PixelBuffer buf = PixelBuffer.create(8, 8);
+        PixelBuffer buf = PixelBuffer.straight(8, 8);
         for (int y = 0; y < 8; y++)
             for (int x = 0; x < 8; x++) {
                 int alpha = (x * 16 + y * 4) & 0xFF;
@@ -1246,7 +1246,7 @@ class WebPRoundTripTest {
         // so the output body should be tiny (a packed-index stream + 15-code palette
         // sub-image). Reports the byte count for tracking vs libwebp's 11,688-byte
         // reference on the real tooltip animation.
-        PixelBuffer buf = PixelBuffer.create(454, 260);
+        PixelBuffer buf = PixelBuffer.straight(454, 260);
         for (int y = 0; y < 260; y++)
             for (int x = 0; x < 454; x++) {
                 int argb;
@@ -1272,7 +1272,7 @@ class WebPRoundTripTest {
         // Odd width (29) exercises the partial-tail-cell branch of the packing loop.
         int W = 29, H = 17;
         int[] colors = { 0x80112233, 0xFF445566, 0x40778899, 0xFFAABBCC };
-        PixelBuffer buf = PixelBuffer.create(W, H);
+        PixelBuffer buf = PixelBuffer.straight(W, H);
         for (int y = 0; y < H; y++)
             for (int x = 0; x < W; x++)
                 buf.setPixel(x, y, colors[(x + 3 * y) & 3]);
@@ -1297,7 +1297,7 @@ class WebPRoundTripTest {
     @Test
     @DisplayName("454x260 tooltip-like VP8L (the problem size from TestLoreMain)")
     void tooltipSized() throws IOException {
-        PixelBuffer buf = PixelBuffer.create(454, 260);
+        PixelBuffer buf = PixelBuffer.straight(454, 260);
         // Approximate the tooltip color distribution: mostly dark purple background,
         // a few bright text colors scattered.
         for (int y = 0; y < 260; y++)

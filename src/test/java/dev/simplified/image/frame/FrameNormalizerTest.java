@@ -41,7 +41,7 @@ class FrameNormalizerTest {
     @DisplayName("the letterbox fill is premultiplied under a premultiplied animation and laid down as given under a straight one")
     void letterboxFollowsTheConvention() {
         Color fill = new Color(0x33, 0x66, 0x99, 0x80);
-        PixelBuffer square = PixelBuffer.create(2, 2);
+        PixelBuffer square = PixelBuffer.straight(2, 2);
         square.fill(0xFFFF0000);
 
         AnimatedImageData premultiplied = FrameNormalizer.normalize(

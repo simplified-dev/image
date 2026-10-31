@@ -291,7 +291,7 @@ class DecodeBudgetTest {
     }
 
     private static @NotNull PixelBuffer solid(int argb) {
-        PixelBuffer pixels = PixelBuffer.create(FRAME_SIDE, FRAME_SIDE);
+        PixelBuffer pixels = PixelBuffer.straight(FRAME_SIDE, FRAME_SIDE);
         pixels.fill(argb);
         return pixels;
     }

@@ -22,7 +22,7 @@ class ImageDataCanvasFramesTest {
     private static final int BLUE = 0xFF0000FF;
 
     private static PixelBuffer filled(int width, int height, int argb) {
-        PixelBuffer buffer = PixelBuffer.create(width, height);
+        PixelBuffer buffer = PixelBuffer.straight(width, height);
         buffer.fill(argb);
         return buffer;
     }
@@ -116,7 +116,7 @@ class ImageDataCanvasFramesTest {
         AnimatedImageData image = canvas(4, 4,
             frame(filled(4, 4, RED), 40, 0, 0, FrameDisposal.DO_NOT_DISPOSE, FrameBlend.SOURCE),
             frame(filled(2, 2, GREEN), 40, 0, 0, FrameDisposal.RESTORE_TO_PREVIOUS, FrameBlend.SOURCE),
-            frame(PixelBuffer.create(1, 1), 40, 3, 3, FrameDisposal.DO_NOT_DISPOSE, FrameBlend.OVER));
+            frame(PixelBuffer.straight(1, 1), 40, 3, 3, FrameDisposal.DO_NOT_DISPOSE, FrameBlend.OVER));
 
         ImageData composed = image.toCanvasFrames();
         assertThat(composed.getFrames().get(1).pixels().getPixel(0, 0), is(GREEN));
@@ -128,7 +128,7 @@ class ImageDataCanvasFramesTest {
     void sourceFrameReplacesItsRectangle() {
         AnimatedImageData image = canvas(4, 4,
             frame(filled(4, 4, RED), 40, 0, 0, FrameDisposal.DO_NOT_DISPOSE, FrameBlend.SOURCE),
-            frame(PixelBuffer.create(2, 2), 40, 1, 1, FrameDisposal.DO_NOT_DISPOSE, FrameBlend.SOURCE));
+            frame(PixelBuffer.straight(2, 2), 40, 1, 1, FrameDisposal.DO_NOT_DISPOSE, FrameBlend.SOURCE));
 
         PixelBuffer second = image.toCanvasFrames().getFrames().getLast().pixels();
         assertThat(second.getPixel(1, 1), is(0));

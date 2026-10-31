@@ -151,7 +151,7 @@ class GifLoopCountTest {
     }
 
     private static @NotNull PixelBuffer fill(int argb) {
-        PixelBuffer pixels = PixelBuffer.create(SIZE, SIZE);
+        PixelBuffer pixels = PixelBuffer.straight(SIZE, SIZE);
         pixels.fill(argb);
         return pixels;
     }

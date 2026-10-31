@@ -211,12 +211,12 @@ class PixelGraphicsTest {
     @Test
     @DisplayName("the rectangle form mirrors when one corner pair is reversed, and not when both are")
     void rectangleFormKeepsItsFlip() {
-        PixelBuffer flipped = PixelBuffer.create(2, 1);
+        PixelBuffer flipped = PixelBuffer.straight(2, 1);
         new PixelGraphics(flipped).drawImage(image(RED, GREEN), 0, 0, 2, 1, 2, 0, 0, 1, null);
         assertThat(flipped.getPixel(0, 0), is(GREEN));
         assertThat(flipped.getPixel(1, 0), is(RED));
 
-        PixelBuffer doubled = PixelBuffer.create(2, 1);
+        PixelBuffer doubled = PixelBuffer.straight(2, 1);
         new PixelGraphics(doubled).drawImage(image(RED, GREEN), 2, 0, 0, 1, 2, 0, 0, 1, null);
         assertThat(doubled.getPixel(0, 0), is(RED));
         assertThat(doubled.getPixel(1, 0), is(GREEN));
@@ -238,7 +238,7 @@ class PixelGraphicsTest {
         BufferedImage red = image(RED, RED, RED, RED);
 
         for (int form = 0; form < 5; form++) {
-            PixelBuffer target = PixelBuffer.create(4, 1);
+            PixelBuffer target = PixelBuffer.straight(4, 1);
             PixelGraphics graphics = new PixelGraphics(target);
             graphics.setClip(1, 0, 2, 1);
 
@@ -321,7 +321,7 @@ class PixelGraphicsTest {
     @Test
     @DisplayName("the clip is read in user space under the current translation")
     void clipFollowsTheTranslation() {
-        PixelBuffer target = PixelBuffer.create(4, 1);
+        PixelBuffer target = PixelBuffer.straight(4, 1);
         PixelGraphics graphics = new PixelGraphics(target);
         graphics.translate(2, 0);
         graphics.setClip(0, 0, 1, 1);
@@ -334,7 +334,7 @@ class PixelGraphicsTest {
     @Test
     @DisplayName("filled and cleared rectangles draw only inside the clip, read under the current translation")
     void rectanglesHonourTheClip() {
-        PixelBuffer target = PixelBuffer.create(6, 1);
+        PixelBuffer target = PixelBuffer.straight(6, 1);
         PixelGraphics graphics = new PixelGraphics(target);
         graphics.translate(1, 0);
         graphics.setClip(1, 0, 2, 1);
@@ -355,7 +355,7 @@ class PixelGraphicsTest {
     @Test
     @DisplayName("lines, ovals and polygons draw only inside the clip")
     void shapesHonourTheClip() {
-        PixelBuffer target = PixelBuffer.create(8, 8);
+        PixelBuffer target = PixelBuffer.straight(8, 8);
         PixelGraphics graphics = new PixelGraphics(target);
         graphics.setClip(0, 0, 4, 4);
         graphics.setColor(new java.awt.Color(RED, true));
@@ -435,7 +435,7 @@ class PixelGraphicsTest {
     @Test
     @DisplayName("copyArea writes only inside the clip")
     void copyAreaHonoursTheClip() {
-        PixelBuffer target = PixelBuffer.create(4, 1);
+        PixelBuffer target = PixelBuffer.straight(4, 1);
         target.setPixel(0, 0, RED);
         target.setPixel(1, 0, RED);
         PixelGraphics graphics = new PixelGraphics(target);
@@ -450,10 +450,10 @@ class PixelGraphicsTest {
     @DisplayName("a clipped scaled draw samples the source as the unclipped one does")
     void clippedScaledDrawSamplesAsUnclipped() {
         BufferedImage source = image(RED, GREEN, BLUE);
-        PixelBuffer unclipped = PixelBuffer.create(5, 1);
+        PixelBuffer unclipped = PixelBuffer.straight(5, 1);
         new PixelGraphics(unclipped).drawImage(source, 0, 0, 5, 1, null);
 
-        PixelBuffer clipped = PixelBuffer.create(5, 1);
+        PixelBuffer clipped = PixelBuffer.straight(5, 1);
         PixelGraphics graphics = new PixelGraphics(clipped);
         graphics.setClip(0, 0, 5, 1);
         graphics.drawImage(source, 0, 0, 5, 1, null);

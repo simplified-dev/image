@@ -43,7 +43,7 @@ import java.util.stream.IntStream;
  * <h2>Alpha convention</h2>
  * <p>
  * Every buffer holds its pixels in one {@link AlphaMode}, fixed by the factory that makes it and
- * reported by {@code alphaMode()}: {@link #create(int, int)} and {@link #ofStraight(int[], int, int)}
+ * reported by {@code alphaMode()}: {@link #straight(int, int)} and {@link #ofStraight(int[], int, int)}
  * answer {@link AlphaMode#STRAIGHT} colour, what every file format stores, {@link #canvas(int, int)} and
  * {@link #ofPremultiplied(int[], int, int)} answer {@link AlphaMode#PREMULTIPLIED} colour, what drawing
  * source-over onto a transparent surface leaves, and {@link #wrap(BufferedImage)} answers the convention
@@ -146,7 +146,7 @@ public class PixelBuffer {
      * @return a new pixel buffer
      * @throws ArithmeticException if {@code width * height} overflows an int
      */
-    public static @NotNull PixelBuffer create(int width, int height) {
+    public static @NotNull PixelBuffer straight(int width, int height) {
         return new PixelBuffer(new int[Math.multiplyExact(width, height)], width, height, true, AlphaMode.STRAIGHT);
     }
 
@@ -1549,9 +1549,9 @@ public class PixelBuffer {
             return switch (mode) {
                 case NORMAL, PREMULTIPLIED, STRAIGHT -> sourceOver(src, dst);
                 case REPLACE -> inTarget(src);
-                case MULTIPLY -> ColorMath.blend(straight(src), dst, mode);
-                case ADD, QUADRATIC_ADD -> blendIn(AlphaMode.PREMULTIPLIED, straight(src), dst, mode);
-                case OVERLAY -> blendIn(AlphaMode.STRAIGHT, straight(src), dst, mode);
+                case MULTIPLY -> ColorMath.blend(asStraight(src), dst, mode);
+                case ADD, QUADRATIC_ADD -> blendIn(AlphaMode.PREMULTIPLIED, asStraight(src), dst, mode);
+                case OVERLAY -> blendIn(AlphaMode.STRAIGHT, asStraight(src), dst, mode);
             };
         }
 
@@ -1569,7 +1569,7 @@ public class PixelBuffer {
          */
         int sourceOver(int src, int dst) {
             if (this.target == AlphaMode.STRAIGHT && this.convertsTarget)
-                return ColorMath.blend(straight(src), dst, BlendMode.STRAIGHT);
+                return ColorMath.blend(asStraight(src), dst, BlendMode.STRAIGHT);
 
             return ColorMath.blend(src, dst, this.source == AlphaMode.PREMULTIPLIED ? BlendMode.PREMULTIPLIED : BlendMode.NORMAL);
         }
@@ -1596,7 +1596,7 @@ public class PixelBuffer {
          * @param src the pixel, as the source holds it
          * @return the pixel as straight colour
          */
-        private int straight(int src) {
+        private int asStraight(int src) {
             return this.convertsSource && this.source == AlphaMode.PREMULTIPLIED ? unpremultiply(src) : src;
         }
 
