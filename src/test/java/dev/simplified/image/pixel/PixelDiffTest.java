@@ -17,8 +17,8 @@ class PixelDiffTest {
         @Test
         @DisplayName("both transparent → transparent")
         void bothTransparent() {
-            PixelBuffer a = PixelBuffer.create(1, 1);
-            PixelBuffer b = PixelBuffer.create(1, 1);
+            PixelBuffer a = PixelBuffer.straight(1, 1);
+            PixelBuffer b = PixelBuffer.straight(1, 1);
             assertThat(PixelDiff.absolute(a, b).getPixel(0, 0), equalTo(ColorMath.TRANSPARENT));
         }
 
@@ -34,7 +34,7 @@ class PixelDiffTest {
         @DisplayName("coverage mismatch → magenta")
         void coverageMismatch() {
             PixelBuffer a = filledOpaque(1, 1, 0x40, 0x80, 0xC0);
-            PixelBuffer b = PixelBuffer.create(1, 1);
+            PixelBuffer b = PixelBuffer.straight(1, 1);
             assertThat(PixelDiff.absolute(a, b).getPixel(0, 0), equalTo(PixelDiff.COVERAGE_MAGENTA));
         }
 
@@ -74,8 +74,8 @@ class PixelDiffTest {
         @Test
         @DisplayName("both transparent → transparent (composite-over-white collapses to identity)")
         void bothTransparent() {
-            PixelBuffer a = PixelBuffer.create(1, 1);
-            PixelBuffer b = PixelBuffer.create(1, 1);
+            PixelBuffer a = PixelBuffer.straight(1, 1);
+            PixelBuffer b = PixelBuffer.straight(1, 1);
             assertThat(PixelDiff.overWhite(a, b).getPixel(0, 0), equalTo(ColorMath.TRANSPARENT));
         }
 
@@ -87,8 +87,8 @@ class PixelDiffTest {
             int rgb = 0xFF; // saturated red component
             int aA = 0x10;
             int aB = 0x14;
-            PixelBuffer a = PixelBuffer.create(1, 1);
-            PixelBuffer b = PixelBuffer.create(1, 1);
+            PixelBuffer a = PixelBuffer.straight(1, 1);
+            PixelBuffer b = PixelBuffer.straight(1, 1);
             a.setPixel(0, 0, ColorMath.pack(aA, rgb, 0, 0));
             b.setPixel(0, 0, ColorMath.pack(aB, rgb, 0, 0));
             int out = PixelDiff.overWhite(a, b).getPixel(0, 0);
@@ -163,8 +163,8 @@ class PixelDiffTest {
         @Test
         @DisplayName("both transparent → transparent")
         void bothTransparent() {
-            PixelBuffer a = PixelBuffer.create(1, 1);
-            PixelBuffer b = PixelBuffer.create(1, 1);
+            PixelBuffer a = PixelBuffer.straight(1, 1);
+            PixelBuffer b = PixelBuffer.straight(1, 1);
             assertThat(PixelDiff.coverage(a, b).getPixel(0, 0), equalTo(ColorMath.TRANSPARENT));
         }
 
@@ -180,14 +180,14 @@ class PixelDiffTest {
         @DisplayName("a-only → magenta")
         void aOnly() {
             PixelBuffer a = filledOpaque(1, 1, 0xFF, 0xFF, 0xFF);
-            PixelBuffer b = PixelBuffer.create(1, 1);
+            PixelBuffer b = PixelBuffer.straight(1, 1);
             assertThat(PixelDiff.coverage(a, b).getPixel(0, 0), equalTo(PixelDiff.COVERAGE_MAGENTA));
         }
 
         @Test
         @DisplayName("b-only → cyan")
         void bOnly() {
-            PixelBuffer a = PixelBuffer.create(1, 1);
+            PixelBuffer a = PixelBuffer.straight(1, 1);
             PixelBuffer b = filledOpaque(1, 1, 0xFF, 0xFF, 0xFF);
             assertThat(PixelDiff.coverage(a, b).getPixel(0, 0), equalTo(PixelDiff.COVERAGE_CYAN));
         }
@@ -220,16 +220,46 @@ class PixelDiffTest {
         @Test
         @DisplayName("result is sized to min(w, h) intersection")
         void intersectionSize() {
-            PixelBuffer a = PixelBuffer.create(4, 6);
-            PixelBuffer b = PixelBuffer.create(5, 3);
+            PixelBuffer a = PixelBuffer.straight(4, 6);
+            PixelBuffer b = PixelBuffer.straight(5, 3);
             PixelBuffer out = PixelDiff.absolute(a, b);
             assertThat(out.width(), equalTo(4));
             assertThat(out.height(), equalTo(3));
         }
     }
 
+    @Nested
+    @DisplayName("alpha convention")
+    class Convention {
+
+        @Test
+        @DisplayName("a premultiplied input is read as the straight colour it stands for, and the map holds straight colour, in every type")
+        void aPremultipliedInputIsReadAsStraight() {
+            // A canvas of partly transparent colour against its own straight form is one picture both
+            // ways round: each diff is what the straight form diffs against itself. Read as held, the
+            // premultiplied colour differs from the straight colour wherever alpha is partial. Every
+            // map is straight colour, whichever convention its inputs hold.
+            PixelBuffer canvas = PixelBuffer.ofPremultiplied(new int[]{ 0x80800000, 0x40102030, 0xFF336699, 0x00000000, 0x01010000, 0xC0603000 }, 3, 2);
+            PixelBuffer straight = canvas.toAlphaMode(AlphaMode.STRAIGHT);
+
+            for (DiffType type : DiffType.values()) {
+                int[] same = PixelDiff.of(straight, straight, type).data();
+                PixelBuffer canvasAgainstStraight = PixelDiff.of(canvas, straight, type);
+                PixelBuffer straightAgainstCanvas = PixelDiff.of(straight, canvas, type);
+                PixelBuffer canvasAgainstItself = PixelDiff.of(canvas, canvas, type);
+
+                assertThat(type + " canvas against straight", canvasAgainstStraight.data(), equalTo(same));
+                assertThat(type + " straight against canvas", straightAgainstCanvas.data(), equalTo(same));
+                assertThat(type + " canvas against itself", canvasAgainstItself.data(), equalTo(same));
+                assertThat(type + " canvas against straight", canvasAgainstStraight.alphaMode(), equalTo(AlphaMode.STRAIGHT));
+                assertThat(type + " straight against canvas", straightAgainstCanvas.alphaMode(), equalTo(AlphaMode.STRAIGHT));
+                assertThat(type + " canvas against itself", canvasAgainstItself.alphaMode(), equalTo(AlphaMode.STRAIGHT));
+            }
+        }
+    }
+
     private static PixelBuffer filledOpaque(int w, int h, int r, int g, int b) {
-        PixelBuffer buf = PixelBuffer.create(w, h);
+        PixelBuffer buf = PixelBuffer.straight(w, h);
         int argb = ColorMath.pack(0xFF, r, g, b);
         buf.fill(argb);
         return buf;

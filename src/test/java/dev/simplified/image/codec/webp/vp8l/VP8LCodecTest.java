@@ -98,14 +98,14 @@ public class VP8LCodecTest {
 
         @Test @DisplayName("2x2 solid red round-trips")
         void solid2x2() {
-            PixelBuffer buf = PixelBuffer.create(2, 2);
+            PixelBuffer buf = PixelBuffer.straight(2, 2);
             buf.fill(0xFFFF0000);
             assertRoundTrips(buf);
         }
 
         @Test @DisplayName("4x4 two colors round-trips")
         void twoColors4x4() {
-            PixelBuffer buf = PixelBuffer.create(4, 4);
+            PixelBuffer buf = PixelBuffer.straight(4, 4);
             for (int y = 0; y < 4; y++)
                 for (int x = 0; x < 4; x++)
                     buf.setPixel(x, y, ((x + y) & 1) == 0 ? 0xFFFF0000 : 0xFF00FF00);
@@ -114,7 +114,7 @@ public class VP8LCodecTest {
 
         @Test @DisplayName("8x8 gradient round-trips")
         void gradient8x8() {
-            PixelBuffer buf = PixelBuffer.create(8, 8);
+            PixelBuffer buf = PixelBuffer.straight(8, 8);
             for (int y = 0; y < 8; y++)
                 for (int x = 0; x < 8; x++)
                     buf.setPixel(x, y, 0xFF000000 | ((x * 32) << 16) | ((y * 32) << 8));
@@ -123,7 +123,7 @@ public class VP8LCodecTest {
 
         @Test @DisplayName("32x32 gradient round-trips (the failing case)")
         void gradient32x32() {
-            PixelBuffer buf = PixelBuffer.create(32, 32);
+            PixelBuffer buf = PixelBuffer.straight(32, 32);
             for (int y = 0; y < 32; y++)
                 for (int x = 0; x < 32; x++)
                     buf.setPixel(x, y, 0xFF000000 | ((x * 8) << 16) | ((y * 8) << 8) | ((x + y) * 4));
@@ -225,7 +225,7 @@ public class VP8LCodecTest {
         void palette1Bpp() {
             // Odd width forces the encoder to handle a partial tail byte where the last
             // packed cell only holds 17 / 8 = 2 leftover indices instead of a full 8.
-            PixelBuffer buf = PixelBuffer.create(17, 5);
+            PixelBuffer buf = PixelBuffer.straight(17, 5);
             for (int y = 0; y < 5; y++)
                 for (int x = 0; x < 17; x++)
                     buf.setPixel(x, y, ((x + y) & 1) == 0 ? 0xFF336699 : 0xFFCC3366);
@@ -234,7 +234,7 @@ public class VP8LCodecTest {
 
         @Test @DisplayName("2 bpp: 4-color stripes pack 4 pixels per byte")
         void palette2Bpp() {
-            PixelBuffer buf = PixelBuffer.create(13, 7);
+            PixelBuffer buf = PixelBuffer.straight(13, 7);
             int[] colors = { 0xFF112233, 0xFF445566, 0xFF778899, 0xFFAABBCC };
             for (int y = 0; y < 7; y++)
                 for (int x = 0; x < 13; x++)
@@ -244,7 +244,7 @@ public class VP8LCodecTest {
 
         @Test @DisplayName("4 bpp: 16-color pattern packs 2 pixels per byte")
         void palette4Bpp() {
-            PixelBuffer buf = PixelBuffer.create(23, 11);
+            PixelBuffer buf = PixelBuffer.straight(23, 11);
             int[] colors = new int[16];
             for (int i = 0; i < 16; i++)
                 colors[i] = 0xFF000000 | (i * 16) << 16 | (i * 8) << 8 | (255 - i * 16);
@@ -256,7 +256,7 @@ public class VP8LCodecTest {
 
         @Test @DisplayName("8 bpp: 200-color spread uses one index per pixel")
         void palette8BppLarge() {
-            PixelBuffer buf = PixelBuffer.create(40, 40);
+            PixelBuffer buf = PixelBuffer.straight(40, 40);
             int[] colors = new int[200];
             for (int i = 0; i < 200; i++)
                 colors[i] = 0xFF000000 | (i * 83 & 0xFF) << 16 | (i * 37 & 0xFF) << 8 | (i * 11 & 0xFF);
@@ -267,7 +267,7 @@ public class VP8LCodecTest {
 
         @Test @DisplayName("boundary: exactly 256 colors still uses the 8 bpp palette path")
         void paletteExactly256Colors() {
-            PixelBuffer buf = PixelBuffer.create(32, 32);
+            PixelBuffer buf = PixelBuffer.straight(32, 32);
             for (int i = 0; i < 256; i++)
                 buf.data()[i] = 0xFF000000 | (i << 16) | (i << 8) | i;
             // Fill the remaining 768 pixels by repeating the 256 unique colors.
@@ -280,7 +280,7 @@ public class VP8LCodecTest {
         void paletteFallbackAt257Colors() {
             // 257 unique colors forces detectPalette to return null - encoder must fall
             // back to the untransformed literal-ARGB path and still round-trip cleanly.
-            PixelBuffer buf = PixelBuffer.create(32, 32);
+            PixelBuffer buf = PixelBuffer.straight(32, 32);
             for (int i = 0; i < 32 * 32; i++) {
                 int c = i % 257;
                 buf.data()[i] = 0xFF000000 | ((c * 3) & 0xFF) << 16 | ((c * 5) & 0xFF) << 8 | (c & 0xFF);
@@ -292,7 +292,7 @@ public class VP8LCodecTest {
         void paletteSingleColor() {
             // Single-entry palette exercises the degenerate paletteSize=1 case: simple-mode
             // prefix codes across every alphabet plus a 1x1 palette sub-image.
-            PixelBuffer buf = PixelBuffer.create(9, 5);
+            PixelBuffer buf = PixelBuffer.straight(9, 5);
             buf.fill(0xFF48ACFF);
             assertRoundTrips(buf);
         }
@@ -303,7 +303,7 @@ public class VP8LCodecTest {
             // encodes ~16 pixels per 32-bit green literal; coded as literals without the
             // palette, every pixel costs ~4 Huffman codes (ARGB). File must land well under 2KB if
             // the palette path is actually firing.
-            PixelBuffer buf = PixelBuffer.create(64, 64);
+            PixelBuffer buf = PixelBuffer.straight(64, 64);
             int[] colors = new int[16];
             for (int i = 0; i < 16; i++)
                 colors[i] = 0xFF000000 | (i * 16) << 16 | (i * 8) << 8 | (255 - i * 16);
@@ -351,14 +351,14 @@ public class VP8LCodecTest {
 
         @Test @DisplayName("solid color: predictor mode 0/1 covers degenerate no-neighbour pixels")
         void predictorSolidColor() {
-            PixelBuffer buf = PixelBuffer.create(24, 24);
+            PixelBuffer buf = PixelBuffer.straight(24, 24);
             buf.fill(0xFF336699);
             assertRoundTripsWithPredictor(buf);
         }
 
         @Test @DisplayName("smooth horizontal gradient: best mode should be 1 (left)")
         void predictorHorizontalGradient() {
-            PixelBuffer buf = PixelBuffer.create(32, 32);
+            PixelBuffer buf = PixelBuffer.straight(32, 32);
             for (int y = 0; y < 32; y++)
                 for (int x = 0; x < 32; x++)
                     buf.setPixel(x, y, 0xFF000000 | (x * 8) << 16 | (x * 8) << 8 | (x * 8));
@@ -367,7 +367,7 @@ public class VP8LCodecTest {
 
         @Test @DisplayName("smooth vertical gradient: best mode should be 2 (top)")
         void predictorVerticalGradient() {
-            PixelBuffer buf = PixelBuffer.create(32, 32);
+            PixelBuffer buf = PixelBuffer.straight(32, 32);
             for (int y = 0; y < 32; y++)
                 for (int x = 0; x < 32; x++)
                     buf.setPixel(x, y, 0xFF000000 | (y * 8) << 16 | (y * 8) << 8 | (y * 8));
@@ -376,7 +376,7 @@ public class VP8LCodecTest {
 
         @Test @DisplayName("diagonal gradient: mixed modes across 8x8 tiles")
         void predictorDiagonalGradient() {
-            PixelBuffer buf = PixelBuffer.create(48, 48);
+            PixelBuffer buf = PixelBuffer.straight(48, 48);
             for (int y = 0; y < 48; y++)
                 for (int x = 0; x < 48; x++) {
                     int v = ((x + y) * 255) / 94;
@@ -387,7 +387,7 @@ public class VP8LCodecTest {
 
         @Test @DisplayName("noisy image: residuals with varied patterns")
         void predictorNoisyImage() {
-            PixelBuffer buf = PixelBuffer.create(40, 40);
+            PixelBuffer buf = PixelBuffer.straight(40, 40);
             java.util.Random rng = new java.util.Random(42);
             for (int i = 0; i < buf.data().length; i++)
                 buf.data()[i] = 0xFF000000 | rng.nextInt(0x01000000);
@@ -398,7 +398,7 @@ public class VP8LCodecTest {
         void predictorNonAlignedDimensions() {
             // 23x17 doesn't divide 8; predictor's last tile column is 7 wide and last row
             // is 1 tall. Tests the boundary loop clipping in scoreTileUnderMode.
-            PixelBuffer buf = PixelBuffer.create(23, 17);
+            PixelBuffer buf = PixelBuffer.straight(23, 17);
             for (int y = 0; y < 17; y++)
                 for (int x = 0; x < 23; x++)
                     buf.setPixel(x, y, 0xFF000000 | ((x * 5 + y * 7) & 0xFF) << 16
@@ -408,7 +408,7 @@ public class VP8LCodecTest {
 
         @Test @DisplayName("1x1 image: predictor degenerates cleanly")
         void predictor1x1() {
-            PixelBuffer buf = PixelBuffer.create(1, 1);
+            PixelBuffer buf = PixelBuffer.straight(1, 1);
             buf.setPixel(0, 0, 0xFF0066CC);
             assertRoundTripsWithPredictor(buf);
         }
@@ -418,7 +418,7 @@ public class VP8LCodecTest {
             // Large smooth gradient - spatial prediction should produce tiny residuals
             // so the predictor-path output must be meaningfully smaller than the
             // literal-path baseline.
-            PixelBuffer buf = PixelBuffer.create(256, 256);
+            PixelBuffer buf = PixelBuffer.straight(256, 256);
             for (int y = 0; y < 256; y++)
                 for (int x = 0; x < 256; x++) {
                     int b = (x + y) / 2;
@@ -436,7 +436,7 @@ public class VP8LCodecTest {
         void publicEncoderPicksPredictor() {
             // 128x128 smooth gradient with > 256 unique colors. Palette not applicable;
             // predictor should beat both literal and color-cache variants.
-            PixelBuffer buf = PixelBuffer.create(128, 128);
+            PixelBuffer buf = PixelBuffer.straight(128, 128);
             for (int y = 0; y < 128; y++)
                 for (int x = 0; x < 128; x++) {
                     int r = x * 2;
@@ -486,7 +486,7 @@ public class VP8LCodecTest {
         @Test @DisplayName("small image + single tile: meta-prefix with 1x1 prefix image")
         void singleTile() {
             // tileBits=9 (512 tile) on 32x32 image -> 1x1 prefix image, 1 group.
-            PixelBuffer buf = PixelBuffer.create(32, 32);
+            PixelBuffer buf = PixelBuffer.straight(32, 32);
             for (int i = 0; i < 1024; i++) buf.data()[i] = 0xFF000000 | (i & 0xFF) << 16 | (i & 0xFF);
             assertRoundTripsMetaHuffman(buf, 9, 0);
         }
@@ -494,7 +494,7 @@ public class VP8LCodecTest {
         @Test @DisplayName("4 tiles: tileBits=5 on 64x64 image splits into 2x2")
         void fourTiles() {
             // 64x64 with tileBits=5 (32-px tiles) -> 2x2 = 4 groups.
-            PixelBuffer buf = PixelBuffer.create(64, 64);
+            PixelBuffer buf = PixelBuffer.straight(64, 64);
             // Quadrant-patterned content so each tile has distinct statistics.
             for (int y = 0; y < 64; y++)
                 for (int x = 0; x < 64; x++) {
@@ -511,7 +511,7 @@ public class VP8LCodecTest {
         void nonAlignedDimensions() {
             // 100x60 with tileBits=5 (32-px tiles) -> ceil(100/32)=4, ceil(60/32)=2 = 8 groups.
             // Rightmost column is 100-96=4 px wide, bottom row is 60-32=28 px tall.
-            PixelBuffer buf = PixelBuffer.create(100, 60);
+            PixelBuffer buf = PixelBuffer.straight(100, 60);
             for (int y = 0; y < 60; y++)
                 for (int x = 0; x < 100; x++)
                     buf.setPixel(x, y, 0xFF000000 | ((x * 3 + y * 5) & 0xFF) << 16
@@ -524,7 +524,7 @@ public class VP8LCodecTest {
             // 4-group image + 10-bit cache. Cache hits are routed through the per-group
             // green alphabet's cache-index region (positions 280..1303), so each group
             // has its own set of cache-index counts and Huffman codes.
-            PixelBuffer buf = PixelBuffer.create(64, 64);
+            PixelBuffer buf = PixelBuffer.straight(64, 64);
             for (int i = 0; i < 64 * 64; i++) {
                 int c = i % 300;
                 buf.data()[i] = 0xFF000000 | ((c * 7) & 0xFF) << 16 | ((c * 11) & 0xFF) << 8 | ((c * 13) & 0xFF);
@@ -539,7 +539,7 @@ public class VP8LCodecTest {
             // starting pixel's group and copy pixels through the boundary without
             // further Huffman reads. Regression gate for the pos/(x,y) advance code
             // in decodePixels + the encoder's token-group assignment.
-            PixelBuffer buf = PixelBuffer.create(64, 64);
+            PixelBuffer buf = PixelBuffer.straight(64, 64);
             for (int y = 0; y < 64; y++)
                 for (int x = 0; x < 64; x++) {
                     // Repeating horizontal pattern so LZ77 can match across boundaries.
@@ -581,7 +581,7 @@ public class VP8LCodecTest {
 
         @Test @DisplayName("subtract-green: smooth natural-image gradient")
         void subtractGreenSmoothContent() {
-            PixelBuffer buf = PixelBuffer.create(64, 64);
+            PixelBuffer buf = PixelBuffer.straight(64, 64);
             for (int y = 0; y < 64; y++)
                 for (int x = 0; x < 64; x++) {
                     int v = (x + y) * 2;
@@ -592,7 +592,7 @@ public class VP8LCodecTest {
 
         @Test @DisplayName("subtract-green: high-contrast edges (residuals can hit 255-adjacent values)")
         void subtractGreenHighContrast() {
-            PixelBuffer buf = PixelBuffer.create(32, 32);
+            PixelBuffer buf = PixelBuffer.straight(32, 32);
             for (int y = 0; y < 32; y++)
                 for (int x = 0; x < 32; x++)
                     buf.setPixel(x, y, (x & 1) == 0 ? 0xFFFF00FF : 0xFF00FF00);
@@ -601,7 +601,7 @@ public class VP8LCodecTest {
 
         @Test @DisplayName("subtract-green: alpha-varying content leaves alpha channel unchanged")
         void subtractGreenAlphaPreserved() {
-            PixelBuffer buf = PixelBuffer.create(16, 16);
+            PixelBuffer buf = PixelBuffer.straight(16, 16);
             for (int y = 0; y < 16; y++)
                 for (int x = 0; x < 16; x++) {
                     int a = ((x + y) * 255 / 30) & 0xFF;
@@ -613,7 +613,7 @@ public class VP8LCodecTest {
 
         @Test @DisplayName("cross-color: natural-image-style R=G+X, B=G+Y correlations")
         void crossColorNaturalCorrelations() {
-            PixelBuffer buf = PixelBuffer.create(48, 48);
+            PixelBuffer buf = PixelBuffer.straight(48, 48);
             for (int y = 0; y < 48; y++)
                 for (int x = 0; x < 48; x++) {
                     int g = (x * 5 + y * 3) & 0xFF;
@@ -630,7 +630,7 @@ public class VP8LCodecTest {
             // Every channel value here is >= 128, and the cross-color transform reads
             // green and red as signed int8, so both are negative to it; a transform that
             // read them as unsigned would surface here as a round-trip mismatch.
-            PixelBuffer buf = PixelBuffer.create(32, 32);
+            PixelBuffer buf = PixelBuffer.straight(32, 32);
             for (int y = 0; y < 32; y++)
                 for (int x = 0; x < 32; x++) {
                     int r = 128 + ((x * 3) & 0x7F);
@@ -643,7 +643,7 @@ public class VP8LCodecTest {
 
         @Test @DisplayName("cross-color: random content (near-zero best coefficients)")
         void crossColorRandomContent() {
-            PixelBuffer buf = PixelBuffer.create(40, 40);
+            PixelBuffer buf = PixelBuffer.straight(40, 40);
             java.util.Random rng = new java.util.Random(17);
             for (int i = 0; i < buf.data().length; i++)
                 buf.data()[i] = 0xFF000000 | (rng.nextInt(0x01000000));
@@ -652,7 +652,7 @@ public class VP8LCodecTest {
 
         @Test @DisplayName("cross-color: 1x1 image degenerates cleanly")
         void crossColor1x1() {
-            PixelBuffer buf = PixelBuffer.create(1, 1);
+            PixelBuffer buf = PixelBuffer.straight(1, 1);
             buf.setPixel(0, 0, 0xFFD24422);
             assertRoundTripsWithMode(buf, VP8LEncoder.TransformMode.CROSS_COLOR);
         }
@@ -662,7 +662,7 @@ public class VP8LCodecTest {
             // Smooth 128x128 natural-image-style gradient where R, G, B all increase
             // together. R - G and B - G produce tight small-magnitude residuals so the
             // output should be strictly smaller than the literal-path baseline.
-            PixelBuffer buf = PixelBuffer.create(128, 128);
+            PixelBuffer buf = PixelBuffer.straight(128, 128);
             for (int y = 0; y < 128; y++)
                 for (int x = 0; x < 128; x++) {
                     int g = Math.clamp(x + y, 0, 255);
@@ -716,7 +716,7 @@ public class VP8LCodecTest {
             // degenerate zero-bit-per-read tree; if the encoder forgets the matching
             // zero-bit emission it writes 256 stray bits and desyncs the rest of the
             // stream.
-            PixelBuffer buf = PixelBuffer.create(16, 16);
+            PixelBuffer buf = PixelBuffer.straight(16, 16);
             for (int i = 0; i < 256; i++)
                 buf.data()[i] = 0xFF000000 | (i << 16) | ((i * 7 & 0xFF) << 8) | (i * 11 & 0xFF);
             assertRoundTripsWithCacheBits(buf, 0);
@@ -729,7 +729,7 @@ public class VP8LCodecTest {
             // Small synthetic with >256 unique colors so the palette path is skipped.
             // Cache should hit heavily because the histogram is tight: 257 distinct
             // colors cycling across 16384 pixels.
-            PixelBuffer buf = PixelBuffer.create(128, 128);
+            PixelBuffer buf = PixelBuffer.straight(128, 128);
             for (int i = 0; i < buf.data().length; i++) {
                 int c = i % 257;
                 buf.data()[i] = 0xFF000000 | ((c * 3) & 0xFF) << 16 | ((c * 5) & 0xFF) << 8 | (c & 0xFF);
@@ -740,7 +740,7 @@ public class VP8LCodecTest {
 
         @Test @DisplayName("cache=8 round-trips a 300-color mandala")
         void cache8Roundtrip() {
-            PixelBuffer buf = PixelBuffer.create(64, 64);
+            PixelBuffer buf = PixelBuffer.straight(64, 64);
             for (int y = 0; y < 64; y++)
                 for (int x = 0; x < 64; x++) {
                     int v = (x * 7 + y * 13) % 300;
@@ -756,7 +756,7 @@ public class VP8LCodecTest {
             // 1 bit from that alphabet (after Huffman), but the cache-enabled header
             // overhead is still paid. Mostly tests the edge where the cache alphabet
             // grows the green alphabet by just 2 symbols.
-            PixelBuffer buf = PixelBuffer.create(32, 32);
+            PixelBuffer buf = PixelBuffer.straight(32, 32);
             for (int i = 0; i < buf.data().length; i++) {
                 int c = i % 300;
                 buf.data()[i] = 0xFF000000 | ((c * 7) & 0xFF) << 16 | ((c * 11) & 0xFF) << 8 | ((c * 13) & 0xFF);
@@ -768,7 +768,7 @@ public class VP8LCodecTest {
         void cache11Roundtrip() {
             // 2048-entry cache is the spec's maximum. Stresses the upper green-alphabet
             // range (positions 280..2327) during freq-count, prefix-code build, and emit.
-            PixelBuffer buf = PixelBuffer.create(64, 64);
+            PixelBuffer buf = PixelBuffer.straight(64, 64);
             for (int i = 0; i < buf.data().length; i++) {
                 int c = i % 500;
                 buf.data()[i] = 0xFF000000 | ((c * 7) & 0xFF) << 16 | ((c * 11) & 0xFF) << 8 | ((c * 13) & 0xFF);
@@ -780,7 +780,7 @@ public class VP8LCodecTest {
         void publicEncoderPicksSmaller() {
             // 128x128 recurring content where color cache must beat literal-only. The
             // public encode() has to choose cache-on as the smallest variant.
-            PixelBuffer buf = PixelBuffer.create(128, 128);
+            PixelBuffer buf = PixelBuffer.straight(128, 128);
             for (int i = 0; i < buf.data().length; i++) {
                 int c = i % 300;
                 buf.data()[i] = 0xFF000000 | ((c * 7) & 0xFF) << 16 | ((c * 11) & 0xFF) << 8 | ((c * 13) & 0xFF);

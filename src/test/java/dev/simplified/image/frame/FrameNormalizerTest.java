@@ -14,8 +14,8 @@ import static org.hamcrest.Matchers.is;
 
 class FrameNormalizerTest {
 
-    private static AnimatedImageData animation(AlphaMode alphaMode, PixelBuffer... frames) {
-        AnimatedImageData.Builder builder = AnimatedImageData.builder().withAlphaMode(alphaMode);
+    private static AnimatedImageData animation(PixelBuffer... frames) {
+        AnimatedImageData.Builder builder = AnimatedImageData.builder();
         for (PixelBuffer frame : frames)
             builder.withFrame(ImageFrame.of(frame, 40));
         return builder.build();
@@ -24,12 +24,12 @@ class FrameNormalizerTest {
     @Test
     @DisplayName("a premultiplied animation is scaled as premultiplied colour, every colour at or under its alpha")
     void scalesPremultipliedFrames() {
-        PixelBuffer halves = PixelBuffer.create(8, 4);
+        PixelBuffer halves = PixelBuffer.canvas(8, 4);
         for (int y = 0; y < 4; y++)
             for (int x = 0; x < 4; x++)
                 halves.setPixel(x, y, 0xFFFF0000);
 
-        AnimatedImageData normalized = FrameNormalizer.normalize(animation(AlphaMode.PREMULTIPLIED, halves, PixelBuffer.create(3, 2)));
+        AnimatedImageData normalized = FrameNormalizer.normalize(animation(halves, PixelBuffer.canvas(3, 2)));
         assertThat(normalized.getAlphaMode(), is(AlphaMode.PREMULTIPLIED));
 
         for (ImageFrame frame : normalized.getFrames())
@@ -41,14 +41,16 @@ class FrameNormalizerTest {
     @DisplayName("the letterbox fill is premultiplied under a premultiplied animation and laid down as given under a straight one")
     void letterboxFollowsTheConvention() {
         Color fill = new Color(0x33, 0x66, 0x99, 0x80);
-        PixelBuffer square = PixelBuffer.create(2, 2);
+        PixelBuffer square = PixelBuffer.straight(2, 2);
         square.fill(0xFFFF0000);
 
         AnimatedImageData premultiplied = FrameNormalizer.normalize(
-            animation(AlphaMode.PREMULTIPLIED, square), 6, 2, FitMode.CONTAIN, false, fill);
+            animation(square.toAlphaMode(AlphaMode.PREMULTIPLIED)), 6, 2, FitMode.CONTAIN, false, fill);
         AnimatedImageData straight = FrameNormalizer.normalize(
-            animation(AlphaMode.STRAIGHT, square), 6, 2, FitMode.CONTAIN, false, fill);
+            animation(square), 6, 2, FitMode.CONTAIN, false, fill);
 
+        assertThat(premultiplied.getAlphaMode(), is(AlphaMode.PREMULTIPLIED));
+        assertThat(straight.getAlphaMode(), is(AlphaMode.STRAIGHT));
         assertThat(Integer.toHexString(premultiplied.getFrames().getFirst().pixels().getPixel(0, 0)), is(Integer.toHexString(0x801A334D)));
         assertThat(Integer.toHexString(straight.getFrames().getFirst().pixels().getPixel(0, 0)), is(Integer.toHexString(0x80336699)));
         assertThat(premultiplied.getFrames().getFirst().pixels().getPixel(2, 0), is(0xFFFF0000));

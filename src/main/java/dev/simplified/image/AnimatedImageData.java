@@ -12,7 +12,8 @@ import dev.simplified.image.pixel.AlphaMode;
 import org.jetbrains.annotations.NotNull;
 
 /**
- * A multi-frame animated image with timing, loop control, and background color metadata.
+ * A multi-frame animated image with timing, loop control, and background color metadata, held in the
+ * convention its frames' buffers hold, every frame agreeing.
  */
 @Getter
 @RequiredArgsConstructor(access = AccessLevel.PRIVATE)
@@ -31,8 +32,6 @@ public class AnimatedImageData implements ImageData {
      * estimate of what any particular player would show
      */
     private final int totalDurationMs;
-    /** the convention every frame's pixels are held in */
-    private final @NotNull AlphaMode alphaMode;
 
     @Override
     public boolean isAnimated() {
@@ -124,7 +123,6 @@ public class AnimatedImageData implements ImageData {
         private int height = -1;
         private @NotNull LoopCount loopCount = LoopCount.Preset.INFINITE;
         private int backgroundColor = 0;
-        private @NotNull AlphaMode alphaMode = AlphaMode.STRAIGHT;
 
         /**
          * Appends a frame to the animation sequence.
@@ -199,20 +197,21 @@ public class AnimatedImageData implements ImageData {
         }
 
         /**
-         * Sets the convention every frame's pixels are held in.
-         * <p>
-         * When not set, the frames hold straight colour.
+         * Builds the animation from the frames given, held in the convention their buffers hold.
          *
-         * @param alphaMode the convention the frames' pixels are held in
-         * @return this builder for chaining
+         * @return the animation
+         * @throws IllegalArgumentException if a frame's buffer holds a convention other than the first frame's
          */
-        public @NotNull Builder withAlphaMode(@NotNull AlphaMode alphaMode) {
-            this.alphaMode = alphaMode;
-            return this;
-        }
-
         public @NotNull AnimatedImageData build() {
             ImageFrame first = this.frames.getFirst();
+            AlphaMode alphaMode = first.pixels().alphaMode();
+
+            for (int index = 1; index < this.frames.size(); index++) {
+                AlphaMode held = this.frames.get(index).pixels().alphaMode();
+                if (held != alphaMode)
+                    throw new IllegalArgumentException("Frame %d holds '%s' colour where the first frame holds '%s'".formatted(index, held, alphaMode));
+            }
+
             int w = this.width > 0 ? this.width : first.pixels().width();
             int h = this.height > 0 ? this.height : first.pixels().height();
             boolean alpha = first.pixels().hasAlpha();
@@ -220,7 +219,7 @@ public class AnimatedImageData implements ImageData {
                 .mapToInt(ImageFrame::delayMs)
                 .sum();
 
-            return new AnimatedImageData(w, h, alpha, this.frames, this.loopCount, this.backgroundColor, totalDuration, this.alphaMode);
+            return new AnimatedImageData(w, h, alpha, this.frames, this.loopCount, this.backgroundColor, totalDuration);
         }
 
     }

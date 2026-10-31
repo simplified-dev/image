@@ -34,6 +34,7 @@ import dev.simplified.image.exception.UnsupportedFormatException;
 import dev.simplified.image.frame.ImageFrame;
 import dev.simplified.image.option.ImageReadOptions;
 import dev.simplified.image.option.ImageWriteOptions;
+import dev.simplified.image.pixel.AlphaMode;
 import dev.simplified.util.StringUtil;
 import dev.simplified.util.SystemUtil;
 import dev.simplified.util.io.ByteArrayDataOutput;
@@ -270,6 +271,10 @@ public class ImageFactory {
 
     /**
      * Wraps multiple {@link BufferedImage} instances as animated image data.
+     * <p>
+     * Each image is wrapped in the convention it holds, as {@link PixelBuffer#wrap(BufferedImage)}
+     * wraps it, and every frame holds the first image's: an image holding the other one is converted
+     * with {@link PixelBuffer#toAlphaMode(AlphaMode)}.
      *
      * @param images the source frames
      * @param delayMs the display duration per frame in milliseconds
@@ -277,9 +282,16 @@ public class ImageFactory {
      */
     public static @NotNull AnimatedImageData fromImages(@NotNull ConcurrentList<BufferedImage> images, int delayMs) {
         AnimatedImageData.Builder builder = AnimatedImageData.builder();
+        AlphaMode alphaMode = null;
 
-        for (BufferedImage image : images)
-            builder.withFrame(ImageFrame.of(PixelBuffer.wrap(image), delayMs));
+        for (BufferedImage image : images) {
+            PixelBuffer pixels = PixelBuffer.wrap(image);
+
+            if (alphaMode == null)
+                alphaMode = pixels.alphaMode();
+
+            builder.withFrame(ImageFrame.of(pixels.toAlphaMode(alphaMode), delayMs));
+        }
 
         return builder.build();
     }

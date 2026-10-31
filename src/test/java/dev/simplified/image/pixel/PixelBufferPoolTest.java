@@ -42,6 +42,22 @@ class PixelBufferPoolTest {
     }
 
     @Test
+    @DisplayName("acquire answers a canvas holding premultiplied colour, fresh and reused")
+    void acquireAnswersACanvas() {
+        PixelBuffer fresh;
+        try (PixelBufferPool.Lease lease = PixelBufferPool.acquire(16, 8)) {
+            fresh = lease.buffer();
+            assertThat(fresh.alphaMode(), equalTo(AlphaMode.PREMULTIPLIED));
+            assertThat(fresh.hasAlpha(), is(true));
+        }
+        try (PixelBufferPool.Lease lease = PixelBufferPool.acquire(16, 8)) {
+            PixelBuffer reused = lease.buffer();
+            assertThat(reused, sameInstance(fresh));
+            assertThat(reused.alphaMode(), equalTo(AlphaMode.PREMULTIPLIED));
+        }
+    }
+
+    @Test
     @DisplayName("acquire rejects non-positive dimensions")
     void acquireRejectsInvalidDimensions() {
         assertThrows(IllegalArgumentException.class, () -> PixelBufferPool.acquire(0, 16));

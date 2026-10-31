@@ -21,6 +21,7 @@ import java.awt.image.ColorModel;
 import java.awt.image.ComponentColorModel;
 import java.awt.image.DataBuffer;
 import java.awt.image.DataBufferInt;
+import java.awt.image.DirectColorModel;
 import java.awt.image.ImageObserver;
 import java.awt.image.Raster;
 import java.awt.image.SinglePixelPackedSampleModel;
@@ -33,16 +34,39 @@ import java.util.stream.IntStream;
 /**
  * A zero-copy wrapper over {@code int[]} ARGB pixel data.
  * <p>
- * For {@link BufferedImage#TYPE_INT_ARGB} images, the backing array is referenced directly without
- * copying. For other image types, pixel data is extracted once into a new array, then accessed
- * without further copies.
+ * {@link #wrap(BufferedImage)} references the backing array of a {@link BufferedImage#TYPE_INT_ARGB} or
+ * {@link BufferedImage#TYPE_INT_ARGB_PRE} image directly without copying; for other image types, pixel
+ * data is extracted once into a new array, then accessed without further copies.
+ * {@link #toBufferedImage()} shares this buffer's array the other way, as an image of the convention the
+ * buffer holds, so wrapping that image answers this buffer's array in this buffer's convention.
+ *
+ * <h2>Alpha convention</h2>
+ * <p>
+ * Every buffer holds its pixels in one {@link AlphaMode}, fixed by the factory that makes it and
+ * reported by {@code alphaMode()}: {@link #straight(int, int)} and {@link #ofStraight(int[], int, int)}
+ * answer {@link AlphaMode#STRAIGHT} colour, what every file format stores, {@link #canvas(int, int)} and
+ * {@link #ofPremultiplied(int[], int, int)} answer {@link AlphaMode#PREMULTIPLIED} colour, what drawing
+ * source-over onto a transparent surface leaves, and {@link #wrap(BufferedImage)} answers the convention
+ * the image holds. {@link #toAlphaMode(AlphaMode)} converts to the other one, and equality counts it:
+ * the same ints held in two conventions are two pictures.
+ * <p>
+ * An operation that reads one buffer reads its convention - {@link #resize}, {@link #applyFxaa()},
+ * {@link #multiplyAlpha}, {@link #invert()} - and a buffer derived from another holds the convention
+ * of the one it is derived from. An operation that reads two honours both: a composite lays its source
+ * in the convention this buffer holds, by the formula the two conventions give
+ * ({@link #blit(PixelBuffer, int, int, BlendMode)} states it), {@link #lerp} mixes its second buffer in
+ * the convention of its first, and {@link #diff} reads both as straight colour. A colour argument, to
+ * {@link #fill(int)} and the {@code fillRect} forms, is straight colour, laid in the convention this
+ * buffer holds. The raw reads and writes - {@link #getPixel}, {@link #setPixel}, {@link #setPixels},
+ * {@link #setRow} and {@code data()} - pass the stored ints as they are, so a caller writing through
+ * them writes in the buffer's convention.
  *
  * <h2>SIMD acceleration</h2>
  * <p>
- * Selected per-pixel methods ({@link #grayscale}, {@link #multiplyAlpha}, {@link #premultiplyAlpha},
- * {@link #lerp}, and {@link #tint}) transparently use the JDK Vector API when the
- * incubator module is resolvable at runtime. To opt in, pass the following flag to the consuming
- * JVM:
+ * Selected per-pixel methods ({@link #grayscale}, {@link #multiplyAlpha} on straight colour,
+ * {@link #toAlphaMode} converting to premultiplied colour, {@link #lerp}, and {@link #tint})
+ * transparently use the JDK Vector API when the incubator module is resolvable at runtime. To opt in,
+ * pass the following flag to the consuming JVM:
  * <pre><code>--add-modules jdk.incubator.vector</code></pre>
  * Without the flag, those methods fall back to a bit-equivalent scalar path - no other action is
  * required to use this library.
@@ -77,6 +101,9 @@ public class PixelBuffer {
     /** Packed ARGB pixel data in row-major order, of length {@code width * height}. */
     private final int @NotNull [] data;
 
+    /** The convention every pixel of {@link #data} is held in, fixed when the buffer is made. */
+    private final @NotNull AlphaMode alphaMode;
+
     /**
      * Optional per-pixel coverage mask owned by this buffer - auxiliary render metadata, excluded from
      * value identity ({@link #equals}/{@link #hashCode}) and never carried by {@link #copy()}. Absent
@@ -85,7 +112,18 @@ public class PixelBuffer {
      */
     private @NotNull Optional<PixelMask> mask = Optional.empty();
 
-    private PixelBuffer(int @NotNull [] data, int width, int height, boolean hasAlpha) {
+    /**
+     * Constructs a buffer over {@code data}, held in {@code alphaMode}. Every caller outside this
+     * package makes one through a factory named for the convention it answers.
+     *
+     * @param data the packed ARGB pixels, not copied
+     * @param width the buffer width in pixels
+     * @param height the buffer height in pixels
+     * @param hasAlpha whether the alpha channel carries meaningful data
+     * @param alphaMode the convention every pixel of {@code data} is held in
+     * @throws IllegalArgumentException if the length of {@code data} is not {@code width * height}
+     */
+    PixelBuffer(int @NotNull [] data, int width, int height, boolean hasAlpha, @NotNull AlphaMode alphaMode) {
         if (data.length != (long) width * height)
             throw new IllegalArgumentException("Pixel array length %d does not match dimensions %dx%d".formatted(data.length, width, height));
 
@@ -93,55 +131,97 @@ public class PixelBuffer {
         this.width = width;
         this.height = height;
         this.hasAlpha = hasAlpha;
+        this.alphaMode = alphaMode;
     }
 
     /**
-     * Creates a blank pixel buffer of the given dimensions, initially filled with transparent black.
-     * No {@link BufferedImage} is allocated.
+     * Creates a blank pixel buffer of the given dimensions holding {@link AlphaMode#STRAIGHT} colour,
+     * initially filled with transparent black. No {@link BufferedImage} is allocated.
+     * <p>
+     * A buffer drawn onto from transparency with a source-over blend holds premultiplied colour, and is
+     * made with {@link #canvas(int, int)} instead.
      *
      * @param width the buffer width in pixels
      * @param height the buffer height in pixels
      * @return a new pixel buffer
      * @throws ArithmeticException if {@code width * height} overflows an int
      */
-    public static @NotNull PixelBuffer create(int width, int height) {
-        return new PixelBuffer(new int[Math.multiplyExact(width, height)], width, height, true);
+    public static @NotNull PixelBuffer straight(int width, int height) {
+        return new PixelBuffer(new int[Math.multiplyExact(width, height)], width, height, true, AlphaMode.STRAIGHT);
     }
 
     /**
-     * Creates a pixel buffer from an existing ARGB pixel array, assuming alpha is present.
+     * Creates a blank canvas of the given dimensions - a pixel buffer holding
+     * {@link AlphaMode#PREMULTIPLIED} colour, initially filled with transparent black, what drawing
+     * source-over onto it from transparency leaves. No {@link BufferedImage} is allocated.
      *
-     * @param pixels the ARGB pixel data (not copied)
+     * @param width the canvas width in pixels
+     * @param height the canvas height in pixels
+     * @return a new canvas
+     * @throws ArithmeticException if {@code width * height} overflows an int
+     */
+    public static @NotNull PixelBuffer canvas(int width, int height) {
+        return new PixelBuffer(new int[Math.multiplyExact(width, height)], width, height, true, AlphaMode.PREMULTIPLIED);
+    }
+
+    /**
+     * Wraps an existing ARGB pixel array holding {@link AlphaMode#STRAIGHT} colour, assuming alpha is
+     * present.
+     *
+     * @param pixels the straight ARGB pixel data (not copied)
      * @param width the image width
      * @param height the image height
      * @return a pixel buffer wrapping the array
+     * @throws IllegalArgumentException if the length of {@code pixels} is not {@code width * height}
      */
-    public static @NotNull PixelBuffer of(int @NotNull [] pixels, int width, int height) {
-        return new PixelBuffer(pixels, width, height, true);
+    public static @NotNull PixelBuffer ofStraight(int @NotNull [] pixels, int width, int height) {
+        return new PixelBuffer(pixels, width, height, true, AlphaMode.STRAIGHT);
     }
 
     /**
-     * Creates a pixel buffer from an existing ARGB pixel array.
+     * Wraps an existing ARGB pixel array holding {@link AlphaMode#STRAIGHT} colour.
      *
-     * @param pixels the ARGB pixel data (not copied)
+     * @param pixels the straight ARGB pixel data (not copied)
      * @param width the image width
      * @param height the image height
      * @param hasAlpha whether the alpha channel carries meaningful data
      * @return a pixel buffer wrapping the array
+     * @throws IllegalArgumentException if the length of {@code pixels} is not {@code width * height}
      */
-    public static @NotNull PixelBuffer of(int @NotNull [] pixels, int width, int height, boolean hasAlpha) {
-        return new PixelBuffer(pixels, width, height, hasAlpha);
+    public static @NotNull PixelBuffer ofStraight(int @NotNull [] pixels, int width, int height, boolean hasAlpha) {
+        return new PixelBuffer(pixels, width, height, hasAlpha, AlphaMode.STRAIGHT);
     }
 
     /**
-     * Wraps the pixel data of a {@link BufferedImage}.
+     * Wraps an existing ARGB pixel array holding {@link AlphaMode#PREMULTIPLIED} colour, alpha present.
      * <p>
-     * {@link BufferedImage#TYPE_INT_ARGB} is the only layout that shares memory with this buffer's
-     * {@code int[]} ARGB store; for that type the backing array is referenced directly (zero-copy).
-     * Every other standard sRGB layout - {@link BufferedImage#TYPE_INT_RGB TYPE_INT_RGB},
-     * {@link BufferedImage#TYPE_INT_BGR TYPE_INT_BGR}, {@link BufferedImage#TYPE_4BYTE_ABGR
-     * TYPE_4BYTE_ABGR}, {@link BufferedImage#TYPE_3BYTE_BGR TYPE_3BYTE_BGR} - is repacked into
-     * ARGB with no colour-space transform, giving a bit-perfect copy of every channel.
+     * A buffer whose alpha carries no data holds the same colour in either convention; one is wrapped
+     * with {@link #ofStraight(int[], int, int, boolean)}.
+     *
+     * @param pixels the premultiplied ARGB pixel data (not copied)
+     * @param width the image width
+     * @param height the image height
+     * @return a pixel buffer wrapping the array
+     * @throws IllegalArgumentException if the length of {@code pixels} is not {@code width * height}
+     */
+    public static @NotNull PixelBuffer ofPremultiplied(int @NotNull [] pixels, int width, int height) {
+        return new PixelBuffer(pixels, width, height, true, AlphaMode.PREMULTIPLIED);
+    }
+
+    /**
+     * Wraps the pixel data of a {@link BufferedImage} in the convention the image holds:
+     * {@link AlphaMode#PREMULTIPLIED} when its colour model holds each colour already scaled by its
+     * alpha, as {@link BufferedImage#isAlphaPremultiplied()} reports, and {@link AlphaMode#STRAIGHT}
+     * otherwise.
+     * <p>
+     * {@link BufferedImage#TYPE_INT_ARGB} and {@link BufferedImage#TYPE_INT_ARGB_PRE TYPE_INT_ARGB_PRE}
+     * are the layouts that share memory with this buffer's {@code int[]} ARGB store; for those the
+     * backing array is referenced directly (zero-copy). Every other standard sRGB layout -
+     * {@link BufferedImage#TYPE_INT_RGB TYPE_INT_RGB}, {@link BufferedImage#TYPE_INT_BGR TYPE_INT_BGR},
+     * {@link BufferedImage#TYPE_4BYTE_ABGR TYPE_4BYTE_ABGR},
+     * {@link BufferedImage#TYPE_4BYTE_ABGR_PRE TYPE_4BYTE_ABGR_PRE},
+     * {@link BufferedImage#TYPE_3BYTE_BGR TYPE_3BYTE_BGR} - is repacked into ARGB with no colour-space
+     * transform, giving a bit-perfect copy of every channel as it is held.
      * <p>
      * Indexed and grayscale layouts - {@link BufferedImage#TYPE_BYTE_INDEXED TYPE_BYTE_INDEXED},
      * {@link BufferedImage#TYPE_BYTE_GRAY TYPE_BYTE_GRAY}, plus the 2-band gray+alpha
@@ -154,29 +234,33 @@ public class PixelBuffer {
      * {@link BufferedImage#getRGB(int, int) getRGB}); bypassing the compositor preserves the
      * raw byte exactly, which is what a GL texture sampler reads from the source PNG.
      * <p>
-     * All other types (alpha-premultiplied, 16-bit RGB, custom 4-band colour models, ...) fall
-     * back to {@code Graphics2D.drawImage} for an sRGB conversion and may lose up to one
-     * least-significant bit per channel at partial alpha due to the compositor's
-     * premultiply/un-premultiply roundtrip.
+     * All other types (16-bit RGB, custom colour models, ...) fall back to {@code Graphics2D.drawImage}
+     * for an sRGB conversion, drawn into an image of the source's convention:
+     * {@link BufferedImage#TYPE_INT_ARGB_PRE TYPE_INT_ARGB_PRE} for a premultiplied one, so its colour is
+     * not divided back to straight colour on the way, and {@link BufferedImage#TYPE_INT_ARGB TYPE_INT_ARGB}
+     * otherwise, which may lose up to one least-significant bit per channel at partial alpha due to the
+     * compositor's premultiply/un-premultiply roundtrip.
      *
      * @param image the source image
-     * @return a pixel buffer wrapping the image data
+     * @return a pixel buffer wrapping the image data, in the convention the image holds
      */
     public static @NotNull PixelBuffer wrap(@NotNull BufferedImage image) {
         int w = image.getWidth();
         int h = image.getHeight();
-        boolean alpha = image.getColorModel().hasAlpha();
 
-        return switch (image.getType()) {
-            case BufferedImage.TYPE_INT_ARGB     -> BufferedImageUnpacker.intArgb(image, w, h, alpha);
-            case BufferedImage.TYPE_INT_RGB      -> BufferedImageUnpacker.intRgb(image, w, h, alpha);
-            case BufferedImage.TYPE_INT_BGR      -> BufferedImageUnpacker.intBgr(image, w, h, alpha);
-            case BufferedImage.TYPE_4BYTE_ABGR   -> BufferedImageUnpacker.fourByteAbgr(image, w, h, alpha);
-            case BufferedImage.TYPE_3BYTE_BGR    -> BufferedImageUnpacker.threeByteBgr(image, w, h, alpha);
-            case BufferedImage.TYPE_BYTE_INDEXED -> BufferedImageUnpacker.indexed(image, w, h, alpha);
-            case BufferedImage.TYPE_BYTE_GRAY    -> BufferedImageUnpacker.grayscale(image, w, h, alpha);
-            default                              -> BufferedImageUnpacker.byColorModel(image, w, h, alpha);
+        int[] pixels = switch (image.getType()) {
+            case BufferedImage.TYPE_INT_ARGB, BufferedImage.TYPE_INT_ARGB_PRE     -> BufferedImageUnpacker.intArgb(image);
+            case BufferedImage.TYPE_INT_RGB                                       -> BufferedImageUnpacker.intRgb(image);
+            case BufferedImage.TYPE_INT_BGR                                       -> BufferedImageUnpacker.intBgr(image);
+            case BufferedImage.TYPE_4BYTE_ABGR, BufferedImage.TYPE_4BYTE_ABGR_PRE -> BufferedImageUnpacker.fourByteAbgr(image, w, h);
+            case BufferedImage.TYPE_3BYTE_BGR                                     -> BufferedImageUnpacker.threeByteBgr(image, w, h);
+            case BufferedImage.TYPE_BYTE_INDEXED                                  -> BufferedImageUnpacker.indexed(image, w, h);
+            case BufferedImage.TYPE_BYTE_GRAY                                     -> BufferedImageUnpacker.grayscale(image, w, h);
+            default                                                               -> BufferedImageUnpacker.byColorModel(image, w, h);
         };
+        AlphaMode alphaMode = image.isAlphaPremultiplied() ? AlphaMode.PREMULTIPLIED : AlphaMode.STRAIGHT;
+
+        return new PixelBuffer(pixels, w, h, image.getColorModel().hasAlpha(), alphaMode);
     }
 
     // --- bounds queries ---
@@ -328,7 +412,7 @@ public class PixelBuffer {
         int[] result = new int[w * h];
         for (int row = 0; row < h; row++)
             System.arraycopy(this.data, (y + row) * this.width + x, result, row * w, w);
-        return new PixelBuffer(result, w, h, this.hasAlpha);
+        return new PixelBuffer(result, w, h, this.hasAlpha, this.alphaMode);
     }
 
     /**
@@ -366,52 +450,37 @@ public class PixelBuffer {
     }
 
     /**
-     * Resamples this buffer, holding {@link AlphaMode#STRAIGHT} colour, to the given dimensions using
-     * the specified filter.
-     *
-     * @param w the target width
-     * @param h the target height
-     * @param filter the resampling filter
-     * @return a new pixel buffer of size {@code w x h}
-     * @throws IllegalArgumentException if {@code w} or {@code h} is not positive
-     * @see #resize(int, int, Resample, AlphaMode)
-     */
-    public @NotNull PixelBuffer resize(int w, int h, @NotNull Resample filter) {
-        return resize(w, h, filter, AlphaMode.STRAIGHT);
-    }
-
-    /**
      * Resamples this buffer to the given dimensions using the specified filter, mixing its pixels in
-     * the convention they are held in.
+     * the convention this buffer holds.
      * <p>
      * {@link Resample#NEAREST} copies pixels and reads no convention. {@link Resample#BILINEAR}
      * samples the pixel array directly: {@link AlphaMode#STRAIGHT} colour is weighted by its alpha
      * for the mix and divided back after, so a transparent neighbour adds no colour, and
      * {@link AlphaMode#PREMULTIPLIED} colour mixes as it is held, each channel at or under its alpha.
-     * {@link Resample#BICUBIC} draws through {@link Graphics2D} with high-quality hints, declaring the
-     * raster in the same convention. The result holds the convention this buffer holds and carries
-     * alpha only when this buffer does. A buffer whose alpha carries no data mixes every channel as it
-     * is held under either convention, which hold the same colour there.
+     * {@link Resample#AREA} weighs and sums each footprint the same way. {@link Resample#BICUBIC}
+     * draws through {@link Graphics2D} with high-quality hints, declaring the raster in the same
+     * convention. The result holds the convention this buffer holds and carries alpha only when this
+     * buffer does. A buffer whose alpha carries no data mixes every channel as it is held under either
+     * convention, which hold the same colour there.
      *
      * @param w the target width
      * @param h the target height
      * @param filter the resampling filter
-     * @param alphaMode the convention this buffer's pixels are held in
      * @return a new pixel buffer of size {@code w x h}
      * @throws IllegalArgumentException if {@code w} or {@code h} is not positive
      */
-    public @NotNull PixelBuffer resize(int w, int h, @NotNull Resample filter, @NotNull AlphaMode alphaMode) {
+    public @NotNull PixelBuffer resize(int w, int h, @NotNull Resample filter) {
         if (w <= 0 || h <= 0)
             throw new IllegalArgumentException("Resize dimensions must be positive, got %dx%d".formatted(w, h));
 
         if (filter == Resample.BICUBIC)
-            return resizeBicubic(w, h, alphaMode);
+            return resizeBicubic(w, h);
         if (filter == Resample.AREA)
-            return resizeArea(w, h, alphaMode);
+            return resizeArea(w, h);
 
         int[] result = new int[w * h];
         boolean nearest = filter == Resample.NEAREST;
-        boolean weighByAlpha = this.hasAlpha && alphaMode == AlphaMode.STRAIGHT;
+        boolean weighByAlpha = this.hasAlpha && this.alphaMode == AlphaMode.STRAIGHT;
         forEachRow(0, h, y -> {
             int outRow = y * w;
             if (nearest) {
@@ -427,13 +496,13 @@ public class PixelBuffer {
                     float srcX = ((x + 0.5f) * this.width) / w - 0.5f;
                     sampleBilinear(this.data, this.width, this.height, false, srcX, srcY, weighByAlpha, sample, 0);
                     result[outRow + x] = this.hasAlpha
-                        ? packSample(sample[0], sample[1], sample[2], sample[3], alphaMode)
+                        ? packSample(sample[0], sample[1], sample[2], sample[3], this.alphaMode)
                         : ColorMath.pack(channel(sample[0], 255), channel(sample[1], 255), channel(sample[2], 255), channel(sample[3], 255));
                 }
             }
         });
 
-        return new PixelBuffer(result, w, h, this.hasAlpha);
+        return new PixelBuffer(result, w, h, this.hasAlpha, this.alphaMode);
     }
 
     /**
@@ -441,17 +510,16 @@ public class PixelBuffer {
      * covers, each weighted by the share of it covered along each axis - the footprint narrowed to the
      * one pixel {@link Resample#NEAREST} reads along an axis that does not shrink. Straight colour is
      * weighted by its alpha and divided back after; premultiplied colour, and every channel of a buffer
-     * whose alpha carries no data, sums as it is held.
+     * whose alpha carries no data, sums as it is held. The result holds this buffer's convention.
      *
      * @param w the target width
      * @param h the target height
-     * @param alphaMode the convention this buffer's pixels are held in
      * @return a new pixel buffer of size {@code w x h}, carrying alpha only when this buffer does
      */
-    private @NotNull PixelBuffer resizeArea(int w, int h, @NotNull AlphaMode alphaMode) {
+    private @NotNull PixelBuffer resizeArea(int w, int h) {
         AreaAxis columns = AreaAxis.of(this.width, w);
         AreaAxis rows = AreaAxis.of(this.height, h);
-        boolean weighByAlpha = this.hasAlpha && alphaMode == AlphaMode.STRAIGHT;
+        boolean weighByAlpha = this.hasAlpha && this.alphaMode == AlphaMode.STRAIGHT;
         int[] result = new int[w * h];
 
         forEachRow(0, h, y -> {
@@ -465,12 +533,12 @@ public class PixelBuffer {
                         accumulateTap(this.data[sourceRow + columns.first[x] + i], rowWeight * columns.weights[x][i], weighByAlpha, sum, 0);
                 }
                 result[y * w + x] = this.hasAlpha
-                    ? packSample(sum[0], sum[1], sum[2], sum[3], alphaMode)
+                    ? packSample(sum[0], sum[1], sum[2], sum[3], this.alphaMode)
                     : ColorMath.pack(channel(sum[0], 255), channel(sum[1], 255), channel(sum[2], 255), channel(sum[3], 255));
             }
         });
 
-        return new PixelBuffer(result, w, h, this.hasAlpha);
+        return new PixelBuffer(result, w, h, this.hasAlpha, this.alphaMode);
     }
 
     /**
@@ -524,17 +592,16 @@ public class PixelBuffer {
 
     /**
      * Resamples this buffer bicubically through {@link Graphics2D}, declaring the source and target
-     * rasters in {@code alphaMode} so the interpolation weights colour by alpha exactly once. A buffer
-     * whose alpha carries no data is drawn as straight colour whatever {@code alphaMode} says, the two
-     * conventions holding the same colour there.
+     * rasters in the convention this buffer holds so the interpolation weights colour by alpha exactly
+     * once. A buffer whose alpha carries no data is drawn as straight colour whatever convention it
+     * holds, the two holding the same colour there. The result holds this buffer's convention.
      *
      * @param w the target width
      * @param h the target height
-     * @param alphaMode the convention this buffer's pixels are held in
      * @return a new pixel buffer of size {@code w x h}, carrying alpha only when this buffer does
      */
-    private @NotNull PixelBuffer resizeBicubic(int w, int h, @NotNull AlphaMode alphaMode) {
-        int type = this.hasAlpha && alphaMode == AlphaMode.PREMULTIPLIED
+    private @NotNull PixelBuffer resizeBicubic(int w, int h) {
+        int type = this.hasAlpha && this.alphaMode == AlphaMode.PREMULTIPLIED
             ? BufferedImage.TYPE_INT_ARGB_PRE
             : BufferedImage.TYPE_INT_ARGB;
         BufferedImage src = new BufferedImage(this.width, this.height, type);
@@ -552,7 +619,7 @@ public class PixelBuffer {
             g.dispose();
         }
 
-        return new PixelBuffer(((DataBufferInt) dst.getRaster().getDataBuffer()).getData(), w, h, this.hasAlpha);
+        return new PixelBuffer(((DataBufferInt) dst.getRaster().getDataBuffer()).getData(), w, h, this.hasAlpha, this.alphaMode);
     }
 
     /**
@@ -572,7 +639,7 @@ public class PixelBuffer {
                 result[dstRow + (w - 1 - x)] = this.data[srcRow + x];
         });
 
-        return new PixelBuffer(result, w, h, this.hasAlpha);
+        return new PixelBuffer(result, w, h, this.hasAlpha, this.alphaMode);
     }
 
     /**
@@ -591,7 +658,7 @@ public class PixelBuffer {
                 result[(w - 1 - x) * h + y] = this.data[row + x];
         });
 
-        return new PixelBuffer(result, h, w, this.hasAlpha);
+        return new PixelBuffer(result, h, w, this.hasAlpha, this.alphaMode);
     }
 
     /**
@@ -610,7 +677,7 @@ public class PixelBuffer {
                 result[x * h + (h - 1 - y)] = this.data[row + x];
         });
 
-        return new PixelBuffer(result, h, w, this.hasAlpha);
+        return new PixelBuffer(result, h, w, this.hasAlpha, this.alphaMode);
     }
 
     /**
@@ -630,23 +697,30 @@ public class PixelBuffer {
     // --- color operations ---
 
     /**
-     * Fills the entire buffer with the given ARGB colour. Discards any existing content.
+     * Fills the entire buffer with the given colour, laid in the convention this buffer holds.
+     * Discards any existing content.
+     * <p>
+     * The colour is straight colour. A buffer holding {@link AlphaMode#PREMULTIPLIED} colour takes it
+     * premultiplied, each channel rounded once as {@link #toAlphaMode(AlphaMode)} rounds it - a canvas
+     * filled with {@code F0100010} holds {@code F00F000F} - and a buffer holding
+     * {@link AlphaMode#STRAIGHT} colour takes it as given.
      *
-     * @param argb the fill colour
+     * @param argb the fill colour, straight
      */
     public void fill(int argb) {
-        Arrays.fill(this.data, argb);
+        Arrays.fill(this.data, Pairing.colour(this).inTarget(argb));
     }
 
     /**
-     * Fills a rectangular region with the given ARGB colour. Out-of-bounds areas are silently
-     * clipped; each row is written via {@link Arrays#fill}.
+     * Fills a rectangular region with the given colour, laid in the convention this buffer holds as
+     * {@link #fill(int)} lays it. Out-of-bounds areas are silently clipped; each row is written via
+     * {@link Arrays#fill}.
      *
      * @param x the left edge
      * @param y the top edge
      * @param w the rectangle width
      * @param h the rectangle height
-     * @param argb the fill colour
+     * @param argb the fill colour, straight
      */
     public void fillRect(int x, int y, int w, int h, int argb) {
         int x0 = Math.max(0, x);
@@ -656,44 +730,49 @@ public class PixelBuffer {
 
         if (x0 >= x1 || y0 >= y1) return;
 
+        int held = Pairing.colour(this).inTarget(argb);
         forEachRow(y0, y1, row -> {
             int offset = row * this.width;
-            Arrays.fill(this.data, offset + x0, offset + x1, argb);
+            Arrays.fill(this.data, offset + x0, offset + x1, held);
         });
     }
 
     /**
-     * Composites a rectangle of one colour onto this buffer with the given blend mode. Out-of-bounds
-     * areas are silently clipped, as {@link #fillRect(int, int, int, int, int)} clips them, and a
-     * rectangle of no width or height lays nothing.
+     * Composites a rectangle of one colour onto this buffer with the given blend mode, in the
+     * convention this buffer holds. Out-of-bounds areas are silently clipped, as
+     * {@link #fillRect(int, int, int, int, int)} clips them, and a rectangle of no width or height lays
+     * nothing.
      * <p>
-     * Each covered pixel becomes {@link ColorMath#blend(int, int, BlendMode)} of {@code argb} over it,
-     * the blend {@link #blit(PixelBuffer, int, int, BlendMode)} lays each pixel of an image with, so
-     * the rectangle lays what a blit of a one-pixel image holding {@code argb}, its alpha carrying
-     * data, lays at each pixel it covers. {@link BlendMode#REPLACE} is the one mode the two part on:
-     * it writes {@code argb} whatever its alpha, as {@link #fillRect(int, int, int, int, int)} does,
-     * where a blit discards a source pixel of alpha {@code 0}.
+     * The colour is straight colour, and each covered pixel takes what
+     * {@link #blit(PixelBuffer, int, int, BlendMode)} of a straight one-pixel image holding it lays
+     * there: {@link BlendMode#NORMAL} composites source-over by its own formula onto premultiplied
+     * colour or a buffer whose alpha carries no data, and by {@link BlendMode#STRAIGHT}'s onto straight
+     * colour whose alpha does - over a transparent pixel of a canvas, {@code F0100010} becomes
+     * {@code F00F000F} - and {@link BlendMode#ADD}, {@link BlendMode#MULTIPLY}, {@link BlendMode#OVERLAY}
+     * and {@link BlendMode#QUADRATIC_ADD} read each pixel in the convention their formula takes.
+     * {@link BlendMode#REPLACE} is the one mode the two part on: it writes the colour in this buffer's
+     * convention whatever its alpha, as {@link #fillRect(int, int, int, int, int)} does, where a blit
+     * discards a source pixel of alpha {@code 0}.
+     * <p>
+     * {@link BlendMode#PREMULTIPLIED} and {@link BlendMode#STRAIGHT} name the convention a source holds,
+     * which a colour argument, straight by contract, has no buffer to say, so a fill refuses them.
      * <p>
      * Fast paths are taken where they lay what the blend lays: under {@link BlendMode#REPLACE}, and
-     * for an opaque colour under a source-over mode, one whose {@code isSourceOver()} answers
-     * {@code true}, each row is written via {@link Arrays#fill}; under every other mode a colour of
-     * alpha {@code 0} returns at once.
-     * <p>
-     * The buffer carries no alpha convention and this reads none, as a blit reads none: the mode
-     * states how the colour and each pixel are read. On a buffer holding premultiplied colour,
-     * {@link BlendMode#NORMAL} lays a straight colour and leaves premultiplied colour - over a
-     * transparent pixel, {@code F0100010} becomes {@code F00F000F} - and
-     * {@link BlendMode#PREMULTIPLIED} lays a colour already premultiplied. On a buffer holding
-     * straight colour, {@link BlendMode#STRAIGHT} lays a straight colour and leaves straight colour.
+     * for an opaque colour under {@link BlendMode#NORMAL}, each row is written via {@link Arrays#fill};
+     * under every other mode a colour of alpha {@code 0} returns at once.
      *
      * @param x the left edge
      * @param y the top edge
      * @param w the rectangle width
      * @param h the rectangle height
-     * @param argb the fill colour
+     * @param argb the fill colour, straight
      * @param mode the blend mode to composite the colour with
+     * @throws IllegalArgumentException if {@code mode} is {@link BlendMode#PREMULTIPLIED} or {@link BlendMode#STRAIGHT}
      */
     public void fillRect(int x, int y, int w, int h, int argb, @NotNull BlendMode mode) {
+        if (mode == BlendMode.PREMULTIPLIED || mode == BlendMode.STRAIGHT)
+            throw new IllegalArgumentException("A fill colour is straight colour and takes 'NORMAL', not '%s'".formatted(mode));
+
         int alpha = ColorMath.alpha(argb);
         if (mode == BlendMode.REPLACE || alpha == 0xFF && mode.isSourceOver()) {
             fillRect(x, y, w, h, argb);
@@ -708,10 +787,11 @@ public class PixelBuffer {
 
         if (x0 >= x1 || y0 >= y1) return;
 
+        Pairing pairing = Pairing.colour(this);
         forEachRow(y0, y1, row -> {
             int offset = row * this.width;
             for (int i = offset + x0; i < offset + x1; i++)
-                this.data[i] = ColorMath.blend(argb, this.data[i], mode);
+                this.data[i] = pairing.lay(argb, this.data[i], mode);
         });
     }
 
@@ -723,70 +803,69 @@ public class PixelBuffer {
     }
 
     /**
-     * Inverts the RGB channels of every pixel in place, preserving alpha.
+     * Inverts the colour of every pixel in place, preserving alpha, in the convention this buffer
+     * holds.
+     * <p>
+     * Each channel of a {@link AlphaMode#STRAIGHT} pixel becomes {@code 255 - c}. Each channel of a
+     * {@link AlphaMode#PREMULTIPLIED} pixel becomes {@code alpha - c}, the premultiplied form of its
+     * straight colour inverted; a channel above its alpha, which no premultiplied pixel holds, becomes
+     * {@code 0}. A buffer whose alpha carries no data is read as opaque, and inverts as straight colour
+     * in either convention.
      */
     public void invert() {
-        forEachRow(0, this.height, y -> {
-            int rowOff = y * this.width;
-            int rowEnd = rowOff + this.width;
-            for (int i = rowOff; i < rowEnd; i++)
-                this.data[i] ^= 0x00FFFFFF;
-        });
-    }
+        boolean fromAlpha = this.hasAlpha && this.alphaMode == AlphaMode.PREMULTIPLIED;
 
-    /**
-     * Multiplies every pixel's alpha channel by the given factor in place.
-     * <p>
-     * The factor is clamped to {@code [0, 1]}. RGB channels are left untouched. Note that the
-     * {@link #hasAlpha()} flag is not changed by this call; callers that begin with an opaque
-     * buffer and want the result to report meaningful alpha should re-wrap the pixel array with
-     * {@link #of(int[], int, int, boolean)}.
-     *
-     * @param factor the alpha multiplier, clamped to {@code [0, 1]}
-     */
-    public void multiplyAlpha(float factor) {
-        float clamped = Math.clamp(factor, 0f, 1f);
-        if (clamped == 1f) return;
-        forEachRow(0, this.height, y -> PixelVector.multiplyAlpha(this.data, y * this.width, this.width, clamped));
-    }
-
-    /**
-     * Premultiplies each pixel's RGB channels by its alpha in place.
-     * <p>
-     * Required for correct filtering, resampling, or compositing with libraries that expect
-     * premultiplied inputs.
-     */
-    public void premultiplyAlpha() {
-        forEachRow(0, this.height, y -> PixelVector.premultiply(this.data, y * this.width, this.width));
-    }
-
-    /**
-     * Un-premultiplies each pixel's RGB channels in place, dividing by alpha.
-     * <p>
-     * Inverse of {@link #premultiplyAlpha()}: each channel is divided back and rounded to nearest, a
-     * tie rounding up, so every premultiplied pixel becomes the straight pixel
-     * {@link #premultiplyAlpha()} takes back to it exactly. A pixel at alpha 0 or 255 is left as it
-     * is, and a channel above its alpha, which no premultiplied pixel holds, is held at 255.
-     */
-    public void unpremultiplyAlpha() {
         forEachRow(0, this.height, y -> {
             int rowOff = y * this.width;
             int rowEnd = rowOff + this.width;
             for (int i = rowOff; i < rowEnd; i++) {
                 int p = this.data[i];
+                if (!fromAlpha) {
+                    this.data[i] = p ^ 0x00FFFFFF;
+                    continue;
+                }
+
                 int a = (p >>> 24) & 0xFF;
-                if (a == 0xFF || a == 0) continue;
-                int half = a >> 1;
-                int r = Math.min(255, (((p >>> 16) & 0xFF) * 255 + half) / a);
-                int g = Math.min(255, (((p >>> 8) & 0xFF) * 255 + half) / a);
-                int b = Math.min(255, ((p & 0xFF) * 255 + half) / a);
+                int r = Math.max(0, a - ((p >>> 16) & 0xFF));
+                int g = Math.max(0, a - ((p >>> 8) & 0xFF));
+                int b = Math.max(0, a - (p & 0xFF));
                 this.data[i] = (a << 24) | (r << 16) | (g << 8) | b;
             }
         });
     }
 
     /**
-     * Multiplies every pixel's RGB channels by the given tint, preserving alpha.
+     * Multiplies every pixel's alpha by the given factor in place, in the convention this buffer
+     * holds.
+     * <p>
+     * The factor is clamped to {@code [0, 1]}. On {@link AlphaMode#STRAIGHT} colour the RGB channels
+     * are left untouched, the colour standing at full strength whatever its alpha. On
+     * {@link AlphaMode#PREMULTIPLIED} colour each channel is scaled with alpha, each rounded once, so
+     * every colour stays at or under its alpha.
+     * <p>
+     * A buffer whose alpha carries no data is scaled the same way by the convention it holds, and the
+     * {@link #hasAlpha()} flag is not changed by this call: a straight one keeps its colour, and a
+     * premultiplied one still reads as opaque with every channel scaled by the factor, so it shows
+     * darker. Either holds a valid pixel of its convention at the scaled alpha, so a caller that begins
+     * with an opaque buffer and wants the result to report meaningful alpha wraps its pixel array again
+     * with {@link #ofStraight(int[], int, int)} or {@link #ofPremultiplied(int[], int, int)}, by the
+     * convention it holds.
+     *
+     * @param factor the alpha multiplier, clamped to {@code [0, 1]}
+     */
+    public void multiplyAlpha(float factor) {
+        float clamped = Math.clamp(factor, 0f, 1f);
+        if (clamped == 1f) return;
+
+        switch (this.alphaMode) {
+            case STRAIGHT -> forEachRow(0, this.height, y -> PixelVector.multiplyAlpha(this.data, y * this.width, this.width, clamped));
+            case PREMULTIPLIED -> forEachRow(0, this.height, y -> PixelVector.multiplyPremultiplied(this.data, y * this.width, this.width, clamped));
+        }
+    }
+
+    /**
+     * Multiplies every pixel's RGB channels by the given tint, preserving alpha. Each channel is scaled
+     * alone, which holds in either convention, and the result holds this buffer's convention.
      *
      * @param argbTint the packed ARGB tint colour
      * @return a new tinted pixel buffer with the same dimensions
@@ -803,14 +882,15 @@ public class PixelBuffer {
 
         forEachRow(0, h, y -> PixelVector.tint(src, result, y * w, w, tr, tg, tb));
 
-        return of(result, w, h);
+        return new PixelBuffer(result, w, h, true, this.alphaMode);
     }
 
     // --- compositing ---
 
     /**
-     * Composites the source buffer onto this buffer at the given origin using standard source-over
-     * alpha compositing.
+     * Composites the source buffer onto this buffer at the given origin source-over, laying it in the
+     * convention this buffer holds by the formula the two buffers' conventions give, as
+     * {@link #blit(PixelBuffer, int, int, BlendMode)} states.
      *
      * @param source the source buffer
      * @param dx the destination x origin
@@ -822,11 +902,35 @@ public class PixelBuffer {
 
     /**
      * Composites the source buffer onto this buffer at the given origin using the specified blend
-     * mode. Out-of-bounds pixels are silently clipped.
+     * mode, laying it in the convention this buffer holds. Out-of-bounds pixels are silently clipped,
+     * and a source pixel of alpha {@code 0} lays nothing.
      * <p>
-     * Fast paths are taken when {@code mode} {@linkplain BlendMode#isSourceOver() is source-over}:
-     * opaque sources use a per-row {@link System#arraycopy}; alpha sources inline the fully-opaque and
-     * fully-transparent short-circuits.
+     * The formula comes from the conventions the two buffers hold, and the mode says which kind:
+     * <ul>
+     *     <li><b>Source-over</b> - {@link BlendMode#NORMAL}, {@link BlendMode#PREMULTIPLIED} and
+     *     {@link BlendMode#STRAIGHT} are one mode in a composite. A straight source lays onto
+     *     premultiplied colour by {@code NORMAL}'s formula, rounded once as a GPU blends a straight
+     *     texel, and a premultiplied source by {@code PREMULTIPLIED}'s. A straight source lays onto
+     *     straight colour by {@code STRAIGHT}'s, and a premultiplied source is divided back to straight
+     *     colour first.</li>
+     *     <li><b>{@link BlendMode#REPLACE}</b> - each source pixel is written in this buffer's
+     *     convention, converted as {@link #toAlphaMode(AlphaMode)} converts it where the source holds
+     *     the other one.</li>
+     *     <li><b>The other four</b> read the source as straight colour, a premultiplied one divided
+     *     back, and each pixel of this buffer in the convention their formula takes, converted there
+     *     and back where it is held in the other: {@link BlendMode#ADD} and
+     *     {@link BlendMode#QUADRATIC_ADD} add to premultiplied colour and {@link BlendMode#OVERLAY} reads
+     *     straight colour. {@link BlendMode#MULTIPLY} scales each channel and keeps alpha, which holds in
+     *     either convention, so it reads the pixel as held.</li>
+     * </ul>
+     * A buffer whose alpha carries no data holds the same colour in either convention, so none of its
+     * pixels is converted, and a source laid over one source-over lays as over premultiplied colour,
+     * the buffer counting as opaque. {@link ColorMath#blend(int, int, BlendMode)} applies each mode's own
+     * formula to raw ints, for a caller writing pixels itself.
+     * <p>
+     * Fast paths are taken under a source-over mode: a source whose alpha carries no data is copied a
+     * row at a time with {@link System#arraycopy}, and an opaque source pixel, the same int in either
+     * convention, is copied.
      *
      * @param source the source buffer
      * @param dx the destination x origin
@@ -852,6 +956,8 @@ public class PixelBuffer {
             return;
         }
 
+        Pairing pairing = Pairing.of(source, this);
+
         if (sourceOver) {
             forEachRow(srcY0, srcY1, y -> {
                 int srcRow = y * source.width;
@@ -865,7 +971,7 @@ public class PixelBuffer {
                         continue;
                     }
                     int dstIdx = dstRow + x;
-                    this.data[dstIdx] = ColorMath.blend(src, this.data[dstIdx], mode);
+                    this.data[dstIdx] = pairing.sourceOver(src, this.data[dstIdx]);
                 }
             });
             return;
@@ -878,14 +984,15 @@ public class PixelBuffer {
                 int src = source.data[srcRow + x];
                 if (ColorMath.alpha(src) == 0) continue;
                 int dstIdx = dstRow + x;
-                this.data[dstIdx] = ColorMath.blend(src, this.data[dstIdx], mode);
+                this.data[dstIdx] = pairing.lay(src, this.data[dstIdx], mode);
             }
         });
     }
 
     /**
      * Composites the source buffer onto this buffer at the given origin, rescaling to the specified
-     * width and height using nearest-neighbor sampling with source-over alpha compositing.
+     * width and height using nearest-neighbor sampling, source-over in the convention this buffer
+     * holds as {@link #blit(PixelBuffer, int, int, BlendMode)} states.
      *
      * @param source the source buffer
      * @param dx the destination x origin
@@ -899,12 +1006,13 @@ public class PixelBuffer {
 
     /**
      * Composites the source buffer onto this buffer at the given origin, rescaling to the specified
-     * width and height using nearest-neighbor sampling and the specified blend mode. Out-of-bounds
-     * pixels are silently clipped.
+     * width and height using nearest-neighbor sampling and the specified blend mode, each sampled pixel
+     * laid in the convention this buffer holds as {@link #blit(PixelBuffer, int, int, BlendMode)}
+     * states. Out-of-bounds pixels are silently clipped.
      * <p>
      * A downscale keeps one source pixel per output pixel and skips the rest. To average them instead,
      * as scaling a supersampled render down needs, pass {@link Resample#AREA} to
-     * {@link #blitScaled(PixelBuffer, int, int, int, int, BlendMode, Resample, AlphaMode)}.
+     * {@link #blitScaled(PixelBuffer, int, int, int, int, BlendMode, Resample)}.
      *
      * @param source the source buffer
      * @param dx the destination x origin
@@ -922,6 +1030,7 @@ public class PixelBuffer {
         if (x0 >= x1 || y0 >= y1) return;
 
         int[] columns = sourceColumns(x0, x1, source.width, dw);
+        Pairing pairing = Pairing.of(source, this);
 
         if (source.width >= dw) {
             forEachRow(y0, y1, y -> {
@@ -933,16 +1042,16 @@ public class PixelBuffer {
                     int src = source.data[sy * source.width + sx];
                     if (ColorMath.alpha(src) == 0) continue;
                     int dstIdx = dstRow + dx + x;
-                    this.data[dstIdx] = ColorMath.blend(src, this.data[dstIdx], mode);
+                    this.data[dstIdx] = pairing.lay(src, this.data[dstIdx], mode);
                 }
             });
             return;
         }
 
         // Magnifying, each run of columns reading one texel is decided once from that texel's own
-        // alpha: skipped at 0, filled where the blend answers the texel whatever lies beneath it, and
-        // otherwise blended pixel by pixel, each pixel reading the texel afresh because a source may
-        // hold this buffer's pixel array.
+        // alpha: skipped at 0, filled where the composite answers the texel, in this buffer's
+        // convention, whatever lies beneath it, and otherwise laid pixel by pixel, each pixel reading
+        // the texel afresh because a source may hold this buffer's pixel array.
         forEachRow(y0, y1, y -> {
             int dstRow = (dy + y) * this.width;
             int sy = (y * source.height) / dh;
@@ -958,7 +1067,7 @@ public class PixelBuffer {
                 if (sa == 0) continue;
 
                 if (mode == BlendMode.REPLACE || sa == 0xFF && mode.isSourceOver()) {
-                    Arrays.fill(this.data, dstRow + dx + x, dstRow + dx + end, src);
+                    Arrays.fill(this.data, dstRow + dx + x, dstRow + dx + end, pairing.inTarget(src));
                     continue;
                 }
 
@@ -966,7 +1075,7 @@ public class PixelBuffer {
                     int texel = source.data[srcIdx];
                     if (ColorMath.alpha(texel) == 0) continue;
                     int dstIdx = dstRow + dx + i;
-                    this.data[dstIdx] = ColorMath.blend(texel, this.data[dstIdx], mode);
+                    this.data[dstIdx] = pairing.lay(texel, this.data[dstIdx], mode);
                 }
             }
         });
@@ -979,9 +1088,10 @@ public class PixelBuffer {
      * <p>
      * {@link Resample#NEAREST} lays down what
      * {@link #blitScaled(PixelBuffer, int, int, int, int, BlendMode)} lays down; any other filter
-     * resamples the source with {@link #resize(int, int, Resample, AlphaMode)} and lays the result down
-     * with {@link #blit(PixelBuffer, int, int, BlendMode)}. {@link Resample#AREA} is the filter for
-     * scaling a supersampled render down: every source pixel counts toward the output.
+     * resamples the source with {@link #resize(int, int, Resample)}, in the convention the source
+     * holds, and lays the result down with {@link #blit(PixelBuffer, int, int, BlendMode)}, in the
+     * convention this buffer holds. {@link Resample#AREA} is the filter for scaling a supersampled
+     * render down: every source pixel counts toward the output.
      *
      * @param source the source buffer
      * @param dx the destination x origin
@@ -990,17 +1100,16 @@ public class PixelBuffer {
      * @param dh the destination height
      * @param mode the blend mode to use for compositing
      * @param filter the resampling filter
-     * @param alphaMode the convention the source's pixels are held in
      */
     public void blitScaled(@NotNull PixelBuffer source, int dx, int dy, int dw, int dh, @NotNull BlendMode mode,
-                           @NotNull Resample filter, @NotNull AlphaMode alphaMode) {
+                           @NotNull Resample filter) {
         if (filter == Resample.NEAREST) {
             blitScaled(source, dx, dy, dw, dh, mode);
             return;
         }
 
         if (dw <= 0 || dh <= 0) return;
-        blit(source.resize(dw, dh, filter, alphaMode), dx, dy, mode);
+        blit(source.resize(dw, dh, filter), dx, dy, mode);
     }
 
     /**
@@ -1008,10 +1117,12 @@ public class PixelBuffer {
      * to the specified width and height using nearest-neighbor sampling and the specified blend mode.
      * Out-of-bounds pixels are silently clipped and the source is left unmodified.
      * <p>
-     * Lays down exactly what {@link #applyFxaa(AlphaMode)} on the source followed by
+     * Lays down exactly what {@link #applyFxaa()} on the source followed by
      * {@link #blitScaled(PixelBuffer, int, int, int, int, BlendMode)} lays down, filtering only the
-     * source pixels the rescale reads: each one is the pixel FXAA writes there, read from the
-     * unfiltered source, so a downscale filters a fraction of the source and never copies it.
+     * source pixels the rescale reads: each one is the pixel FXAA writes there, in the convention the
+     * source holds, read from the unfiltered source, so a downscale filters a fraction of the source
+     * and never copies it. Each filtered pixel is laid in the convention this buffer holds, as
+     * {@link #blit(PixelBuffer, int, int, BlendMode)} states.
      * <p>
      * A composite of many rows splits them across a fork-join pool - the calling worker's own when it
      * is called on one - so a single composite handed to a pool still spreads its filtering over the
@@ -1023,10 +1134,9 @@ public class PixelBuffer {
      * @param dw the destination width
      * @param dh the destination height
      * @param mode the blend mode to use for compositing
-     * @param alphaMode the convention the source's pixels are held in
      * @throws IllegalArgumentException if {@code source} holds this buffer's pixel array
      */
-    public void blitScaledFxaa(@NotNull PixelBuffer source, int dx, int dy, int dw, int dh, @NotNull BlendMode mode, @NotNull AlphaMode alphaMode) {
+    public void blitScaledFxaa(@NotNull PixelBuffer source, int dx, int dy, int dw, int dh, @NotNull BlendMode mode) {
         if (source.data == this.data)
             throw new IllegalArgumentException("Source must hold a pixel array other than the target's");
 
@@ -1041,7 +1151,9 @@ public class PixelBuffer {
         int srcW = source.width;
         int srcH = source.height;
         boolean forceAlpha = !source.hasAlpha;
+        AlphaMode alphaMode = source.alphaMode;
         int[] columns = sourceColumns(x0, x1, srcW, dw);
+        Pairing pairing = Pairing.of(source, this);
 
         forEachRowAcrossPool(y0, y1, y -> {
             float[] samples = new float[8];
@@ -1058,14 +1170,15 @@ public class PixelBuffer {
                 }
                 if (ColorMath.alpha(src) == 0) continue;
                 int dstIdx = dstRow + dx + x;
-                this.data[dstIdx] = ColorMath.blend(src, this.data[dstIdx], mode);
+                this.data[dstIdx] = pairing.lay(src, this.data[dstIdx], mode);
             }
         });
     }
 
     /**
      * Tints the source buffer and composites it onto this buffer at the given origin using the
-     * specified blend mode.
+     * specified blend mode, the tinted source holding the source's convention and laid in this
+     * buffer's as {@link #blit(PixelBuffer, int, int, BlendMode)} states.
      *
      * @param source the source buffer
      * @param dx the destination x origin
@@ -1085,7 +1198,7 @@ public class PixelBuffer {
      * Delegates to {@link PixelDiff#of(PixelBuffer, PixelBuffer, DiffType)}. The receiver is the
      * {@code a} (left-side / reference) argument and {@code other} is the {@code b} (right-side /
      * candidate) argument - see {@link DiffType} for per-mode pixel semantics and the meaning of
-     * the directional shifts.
+     * the directional shifts. Both are read as straight colour, a premultiplied one converted first.
      * <p>
      * The result is sized to the intersection of the two buffers
      * ({@code min(this.width, other.width) × min(this.height, other.height)}). Out-of-canvas
@@ -1103,8 +1216,10 @@ public class PixelBuffer {
     /**
      * Creates a new pixel buffer by linearly interpolating between two buffers per pixel.
      * <p>
-     * Each ARGB channel is blended independently. When the two buffers have different dimensions,
-     * the result uses the minimum width and height.
+     * Each ARGB channel is blended independently, as it is held, once both buffers hold the
+     * convention {@code a} holds: a {@code b} holding the other one is first converted with
+     * {@link #toAlphaMode(AlphaMode)}. When the two buffers have different dimensions, the result uses
+     * the minimum width and height. The result holds the convention {@code a} holds.
      *
      * @param a the source buffer (alpha = 0)
      * @param b the target buffer (alpha = 1)
@@ -1117,28 +1232,18 @@ public class PixelBuffer {
         int width = Math.min(a.width, b.width);
         int height = Math.min(a.height, b.height);
         int[] result = new int[width * height];
+        PixelBuffer other = b.toAlphaMode(a.alphaMode);
 
         forEachRow(0, height, y ->
-            PixelVector.lerp(a.data, y * a.width, b.data, y * b.width, result, y * width, width, blend, inverse));
+            PixelVector.lerp(a.data, y * a.width, other.data, y * other.width, result, y * width, width, blend, inverse));
 
-        return PixelBuffer.of(result, width, height, a.hasAlpha || b.hasAlpha);
+        return new PixelBuffer(result, width, height, a.hasAlpha || b.hasAlpha, a.alphaMode);
     }
 
     // --- filters ---
 
     /**
-     * Applies FXAA post-processing in place to pixels holding straight colour, smoothing aliased
-     * edges.
-     * <p>
-     * Equivalent to {@link #applyFxaa(AlphaMode)} with {@link AlphaMode#STRAIGHT}, the convention a
-     * decoded image holds.
-     */
-    public void applyFxaa() {
-        this.applyFxaa(AlphaMode.STRAIGHT);
-    }
-
-    /**
-     * Applies FXAA post-processing in place to pixels held in the given alpha convention, smoothing
+     * Applies FXAA post-processing in place, in the alpha convention this buffer holds, smoothing
      * aliased edges.
      * <p>
      * Uses luma-based edge detection with bilinear sampling along detected edge directions.
@@ -1148,18 +1253,17 @@ public class PixelBuffer {
      * A smoothed pixel is the mean of two bilinear samples taken along the edge. Both mix colour in
      * proportion to alpha, so a transparent neighbour takes its share of the mix with no coverage and
      * no colour - it dilutes the coverage and leaves the colour the coverage carries untouched - and
-     * the mean is written back in the convention the pixels arrived in, each channel rounded once.
+     * the mean is written back in the convention the buffer holds, each channel rounded once.
      * <p>
      * Edge detection reads the luma of each pixel's colour carried by its alpha in either convention.
      * A premultiplied pixel holds that colour rounded, which at low alpha can turn the direction a
      * smoothed pixel is sampled along, so the two conventions agree on one picture only to within
      * that rounding. A buffer whose alpha carries no data is read as opaque.
-     *
-     * @param alphaMode the convention this buffer's pixels are held in
      */
-    public void applyFxaa(@NotNull AlphaMode alphaMode) {
+    public void applyFxaa() {
         int[] source = this.data.clone();
         boolean forceAlpha = !this.hasAlpha;
+        AlphaMode alphaMode = this.alphaMode;
 
         IntStream.range(1, this.height - 1).parallel().forEach(y -> {
             float[] samples = new float[8];
@@ -1324,20 +1428,210 @@ public class PixelBuffer {
     // --- conversion ---
 
     /**
-     * Returns a new pixel buffer with a cloned pixel array.
+     * Returns a new pixel buffer with a cloned pixel array, in the convention this buffer holds.
      *
      * @return an independent copy of this buffer
      */
     public @NotNull PixelBuffer copy() {
-        return new PixelBuffer(this.data.clone(), this.width, this.height, this.hasAlpha);
+        return new PixelBuffer(this.data.clone(), this.width, this.height, this.hasAlpha, this.alphaMode);
     }
 
     /**
-     * Creates a {@link BufferedImage} backed by this buffer's pixel array (zero copy).
+     * Returns this buffer's pixels held in the given convention - this buffer itself when it already
+     * holds it, otherwise a converted copy, which carries no mask.
+     * <p>
+     * Premultiplying scales each colour channel by its alpha, {@code (c * a + 127) / 255}, rounding half
+     * up. Un-premultiplying divides each back, {@code (c * 255 + a / 2) / a}, rounding to nearest with a
+     * tie rounding up, so every premultiplied pixel becomes the straight pixel that premultiplies back
+     * to it exactly; a pixel at alpha {@code 0} or {@code 255} is left as it is, and a channel above its
+     * alpha, which no premultiplied pixel holds, is held at {@code 255}. Each conversion rounds once, so
+     * a straight pixel taken to premultiplied colour and back can land a level or more from where it
+     * started at low alpha.
+     * <p>
+     * A buffer whose alpha carries no data holds the same colour in either convention: it answers a new
+     * buffer sharing this buffer's pixel array under the asked convention, no pixel changed.
+     *
+     * @param alphaMode the convention to hold the pixels in
+     * @return this buffer, or a buffer holding its pixels in {@code alphaMode}
+     */
+    public @NotNull PixelBuffer toAlphaMode(@NotNull AlphaMode alphaMode) {
+        if (this.alphaMode == alphaMode)
+            return this;
+
+        if (!this.hasAlpha)
+            return new PixelBuffer(this.data, this.width, this.height, false, alphaMode);
+
+        int[] converted = this.data.clone();
+
+        switch (alphaMode) {
+            case PREMULTIPLIED -> forEachRow(0, this.height, y -> PixelVector.premultiply(converted, y * this.width, this.width));
+            case STRAIGHT -> forEachRow(0, this.height, y -> unpremultiply(converted, y * this.width, this.width));
+        }
+
+        return new PixelBuffer(converted, this.width, this.height, true, alphaMode);
+    }
+
+    /**
+     * Divides each colour channel of a run of premultiplied pixels back by its alpha in place, as
+     * {@link #toAlphaMode(AlphaMode)} states.
+     *
+     * @param pixels the pixels
+     * @param offset the index of the first pixel of the run
+     * @param length the number of pixels in the run
+     */
+    private static void unpremultiply(int @NotNull [] pixels, int offset, int length) {
+        for (int i = offset; i < offset + length; i++)
+            pixels[i] = unpremultiply(pixels[i]);
+    }
+
+    /**
+     * Divides each colour channel of one premultiplied pixel back by its alpha, as
+     * {@link #toAlphaMode(AlphaMode)} states.
+     *
+     * @param argb the premultiplied pixel
+     * @return the straight pixel
+     */
+    private static int unpremultiply(int argb) {
+        int a = (argb >>> 24) & 0xFF;
+        if (a == 0xFF || a == 0) return argb;
+
+        int half = a >> 1;
+        int r = Math.min(255, (((argb >>> 16) & 0xFF) * 255 + half) / a);
+        int g = Math.min(255, (((argb >>> 8) & 0xFF) * 255 + half) / a);
+        int b = Math.min(255, ((argb & 0xFF) * 255 + half) / a);
+        return (a << 24) | (r << 16) | (g << 8) | b;
+    }
+
+    /**
+     * How a composite or a colour fill reads the pixels it lays and the pixels it lays them onto,
+     * settled once per call from the conventions the two sides hold, as
+     * {@link #blit(PixelBuffer, int, int, BlendMode)} states. A side's pixels are converted only where
+     * its alpha carries data; a colour argument is straight colour whose alpha always does.
+     *
+     * @param source the convention the laid pixels, or the colour, are held in
+     * @param target the convention the buffer laid onto holds
+     * @param convertsSource whether a laid pixel is converted where a formula reads the other convention
+     * @param convertsTarget whether a pixel laid onto is converted where a formula reads the other convention
+     */
+    private record Pairing(@NotNull AlphaMode source, @NotNull AlphaMode target, boolean convertsSource, boolean convertsTarget) {
+
+        /**
+         * Pairs a source buffer with the buffer it is laid onto.
+         *
+         * @param source the buffer laid
+         * @param target the buffer laid onto
+         * @return the pairing
+         */
+        static @NotNull Pairing of(@NotNull PixelBuffer source, @NotNull PixelBuffer target) {
+            return new Pairing(source.alphaMode, target.alphaMode, source.hasAlpha, target.hasAlpha);
+        }
+
+        /**
+         * Pairs a colour argument, straight colour, with the buffer it is filled into.
+         *
+         * @param target the buffer filled
+         * @return the pairing
+         */
+        static @NotNull Pairing colour(@NotNull PixelBuffer target) {
+            return new Pairing(AlphaMode.STRAIGHT, target.alphaMode, true, target.hasAlpha);
+        }
+
+        /**
+         * Lays one pixel of the source over one pixel of the target with the given mode, by the
+         * formula the two conventions give.
+         *
+         * @param src the laid pixel, as the source holds it, of alpha above {@code 0}
+         * @param dst the pixel laid onto, as the target holds it
+         * @param mode the blend mode
+         * @return the pixel the target takes, in its convention
+         */
+        int lay(int src, int dst, @NotNull BlendMode mode) {
+            return switch (mode) {
+                case NORMAL, PREMULTIPLIED, STRAIGHT -> sourceOver(src, dst);
+                case REPLACE -> inTarget(src);
+                case MULTIPLY -> ColorMath.blend(asStraight(src), dst, mode);
+                case ADD, QUADRATIC_ADD -> blendIn(AlphaMode.PREMULTIPLIED, asStraight(src), dst, mode);
+                case OVERLAY -> blendIn(AlphaMode.STRAIGHT, asStraight(src), dst, mode);
+            };
+        }
+
+        /**
+         * Lays one pixel of the source over one pixel of the target source-over: by
+         * {@link BlendMode#STRAIGHT}'s formula for the source read as straight colour onto straight
+         * colour whose alpha carries data, and otherwise by {@link BlendMode#NORMAL}'s for a straight
+         * source and {@link BlendMode#PREMULTIPLIED}'s for a premultiplied one. A target whose alpha
+         * carries no data counts as opaque, which premultiplied colour and straight colour alike are, and
+         * its alpha byte feeds only the alpha laid.
+         *
+         * @param src the laid pixel, as the source holds it
+         * @param dst the pixel laid onto, as the target holds it
+         * @return the pixel the target takes, in its convention
+         */
+        int sourceOver(int src, int dst) {
+            if (this.target == AlphaMode.STRAIGHT && this.convertsTarget)
+                return ColorMath.blend(asStraight(src), dst, BlendMode.STRAIGHT);
+
+            return ColorMath.blend(src, dst, this.source == AlphaMode.PREMULTIPLIED ? BlendMode.PREMULTIPLIED : BlendMode.NORMAL);
+        }
+
+        /**
+         * Holds one pixel of the source in the target's convention, converting it where the two differ.
+         *
+         * @param src the pixel, as the source holds it
+         * @return the pixel in the target's convention
+         */
+        int inTarget(int src) {
+            if (!this.convertsSource || this.source == this.target)
+                return src;
+
+            return switch (this.target) {
+                case PREMULTIPLIED -> PixelVector.premultiply(src);
+                case STRAIGHT -> unpremultiply(src);
+            };
+        }
+
+        /**
+         * Reads one pixel of the source as straight colour, dividing a premultiplied one back.
+         *
+         * @param src the pixel, as the source holds it
+         * @return the pixel as straight colour
+         */
+        private int asStraight(int src) {
+            return this.convertsSource && this.source == AlphaMode.PREMULTIPLIED ? unpremultiply(src) : src;
+        }
+
+        /**
+         * Blends a straight source pixel over a target pixel held in the convention the formula reads,
+         * converting the target pixel into it and the result back where the target holds the other.
+         *
+         * @param working the convention the formula reads the target pixel in
+         * @param src the laid pixel, as straight colour
+         * @param dst the pixel laid onto, as the target holds it
+         * @param mode the blend mode
+         * @return the pixel the target takes, in its convention
+         */
+        private int blendIn(@NotNull AlphaMode working, int src, int dst, @NotNull BlendMode mode) {
+            if (!this.convertsTarget || this.target == working)
+                return ColorMath.blend(src, dst, mode);
+
+            return switch (working) {
+                case PREMULTIPLIED -> unpremultiply(ColorMath.blend(src, PixelVector.premultiply(dst), mode));
+                case STRAIGHT -> PixelVector.premultiply(ColorMath.blend(src, unpremultiply(dst), mode));
+            };
+        }
+
+    }
+
+    /**
+     * Creates a {@link BufferedImage} backed by this buffer's pixel array (zero copy), in the convention
+     * this buffer holds.
      * <p>
      * The returned image shares the same {@code int[]} as this buffer, so edits made through either
      * API (pixel buffer or {@link Graphics2D}) are immediately visible from the other without a
-     * flush step.
+     * flush step. A buffer holding {@link AlphaMode#STRAIGHT} colour answers a
+     * {@link BufferedImage#TYPE_INT_ARGB} image and one holding {@link AlphaMode#PREMULTIPLIED} colour
+     * a {@link BufferedImage#TYPE_INT_ARGB_PRE} image, so Java2D and ImageIO read the colour the pixels
+     * stand for - ImageIO writing a premultiplied image's straight colour to a file.
      *
      * @return a buffered image sharing this buffer's pixel array
      */
@@ -1347,10 +1641,18 @@ public class PixelBuffer {
         SinglePixelPackedSampleModel sm = new SinglePixelPackedSampleModel(
             DataBuffer.TYPE_INT, this.width, this.height, masks
         );
+        ColorModel model = switch (this.alphaMode) {
+            case STRAIGHT -> ColorModel.getRGBdefault();
+            case PREMULTIPLIED -> new DirectColorModel(
+                ColorSpace.getInstance(ColorSpace.CS_sRGB), 32,
+                masks[0], masks[1], masks[2], masks[3],
+                true, DataBuffer.TYPE_INT
+            );
+        };
         return new BufferedImage(
-            ColorModel.getRGBdefault(),
+            model,
             Raster.createWritableRaster(sm, db, null),
-            false,
+            model.isAlphaPremultiplied(),
             null
         );
     }
@@ -1401,7 +1703,7 @@ public class PixelBuffer {
      * Each body reads and writes only the target pixels its own index owns, and otherwise reads only
      * a source no body writes, so the bodies commute and either schedule writes the same bytes. A
      * composite whose source holds the target's own pixel array breaks that: {@code blit(this, ...)},
-     * or a {@link PixelGraphics} drawing the target's own {@link #toBufferedImage()}, whose array
+     * or a {@link PixelGraphics} drawing its target's own {@link #toBufferedImage()}, whose array
      * {@link #wrap(BufferedImage)} shares rather than copies, reads pixels other rows write, and
      * writes bytes that depend on the order its rows run in under either schedule.
      *

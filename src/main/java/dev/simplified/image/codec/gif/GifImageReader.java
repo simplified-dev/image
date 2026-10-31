@@ -264,7 +264,7 @@ public class GifImageReader implements ImageReader {
             return frame.pixels();
 
         budget.claim(width, height);
-        PixelBuffer canvas = PixelBuffer.create(width, height);
+        PixelBuffer canvas = PixelBuffer.straight(width, height);
         canvas.setPixels(frame.offsetX(), frame.offsetY(), frame.width(), frame.height(), frame.pixels().data(), 0, frame.width());
         return canvas;
     }

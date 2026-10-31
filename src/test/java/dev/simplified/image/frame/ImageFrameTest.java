@@ -14,7 +14,7 @@ class ImageFrameTest {
     @Test
     @DisplayName("of(pixels) produces a zero-delay whole-canvas frame that replaces the one before it")
     void ofPixelsDefaults() {
-        PixelBuffer pixels = PixelBuffer.create(2, 2);
+        PixelBuffer pixels = PixelBuffer.straight(2, 2);
         ImageFrame frame = ImageFrame.of(pixels);
         assertThat(frame.pixels(), sameInstance(pixels));
         assertThat(frame.delayMs(), equalTo(0));
@@ -27,7 +27,7 @@ class ImageFrameTest {
     @Test
     @DisplayName("of(pixels, delayMs) produces a timed whole-canvas frame that replaces the one before it")
     void ofPixelsDelayDefaults() {
-        PixelBuffer pixels = PixelBuffer.create(2, 2);
+        PixelBuffer pixels = PixelBuffer.straight(2, 2);
         ImageFrame frame = ImageFrame.of(pixels, 40);
         assertThat(frame.pixels(), sameInstance(pixels));
         assertThat(frame.delayMs(), equalTo(40));
@@ -40,7 +40,7 @@ class ImageFrameTest {
     @Test
     @DisplayName("the six-argument of keeps the disposal and blend it is given")
     void ofFullKeepsDisposalAndBlend() {
-        PixelBuffer pixels = PixelBuffer.create(2, 2);
+        PixelBuffer pixels = PixelBuffer.straight(2, 2);
         ImageFrame frame = ImageFrame.of(pixels, 40, 1, 2, FrameDisposal.NONE, FrameBlend.OVER);
         assertThat(frame.disposal(), equalTo(FrameDisposal.NONE));
         assertThat(frame.blend(), equalTo(FrameBlend.OVER));
@@ -49,14 +49,14 @@ class ImageFrameTest {
     @Test
     @DisplayName("compact constructor rejects negative delayMs")
     void rejectsNegativeDelay() {
-        PixelBuffer pixels = PixelBuffer.create(1, 1);
+        PixelBuffer pixels = PixelBuffer.straight(1, 1);
         assertThrows(IllegalArgumentException.class, () -> new ImageFrame(pixels, -1, 0, 0, FrameDisposal.NONE, FrameBlend.SOURCE));
     }
 
     @Test
     @DisplayName("delegating accessors return pixel buffer dimensions")
     void delegatingAccessors() {
-        ImageFrame frame = ImageFrame.of(PixelBuffer.create(5, 7));
+        ImageFrame frame = ImageFrame.of(PixelBuffer.straight(5, 7));
         assertThat(frame.width(), equalTo(5));
         assertThat(frame.height(), equalTo(7));
         assertThat(frame.hasAlpha(), equalTo(true));
@@ -65,7 +65,7 @@ class ImageFrameTest {
     @Test
     @DisplayName("withers update one component at a time")
     void witherIndependence() {
-        PixelBuffer pixels = PixelBuffer.create(1, 1);
+        PixelBuffer pixels = PixelBuffer.straight(1, 1);
         ImageFrame base = ImageFrame.of(pixels, 50);
 
         ImageFrame delayed = base.withDelayMs(100);

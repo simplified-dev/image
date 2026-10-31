@@ -74,7 +74,7 @@ public class TgaImageReader implements ImageReader {
             decodeRle(data, pos, pixels, width, height, bpp, hasAlpha, topDown);
         }
 
-        return StaticImageData.of(PixelBuffer.of(pixels, width, height, hasAlpha));
+        return StaticImageData.of(PixelBuffer.ofStraight(pixels, width, height, hasAlpha));
     }
 
     private static void decodeRaw(byte @NotNull [] data, int pos, int @NotNull [] pixels, int width, int height, int bpp, boolean hasAlpha, boolean topDown) {

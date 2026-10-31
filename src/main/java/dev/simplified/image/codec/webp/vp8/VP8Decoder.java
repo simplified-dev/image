@@ -600,7 +600,7 @@ public final class VP8Decoder {
         );
 
         if (captureSlot != null) captureSlot[0] = s;
-        return PixelBuffer.of(pixels, width, height);
+        return PixelBuffer.ofStraight(pixels, width, height);
     }
 
     // ──────────────────────────────────────────────────────────────────────

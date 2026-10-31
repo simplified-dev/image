@@ -18,6 +18,11 @@ import org.jetbrains.annotations.NotNull;
  * the mid-grey baseline means {@code a} exceeded {@code b} on that channel; for {@link #coverage}
  * magenta marks an {@code a}-only pixel and cyan marks a {@code b}-only pixel. Caller-defined
  * orientation - typically {@code a} is the reference image and {@code b} is the candidate.
+ * <p>
+ * Every colour comparison reads both inputs as straight colour, an input held in
+ * {@link AlphaMode#PREMULTIPLIED} converted with {@link PixelBuffer#toAlphaMode(AlphaMode)} first, so a
+ * premultiplied picture and its straight form diff as one picture. {@link #coverage} reads alpha alone,
+ * which both conventions hold alike.
  *
  * <p>The {@link #of(PixelBuffer, PixelBuffer, DiffType)} dispatcher delegates to the per-mode
  * methods so callers that pin a {@link DiffType} at runtime ({@code PixelBuffer.diff(other, type)})
@@ -76,9 +81,11 @@ public class PixelDiff {
      * @return a new buffer carrying the composite-over-white diff
      */
     public static @NotNull PixelBuffer overWhite(@NotNull PixelBuffer a, @NotNull PixelBuffer b) {
+        a = a.toAlphaMode(AlphaMode.STRAIGHT);
+        b = b.toAlphaMode(AlphaMode.STRAIGHT);
         int w = Math.min(a.width(), b.width());
         int h = Math.min(a.height(), b.height());
-        PixelBuffer out = PixelBuffer.create(w, h);
+        PixelBuffer out = PixelBuffer.straight(w, h);
         for (int y = 0; y < h; y++) {
             for (int x = 0; x < w; x++) {
                 int pa = a.getPixel(x, y);
@@ -114,9 +121,11 @@ public class PixelDiff {
      * @return a new buffer carrying the absolute diff
      */
     public static @NotNull PixelBuffer absolute(@NotNull PixelBuffer a, @NotNull PixelBuffer b) {
+        a = a.toAlphaMode(AlphaMode.STRAIGHT);
+        b = b.toAlphaMode(AlphaMode.STRAIGHT);
         int w = Math.min(a.width(), b.width());
         int h = Math.min(a.height(), b.height());
-        PixelBuffer out = PixelBuffer.create(w, h);
+        PixelBuffer out = PixelBuffer.straight(w, h);
         for (int y = 0; y < h; y++) {
             for (int x = 0; x < w; x++) {
                 int pa = a.getPixel(x, y);
@@ -157,9 +166,11 @@ public class PixelDiff {
      * @return a new buffer carrying the signed luma diff
      */
     public static @NotNull PixelBuffer signedLuma(@NotNull PixelBuffer a, @NotNull PixelBuffer b) {
+        a = a.toAlphaMode(AlphaMode.STRAIGHT);
+        b = b.toAlphaMode(AlphaMode.STRAIGHT);
         int w = Math.min(a.width(), b.width());
         int h = Math.min(a.height(), b.height());
-        PixelBuffer out = PixelBuffer.create(w, h);
+        PixelBuffer out = PixelBuffer.straight(w, h);
         for (int y = 0; y < h; y++) {
             for (int x = 0; x < w; x++) {
                 int pa = a.getPixel(x, y);
@@ -203,9 +214,11 @@ public class PixelDiff {
      * @return a new buffer carrying the per-channel signed diff
      */
     public static @NotNull PixelBuffer signedRgb(@NotNull PixelBuffer a, @NotNull PixelBuffer b) {
+        a = a.toAlphaMode(AlphaMode.STRAIGHT);
+        b = b.toAlphaMode(AlphaMode.STRAIGHT);
         int w = Math.min(a.width(), b.width());
         int h = Math.min(a.height(), b.height());
-        PixelBuffer out = PixelBuffer.create(w, h);
+        PixelBuffer out = PixelBuffer.straight(w, h);
         for (int y = 0; y < h; y++) {
             for (int x = 0; x < w; x++) {
                 int pa = a.getPixel(x, y);
@@ -243,7 +256,7 @@ public class PixelDiff {
     public static @NotNull PixelBuffer coverage(@NotNull PixelBuffer a, @NotNull PixelBuffer b) {
         int w = Math.min(a.width(), b.width());
         int h = Math.min(a.height(), b.height());
-        PixelBuffer out = PixelBuffer.create(w, h);
+        PixelBuffer out = PixelBuffer.straight(w, h);
         for (int y = 0; y < h; y++) {
             for (int x = 0; x < w; x++) {
                 int aa = ColorMath.alpha(a.getPixel(x, y));

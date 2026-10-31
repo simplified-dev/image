@@ -8,6 +8,8 @@ import dev.simplified.image.pixel.AlphaMode;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.util.Arrays;
+
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.instanceOf;
 import static org.hamcrest.Matchers.is;
@@ -20,9 +22,23 @@ class ImageDataCanvasFramesTest {
     private static final int BLUE = 0xFF0000FF;
 
     private static PixelBuffer filled(int width, int height, int argb) {
-        PixelBuffer buffer = PixelBuffer.create(width, height);
+        PixelBuffer buffer = PixelBuffer.straight(width, height);
         buffer.fill(argb);
         return buffer;
+    }
+
+    /**
+     * Wraps a premultiplied buffer whose every pixel holds {@code argb}.
+     *
+     * @param width the buffer width
+     * @param height the buffer height
+     * @param argb the pixel, already premultiplied
+     * @return the buffer
+     */
+    private static PixelBuffer premultiplied(int width, int height, int argb) {
+        int[] pixels = new int[width * height];
+        Arrays.fill(pixels, argb);
+        return PixelBuffer.ofPremultiplied(pixels, width, height);
     }
 
     private static ImageFrame frame(PixelBuffer pixels, int delayMs, int x, int y, FrameDisposal disposal, FrameBlend blend) {
@@ -100,7 +116,7 @@ class ImageDataCanvasFramesTest {
         AnimatedImageData image = canvas(4, 4,
             frame(filled(4, 4, RED), 40, 0, 0, FrameDisposal.DO_NOT_DISPOSE, FrameBlend.SOURCE),
             frame(filled(2, 2, GREEN), 40, 0, 0, FrameDisposal.RESTORE_TO_PREVIOUS, FrameBlend.SOURCE),
-            frame(PixelBuffer.create(1, 1), 40, 3, 3, FrameDisposal.DO_NOT_DISPOSE, FrameBlend.OVER));
+            frame(PixelBuffer.straight(1, 1), 40, 3, 3, FrameDisposal.DO_NOT_DISPOSE, FrameBlend.OVER));
 
         ImageData composed = image.toCanvasFrames();
         assertThat(composed.getFrames().get(1).pixels().getPixel(0, 0), is(GREEN));
@@ -112,11 +128,28 @@ class ImageDataCanvasFramesTest {
     void sourceFrameReplacesItsRectangle() {
         AnimatedImageData image = canvas(4, 4,
             frame(filled(4, 4, RED), 40, 0, 0, FrameDisposal.DO_NOT_DISPOSE, FrameBlend.SOURCE),
-            frame(PixelBuffer.create(2, 2), 40, 1, 1, FrameDisposal.DO_NOT_DISPOSE, FrameBlend.SOURCE));
+            frame(PixelBuffer.straight(2, 2), 40, 1, 1, FrameDisposal.DO_NOT_DISPOSE, FrameBlend.SOURCE));
 
         PixelBuffer second = image.toCanvasFrames().getFrames().getLast().pixels();
         assertThat(second.getPixel(1, 1), is(0));
         assertThat(second.getPixel(0, 0), is(RED));
+    }
+
+    @Test
+    @DisplayName("a SOURCE or OVER frame lying wholly right of the canvas lays nothing")
+    void aFrameRightOfTheCanvasLaysNothing() {
+        // Neither the builder nor ImageFrame.of holds an offset inside the canvas. At offset 6 a frame
+        // two wide starts two columns past the right edge of a canvas four wide.
+        AnimatedImageData image = canvas(4, 4,
+            frame(filled(4, 4, RED), 40, 0, 0, FrameDisposal.DO_NOT_DISPOSE, FrameBlend.SOURCE),
+            frame(filled(2, 2, BLUE), 40, 6, 1, FrameDisposal.DO_NOT_DISPOSE, FrameBlend.SOURCE),
+            frame(filled(2, 2, GREEN), 40, 6, 1, FrameDisposal.DO_NOT_DISPOSE, FrameBlend.OVER));
+
+        ImageData composed = image.toCanvasFrames();
+        int[] first = composed.getFrames().getFirst().pixels().data();
+        assertThat(composed.getFrames().get(1).pixels().data(), is(first));
+        assertThat(composed.getFrames().get(2).pixels().data(), is(first));
+        assertThat(first[0], is(RED));
     }
 
     @Test
@@ -125,13 +158,9 @@ class ImageDataCanvasFramesTest {
         AnimatedImageData straight = canvas(2, 1,
             frame(filled(2, 1, BLUE), 40, 0, 0, FrameDisposal.DO_NOT_DISPOSE, FrameBlend.SOURCE),
             frame(filled(1, 1, 0x80FF0000), 40, 0, 0, FrameDisposal.DO_NOT_DISPOSE, FrameBlend.OVER));
-        AnimatedImageData premultiplied = AnimatedImageData.builder()
-            .withWidth(2)
-            .withHeight(1)
-            .withFrame(frame(filled(2, 1, BLUE), 40, 0, 0, FrameDisposal.DO_NOT_DISPOSE, FrameBlend.SOURCE))
-            .withFrame(frame(filled(1, 1, 0x80800000), 40, 0, 0, FrameDisposal.DO_NOT_DISPOSE, FrameBlend.OVER))
-            .withAlphaMode(AlphaMode.PREMULTIPLIED)
-            .build();
+        AnimatedImageData premultiplied = canvas(2, 1,
+            frame(premultiplied(2, 1, BLUE), 40, 0, 0, FrameDisposal.DO_NOT_DISPOSE, FrameBlend.SOURCE),
+            frame(premultiplied(1, 1, 0x80800000), 40, 0, 0, FrameDisposal.DO_NOT_DISPOSE, FrameBlend.OVER));
 
         assertThat(straight.toCanvasFrames().getFrames().getLast().pixels().getPixel(0, 0), is(0xFF80007F));
         assertThat(premultiplied.toCanvasFrames().getFrames().getLast().pixels().getPixel(0, 0), is(0xFF80007F));
@@ -143,11 +172,10 @@ class ImageDataCanvasFramesTest {
         AnimatedImageData image = AnimatedImageData.builder()
             .withWidth(6)
             .withHeight(5)
-            .withFrame(frame(filled(2, 2, RED), 40, 1, 1, FrameDisposal.DO_NOT_DISPOSE, FrameBlend.OVER))
-            .withFrame(frame(filled(3, 3, BLUE), 60, 3, 2, FrameDisposal.RESTORE_TO_PREVIOUS, FrameBlend.SOURCE))
+            .withFrame(frame(premultiplied(2, 2, RED), 40, 1, 1, FrameDisposal.DO_NOT_DISPOSE, FrameBlend.OVER))
+            .withFrame(frame(premultiplied(3, 3, BLUE), 60, 3, 2, FrameDisposal.RESTORE_TO_PREVIOUS, FrameBlend.SOURCE))
             .withLoopCount(LoopCount.of(3))
             .withBackgroundColor(0xFF00FF00)
-            .withAlphaMode(AlphaMode.PREMULTIPLIED)
             .build();
 
         ImageData composed = image.toCanvasFrames();

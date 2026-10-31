@@ -163,34 +163,38 @@ class PixelBufferRowScheduleTest {
     }
 
     @Test
-    @DisplayName("every row operation and FXAA write the same bytes on a fork-join worker as off the pool")
+    @DisplayName("every row operation and FXAA write the same bytes on a fork-join worker as off the pool, over a picture in either convention")
     void everyRowOperationWritesTheSameBytesOnAWorker() throws Exception {
         Map<String, UnaryOperator<PixelBuffer>> operations = operations();
-        PixelBuffer picture = PixelBuffer.of(texels(WIDTH, HEIGHT, 1), WIDTH, HEIGHT);
+        PixelBuffer straight = PixelBuffer.ofStraight(texels(WIDTH, HEIGHT, 1), WIDTH, HEIGHT);
 
-        Map<String, int[]> onWorker = onPoolWorker(() -> applyAll(operations, picture));
-        Map<String, int[]> offPool = onPlainThread(() -> applyAll(operations, picture));
+        for (PixelBuffer picture : new PixelBuffer[]{ straight, straight.toAlphaMode(AlphaMode.PREMULTIPLIED) }) {
+            Map<String, int[]> onWorker = onPoolWorker(() -> applyAll(operations, picture));
+            Map<String, int[]> offPool = onPlainThread(() -> applyAll(operations, picture));
 
-        assertThat(onWorker.keySet(), equalTo(operations.keySet()));
+            assertThat(onWorker.keySet(), equalTo(operations.keySet()));
 
-        for (String name : operations.keySet())
-            assertArrayEquals(offPool.get(name), onWorker.get(name), name);
+            for (String name : operations.keySet())
+                assertArrayEquals(offPool.get(name), onWorker.get(name), "%s over a %s picture".formatted(name, picture.alphaMode()));
+        }
     }
 
     /**
      * Builds every operation that runs its rows through either row loop, each covering at least
-     * {@value #THRESHOLD} rows of it, plus FXAA in place in both conventions. Each takes its own copy
+     * {@value #THRESHOLD} rows of it, plus FXAA in place, which filters in the convention the picture
+     * holds, and the conversion to each convention, which converts a picture held in the other one.
+     * Every operation that reads a second buffer reads one in each convention. Each takes its own copy
      * of the picture and answers the buffer it wrote.
      *
      * @return the operations by name, in a fixed order
      */
     private static Map<String, UnaryOperator<PixelBuffer>> operations() {
-        PixelBuffer other = PixelBuffer.of(texels(WIDTH, HEIGHT, 2), WIDTH, HEIGHT);
-        PixelBuffer source = PixelBuffer.of(texels(80, 100, 3), 80, 100);
-        PixelBuffer opaqueSource = PixelBuffer.of(texels(80, 100, 4), 80, 100, false);
-        PixelBuffer large = PixelBuffer.of(texels(200, 180, 5), 200, 180);
-        PixelBuffer small = PixelBuffer.of(texels(16, 16, 6), 16, 16);
-        PixelBuffer filtered = PixelBuffer.of(texels(160, 140, 7), 160, 140);
+        PixelBuffer other = PixelBuffer.ofStraight(texels(WIDTH, HEIGHT, 2), WIDTH, HEIGHT);
+        PixelBuffer source = PixelBuffer.ofStraight(texels(80, 100, 3), 80, 100);
+        PixelBuffer opaqueSource = PixelBuffer.ofStraight(texels(80, 100, 4), 80, 100, false);
+        PixelBuffer large = PixelBuffer.ofStraight(texels(200, 180, 5), 200, 180);
+        PixelBuffer small = PixelBuffer.ofStraight(texels(16, 16, 6), 16, 16);
+        PixelBuffer filtered = PixelBuffer.ofStraight(texels(160, 140, 7), 160, 140);
         Map<String, UnaryOperator<PixelBuffer>> operations = new LinkedHashMap<>();
 
         operations.put("flipHorizontal", inPlace(PixelBuffer::flipHorizontal));
@@ -204,27 +208,38 @@ class PixelBufferRowScheduleTest {
         operations.put("grayscale", inPlace(PixelBuffer::grayscale));
         operations.put("invert", inPlace(PixelBuffer::invert));
         operations.put("multiplyAlpha", inPlace(buffer -> buffer.multiplyAlpha(0.6f)));
-        operations.put("premultiplyAlpha", inPlace(PixelBuffer::premultiplyAlpha));
-        operations.put("unpremultiplyAlpha", inPlace(PixelBuffer::unpremultiplyAlpha));
-        operations.put("lerp", buffer -> PixelBuffer.lerp(buffer, other, 0.35f));
+        operations.put("toAlphaMode PREMULTIPLIED", buffer -> buffer.toAlphaMode(AlphaMode.PREMULTIPLIED));
+        operations.put("toAlphaMode STRAIGHT", buffer -> buffer.toAlphaMode(AlphaMode.STRAIGHT));
+        for (AlphaMode convention : AlphaMode.values()) {
+            PixelBuffer held = other.toAlphaMode(convention);
+            operations.put("lerp with a %s buffer".formatted(convention), buffer -> PixelBuffer.lerp(buffer, held, 0.35f));
+        }
+
         operations.put("tint", buffer -> buffer.tint(0xFF80C0E0));
 
         for (BlendMode mode : BlendMode.values()) {
-            operations.put("fillRect " + mode, inPlace(buffer -> buffer.fillRect(-4, 7, 60, 120, 0x80C04020, mode)));
-            operations.put("blit " + mode, inPlace(buffer -> buffer.blit(source, -5, 30, mode)));
-            operations.put("blit without alpha " + mode, inPlace(buffer -> buffer.blit(opaqueSource, -5, 30, mode)));
-            operations.put("blitTinted " + mode, inPlace(buffer -> buffer.blitTinted(source, -5, 30, 0xFF60A0F0, mode)));
-            operations.put("blitScaled shrinking " + mode, inPlace(buffer -> buffer.blitScaled(large, 3, 10, 90, 120, mode)));
-            operations.put("blitScaled magnifying " + mode, inPlace(buffer -> buffer.blitScaled(small, -7, 5, 120, 130, mode)));
+            // A fill colour is straight colour, so a fill refuses the two modes naming a source's convention.
+            if (mode != BlendMode.PREMULTIPLIED && mode != BlendMode.STRAIGHT)
+                operations.put("fillRect " + mode, inPlace(buffer -> buffer.fillRect(-4, 7, 60, 120, 0x80C04020, mode)));
 
-            for (AlphaMode alphaMode : AlphaMode.values()) {
-                operations.put("blitScaledFxaa %s %s".formatted(mode, alphaMode),
-                    inPlace(buffer -> buffer.blitScaledFxaa(filtered, 2, 4, 80, 70, mode, alphaMode)));
+            for (AlphaMode convention : AlphaMode.values()) {
+                String from = "%s from a %s source".formatted(mode, convention);
+                PixelBuffer heldSource = source.toAlphaMode(convention);
+                PixelBuffer heldOpaque = opaqueSource.toAlphaMode(convention);
+                PixelBuffer heldLarge = large.toAlphaMode(convention);
+                PixelBuffer heldSmall = small.toAlphaMode(convention);
+                PixelBuffer heldFiltered = filtered.toAlphaMode(convention);
+
+                operations.put("blit " + from, inPlace(buffer -> buffer.blit(heldSource, -5, 30, mode)));
+                operations.put("blit without alpha " + from, inPlace(buffer -> buffer.blit(heldOpaque, -5, 30, mode)));
+                operations.put("blitTinted " + from, inPlace(buffer -> buffer.blitTinted(heldSource, -5, 30, 0xFF60A0F0, mode)));
+                operations.put("blitScaled shrinking " + from, inPlace(buffer -> buffer.blitScaled(heldLarge, 3, 10, 90, 120, mode)));
+                operations.put("blitScaled magnifying " + from, inPlace(buffer -> buffer.blitScaled(heldSmall, -7, 5, 120, 130, mode)));
+                operations.put("blitScaledFxaa " + from, inPlace(buffer -> buffer.blitScaledFxaa(heldFiltered, 2, 4, 80, 70, mode)));
             }
         }
 
-        for (AlphaMode alphaMode : AlphaMode.values())
-            operations.put("applyFxaa " + alphaMode, inPlace(buffer -> buffer.applyFxaa(alphaMode)));
+        operations.put("applyFxaa", inPlace(PixelBuffer::applyFxaa));
 
         return operations;
     }

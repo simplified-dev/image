@@ -22,7 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 class GifFrameLayoutTest {
 
     private static @NotNull PixelBuffer filled(int width, int height, int argb) {
-        PixelBuffer buffer = PixelBuffer.create(width, height);
+        PixelBuffer buffer = PixelBuffer.straight(width, height);
         buffer.fill(argb);
         return buffer;
     }

@@ -145,7 +145,7 @@ public final class VP8LDecoder {
             pixels = trimmed;
         }
 
-        return PixelBuffer.of(pixels, width, height);
+        return PixelBuffer.ofStraight(pixels, width, height);
     }
 
     /**

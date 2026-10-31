@@ -68,7 +68,7 @@ class VP8DecodeParityTest {
             VP8EncoderSession encoder = new VP8EncoderSession();
             VP8DecoderSession decoder = new VP8DecoderSession();
             for (int frame = 0; frame < 4; frame++) {
-                PixelBuffer pixels = PixelBuffer.create(SCENE.width(), SCENE.height());
+                PixelBuffer pixels = PixelBuffer.straight(SCENE.width(), SCENE.height());
                 for (int y = 0; y < SCENE.height(); y++)
                     for (int x = 0; x < SCENE.width(); x++)
                         pixels.setPixel(x, y, SCENE.getPixel(Math.min(x + 3 * frame, SCENE.width() - 1), y));
@@ -172,7 +172,7 @@ class VP8DecodeParityTest {
 
     private static PixelBuffer scene(int w, int h) {
         Random random = new Random(7);
-        PixelBuffer pixels = PixelBuffer.create(w, h);
+        PixelBuffer pixels = PixelBuffer.straight(w, h);
         for (int y = 0; y < h; y++) {
             for (int x = 0; x < w; x++) {
                 double shade = 128 + 50 * Math.sin(x * 0.11 + y * 0.03) + 30 * Math.sin(y * 0.23) + 20 * Math.cos((x - y) * 0.31);
@@ -201,7 +201,7 @@ class VP8DecodeParityTest {
      * one pixel further per frame than the band above, so neighbouring macroblocks move apart.
      */
     private static PixelBuffer shear(int frame) {
-        PixelBuffer pixels = PixelBuffer.create(SCENE.width(), SCENE.height());
+        PixelBuffer pixels = PixelBuffer.straight(SCENE.width(), SCENE.height());
         for (int y = 0; y < SCENE.height(); y++) {
             for (int x = 0; x < SCENE.width(); x++) {
                 int sx = x - (y / 8) * frame;

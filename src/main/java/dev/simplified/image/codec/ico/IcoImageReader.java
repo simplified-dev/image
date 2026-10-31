@@ -137,7 +137,7 @@ public class IcoImageReader implements ImageReader {
             }
         }
 
-        return PixelBuffer.of(pixels, width, height, true);
+        return PixelBuffer.ofStraight(pixels, width, height, true);
     }
 
 }

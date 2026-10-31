@@ -75,7 +75,7 @@ public class PnmImageReader implements ImageReader {
             default -> throw new ImageDecodeException("Unreachable PNM magic: 'P%d'", magic);
         }
 
-        return StaticImageData.of(PixelBuffer.of(pixels, width, height, false));
+        return StaticImageData.of(PixelBuffer.ofStraight(pixels, width, height, false));
     }
 
     private static void decodePbmAscii(byte @NotNull [] data, int @NotNull [] cursor, int @NotNull [] pixels, int width, int height) {

@@ -50,22 +50,52 @@ final class PixelVector {
         }
     }
 
+    /**
+     * Scales all four channels of each premultiplied pixel in the run by {@code factor}, each rounded
+     * half up once, so a colour at or under its alpha stays there. Scalar only; the straight form,
+     * {@link #multiplyAlpha}, scales alpha alone.
+     *
+     * @param p the pixels
+     * @param off the index of the first pixel of the run
+     * @param len the number of pixels in the run
+     * @param factor the multiplier, in {@code [0, 1]}
+     */
+    static void multiplyPremultiplied(int @NotNull [] p, int off, int len, float factor) {
+        int end = off + len;
+        for (int i = off; i < end; i++) {
+            int px = p[i];
+            int a = Math.round(((px >>> 24) & 0xFF) * factor);
+            int r = Math.round(((px >>> 16) & 0xFF) * factor);
+            int g = Math.round(((px >>> 8) & 0xFF) * factor);
+            int b = Math.round((px & 0xFF) * factor);
+            p[i] = (a << 24) | (r << 16) | (g << 8) | b;
+        }
+    }
+
     static void premultiply(int @NotNull [] p, int off, int len) {
         int start = ENABLED ? VectorOps.premultiply(p, off, len) : 0;
         int end = off + len;
-        for (int i = off + start; i < end; i++) {
-            int px = p[i];
-            int a = (px >>> 24) & 0xFF;
-            if (a == 0xFF) continue;
-            if (a == 0) {
-                p[i] = 0;
-                continue;
-            }
-            int r = div255(((px >>> 16) & 0xFF) * a);
-            int g = div255(((px >>> 8) & 0xFF) * a);
-            int b = div255((px & 0xFF) * a);
-            p[i] = (a << 24) | (r << 16) | (g << 8) | b;
-        }
+        for (int i = off + start; i < end; i++)
+            p[i] = premultiply(p[i]);
+    }
+
+    /**
+     * Premultiplies one straight pixel, scaling each colour channel by its alpha and rounding half up
+     * once, as {@link #premultiply(int[], int, int)} premultiplies a run. A pixel of alpha {@code 255}
+     * is answered as it is and one of alpha {@code 0} as transparent black.
+     *
+     * @param argb the straight pixel
+     * @return the premultiplied pixel
+     */
+    static int premultiply(int argb) {
+        int a = (argb >>> 24) & 0xFF;
+        if (a == 0xFF) return argb;
+        if (a == 0) return 0;
+
+        int r = div255(((argb >>> 16) & 0xFF) * a);
+        int g = div255(((argb >>> 8) & 0xFF) * a);
+        int b = div255((argb & 0xFF) * a);
+        return (a << 24) | (r << 16) | (g << 8) | b;
     }
 
     static void tint(int @NotNull [] src, int @NotNull [] dst, int off, int len, int tr, int tg, int tb) {

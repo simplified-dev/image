@@ -91,6 +91,6 @@ final class FrameDiffUtil {
         int[] in = src.data();
         for (int y = 0; y < height; y++)
             System.arraycopy(in, (offsetY + y) * sw + offsetX, out, y * width, width);
-        return PixelBuffer.of(out, width, height);
+        return PixelBuffer.ofStraight(out, width, height);
     }
 }

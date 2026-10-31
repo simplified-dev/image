@@ -29,7 +29,7 @@ Pure-Java multi-format image codec library with full VP8/VP8L WebP encoding and 
 - **Animated image support** - Multi-frame GIF and WebP with per-frame timing, loop count, background color, disposal methods (none, do not dispose, restore to background, restore to previous), blend modes (source replace, alpha-over), and partial-frame ANMF encoding that diffs consecutive frames to emit minimal sub-rectangles
 - **Parallel frame encoding** - Animated WebP encodes frames concurrently using virtual threads for significantly faster output
 - **Batch processing** - `ImageFactory` bulk operations (`fromFiles`, `toFiles`, `fromByteArrays`, `toByteArrays`) process multiple images in parallel with virtual threads
-- **Zero-copy pixel access** - `PixelBuffer` wraps `TYPE_INT_ARGB` arrays directly without copying, providing per-pixel read/write access
+- **Zero-copy pixel access** - `PixelBuffer` wraps `TYPE_INT_ARGB` and `TYPE_INT_ARGB_PRE` arrays directly without copying, providing per-pixel read/write access
 - **Frame normalization** - `FrameNormalizer` handles variable-sized animation frames with configurable fit modes (contain, cover, stretch), background fill, upscale control, and bicubic interpolation
 - **Frame interpolation** - `AnimatedImageData` supports time-based frame lookup with per-pixel linear interpolation and bilinear sampling for smooth animation playback
 - **Auto-format detection** - `ImageFactory` identifies formats from magic bytes and routes to the correct codec automatically
@@ -220,9 +220,16 @@ ImageFactory.toFiles(images, ImageFormat.PNG, outputFiles);
 `PixelBuffer` is a whole image as pixels, so it sits in the root package; colour,
 compositing and drawing work on it comes from `dev.simplified.image.pixel`.
 
+Every buffer holds its pixels in one alpha convention, fixed when it is made and reported by
+`alphaMode()`. A decoded image holds straight colour; `PixelBuffer.straight` makes a blank buffer
+of it and `PixelBuffer.ofStraight` wraps an array of it. `PixelBuffer.canvas` makes a blank buffer
+of colour already scaled by alpha, what drawing onto transparency leaves, and
+`PixelBuffer.ofPremultiplied` wraps an array of it. `PixelBuffer.wrap` holds the convention the
+`BufferedImage` holds, and `toAlphaMode` converts. A composite lays its source in the convention of
+the buffer it lays onto, and a fill colour is straight colour, laid in the buffer's convention.
+
 ```java
 import dev.simplified.image.PixelBuffer;
-import dev.simplified.image.pixel.AlphaMode;
 
 PixelBuffer buffer = image.toPixelBuffer();
 
@@ -230,13 +237,14 @@ PixelBuffer buffer = image.toPixelBuffer();
 int argb = buffer.getPixel(x, y);
 buffer.setPixel(x, y, 0xFFFF0000); // solid red
 
-// Apply FXAA anti-aliasing (parallel scanline processing) to straight colour, as a decoded image holds.
+// Apply FXAA anti-aliasing (parallel scanline processing) in the convention the buffer holds -
+// straight colour, as a decoded image holds.
 buffer.applyFxaa();
 
-// A buffer drawn onto transparency with BlendMode.NORMAL holds its colour already scaled by alpha; say so.
-PixelBuffer render = PixelBuffer.create(256, 256);
+// A canvas holds premultiplied colour, which drawing onto transparency with BlendMode.NORMAL leaves.
+PixelBuffer render = PixelBuffer.canvas(256, 256);
 render.blit(buffer, 0, 0);
-render.applyFxaa(AlphaMode.PREMULTIPLIED);
+render.applyFxaa();
 ```
 
 ## Supported Formats

@@ -92,9 +92,8 @@ class GifFlattenTest {
     void premultipliedAnimationFlattensEveryFrame() {
         int[] reversed = reversed(PREMULTIPLIED);
         AnimatedImageData data = AnimatedImageData.builder()
-            .withFrame(ImageFrame.of(rows(PREMULTIPLIED), 100, 0, 0, FrameDisposal.RESTORE_TO_BACKGROUND, FrameBlend.SOURCE))
-            .withFrame(ImageFrame.of(rows(reversed), 100, 0, 0, FrameDisposal.RESTORE_TO_BACKGROUND, FrameBlend.SOURCE))
-            .withAlphaMode(AlphaMode.PREMULTIPLIED)
+            .withFrame(ImageFrame.of(rows(PREMULTIPLIED, AlphaMode.PREMULTIPLIED), 100, 0, 0, FrameDisposal.RESTORE_TO_BACKGROUND, FrameBlend.SOURCE))
+            .withFrame(ImageFrame.of(rows(reversed, AlphaMode.PREMULTIPLIED), 100, 0, 0, FrameDisposal.RESTORE_TO_BACKGROUND, FrameBlend.SOURCE))
             .build();
         int[] expected = { 0xFF880808, 0xFF2C2C2C, 0xFF111111, 0xFF101010, 0xFF336699, 0xFF484848 };
 
@@ -103,17 +102,17 @@ class GifFlattenTest {
         assertThat(decoded.getFrames().size(), equalTo(2));
         assertRows(decoded.getFrames().getFirst().pixels(), expected);
         assertRows(decoded.getFrames().getLast().pixels(), reversed(expected));
-        assertThat(data.getFrames().getFirst().pixels().data(), equalTo(rows(PREMULTIPLIED).data()));
+        assertThat(data.getFrames().getFirst().pixels().data(), equalTo(rows(PREMULTIPLIED, AlphaMode.PREMULTIPLIED).data()));
     }
 
     // ──── assertions ────
 
     private static void assertFlattens(int backgroundRgb, boolean transparent, @NotNull AlphaMode alphaMode, int @NotNull ... expected) {
-        PixelBuffer pixels = rows(PREMULTIPLIED);
-        byte[] gif = new GifImageWriter().write(StaticImageData.of(pixels, alphaMode), options(backgroundRgb, transparent));
+        PixelBuffer pixels = rows(PREMULTIPLIED, alphaMode);
+        byte[] gif = new GifImageWriter().write(StaticImageData.of(pixels), options(backgroundRgb, transparent));
 
         assertRows(new GifImageReader().read(gif).toPixelBuffer(), expected);
-        assertThat(pixels.data(), equalTo(rows(PREMULTIPLIED).data()));
+        assertThat(pixels.data(), equalTo(rows(PREMULTIPLIED, alphaMode).data()));
     }
 
     private static void assertRows(@NotNull PixelBuffer decoded, int @NotNull [] expected) {
@@ -136,14 +135,17 @@ class GifFlattenTest {
             .build();
     }
 
-    /** A buffer {@link #ROWS} tall whose every row is {@code row}. */
-    private static @NotNull PixelBuffer rows(int @NotNull [] row) {
+    /** A buffer {@link #ROWS} tall whose every row is {@code row}, held in {@code alphaMode}. */
+    private static @NotNull PixelBuffer rows(int @NotNull [] row, @NotNull AlphaMode alphaMode) {
         int[] pixels = new int[row.length * ROWS];
 
         for (int y = 0; y < ROWS; y++)
             System.arraycopy(row, 0, pixels, y * row.length, row.length);
 
-        return PixelBuffer.of(pixels, row.length, ROWS);
+        return switch (alphaMode) {
+            case STRAIGHT -> PixelBuffer.ofStraight(pixels, row.length, ROWS);
+            case PREMULTIPLIED -> PixelBuffer.ofPremultiplied(pixels, row.length, ROWS);
+        };
     }
 
     private static int @NotNull [] reversed(int @NotNull [] pixels) {

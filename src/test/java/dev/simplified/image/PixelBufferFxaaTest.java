@@ -25,7 +25,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  * at its own coverage in either alpha convention, the two conventions smooth one picture alike, and
  * an opaque picture stays opaque. The scaled composite that filters as it samples lays down what
  * filtering the whole source and then scaling it lays down, and the filter in place writes what a
- * frozen copy of its per-pixel body writes.
+ * frozen copy of its per-pixel body writes. Every picture is a buffer made in the convention it is
+ * filtered in, which the filter reads from the buffer.
  */
 class PixelBufferFxaaTest {
 
@@ -76,6 +77,26 @@ class PixelBufferFxaaTest {
     };
 
     /**
+     * Wraps pixels in a buffer holding the given convention. A premultiplied buffer whose alpha carries
+     * no data is the straight one converted, which shares its array.
+     *
+     * @param alphaMode the convention the buffer holds
+     * @param pixels the pixels, not copied
+     * @param width the picture width
+     * @param height the picture height
+     * @param hasAlpha whether the alpha channel carries meaningful data
+     * @return the buffer
+     */
+    private static PixelBuffer held(AlphaMode alphaMode, int[] pixels, int width, int height, boolean hasAlpha) {
+        return switch (alphaMode) {
+            case STRAIGHT -> PixelBuffer.ofStraight(pixels, width, height, hasAlpha);
+            case PREMULTIPLIED -> hasAlpha
+                ? PixelBuffer.ofPremultiplied(pixels, width, height)
+                : PixelBuffer.ofStraight(pixels, width, height, false).toAlphaMode(AlphaMode.PREMULTIPLIED);
+        };
+    }
+
+    /**
      * Draws a disc and a staircase of uneven steps in one pixel over another. Along a curved or broken
      * edge FXAA's two samples land at different coverage, which is where a mix that mishandles alpha
      * shows.
@@ -83,10 +104,11 @@ class PixelBufferFxaaTest {
      * @param size the width and height of the picture
      * @param inside the pixel the shapes are drawn in
      * @param outside the pixel everywhere else
+     * @param alphaMode the convention the picture is held in
      * @return the picture
      */
-    private static PixelBuffer shapes(int size, int inside, int outside) {
-        PixelBuffer buffer = PixelBuffer.create(size, size);
+    private static PixelBuffer shapes(int size, int inside, int outside, AlphaMode alphaMode) {
+        PixelBuffer buffer = held(alphaMode, new int[size * size], size, size, true);
         float centre = size * 0.3f;
         float radius = size * 0.22f;
 
@@ -121,8 +143,8 @@ class PixelBufferFxaaTest {
     @Test
     @DisplayName("a softened premultiplied edge carries the shape's colour at its own coverage")
     void aPremultipliedEdgeCarriesTheShapesColour() {
-        PixelBuffer buffer = shapes(48, FACE, ColorMath.TRANSPARENT);
-        buffer.applyFxaa(AlphaMode.PREMULTIPLIED);
+        PixelBuffer buffer = shapes(48, FACE, ColorMath.TRANSPARENT, AlphaMode.PREMULTIPLIED);
+        buffer.applyFxaa();
         int softened = 0;
 
         for (int pixel : buffer.data()) {
@@ -140,8 +162,8 @@ class PixelBufferFxaaTest {
         // Transparent pixels whose colour channels hold green: straight colour at no alpha carries
         // nothing, so none of it may reach the edge, and neither may the black a mix would otherwise
         // pull toward.
-        PixelBuffer buffer = shapes(48, FACE, 0x0000FF00);
-        buffer.applyFxaa(AlphaMode.STRAIGHT);
+        PixelBuffer buffer = shapes(48, FACE, 0x0000FF00, AlphaMode.STRAIGHT);
+        buffer.applyFxaa();
         int softened = 0;
 
         for (int pixel : buffer.data()) {
@@ -161,16 +183,15 @@ class PixelBufferFxaaTest {
         // floor, so an edge test reading the luma at the wrong scale skips edges the other convention
         // smooths.
         for (int coverage : new int[]{ 0xFF, 0x80, 0x18, 0x02 }) {
-            PixelBuffer straight = shapes(48, (FACE & 0xFFFFFF) | coverage << 24, 0x0000FF00);
-            PixelBuffer premultiplied = straight.copy();
-            premultiplied.premultiplyAlpha();
+            PixelBuffer straight = shapes(48, (FACE & 0xFFFFFF) | coverage << 24, 0x0000FF00, AlphaMode.STRAIGHT);
+            PixelBuffer premultiplied = straight.toAlphaMode(AlphaMode.PREMULTIPLIED);
 
-            straight.applyFxaa(AlphaMode.STRAIGHT);
-            premultiplied.applyFxaa(AlphaMode.PREMULTIPLIED);
-            straight.premultiplyAlpha();
+            straight.applyFxaa();
+            premultiplied.applyFxaa();
+            int[] smoothed = straight.toAlphaMode(AlphaMode.PREMULTIPLIED).data();
 
-            for (int i = 0; i < straight.data().length; i++) {
-                int expected = straight.data()[i];
+            for (int i = 0; i < smoothed.length; i++) {
+                int expected = smoothed[i];
                 int actual = premultiplied.data()[i];
                 String label = "coverage %d pixel %d: %08X against %08X".formatted(coverage, i, actual, expected);
 
@@ -186,9 +207,9 @@ class PixelBufferFxaaTest {
     @DisplayName("FXAA over an opaque picture leaves every pixel opaque, in either convention")
     void anOpaquePictureStaysOpaque() {
         for (AlphaMode alphaMode : AlphaMode.values()) {
-            PixelBuffer buffer = shapes(96, FACE, 0xFF2040A0);
+            PixelBuffer buffer = shapes(96, FACE, 0xFF2040A0, alphaMode);
             int[] drawn = buffer.data().clone();
-            buffer.applyFxaa(alphaMode);
+            buffer.applyFxaa();
             int softened = 0;
 
             for (int i = 0; i < drawn.length; i++) {
@@ -204,13 +225,13 @@ class PixelBufferFxaaTest {
     @DisplayName("a buffer whose alpha carries no data is smoothed as opaque, in either convention")
     void aBufferWithoutAlphaIsSmoothedAsOpaque() {
         for (AlphaMode alphaMode : AlphaMode.values()) {
-            PixelBuffer opaque = shapes(48, FACE, 0xFF2040A0);
+            PixelBuffer opaque = shapes(48, FACE, 0xFF2040A0, alphaMode);
             int[] unset = opaque.data().clone();
             Arrays.setAll(unset, i -> unset[i] & 0xFFFFFF);
-            PixelBuffer withoutAlpha = PixelBuffer.of(unset, 48, 48, false);
+            PixelBuffer withoutAlpha = held(alphaMode, unset, 48, 48, false);
 
-            opaque.applyFxaa(alphaMode);
-            withoutAlpha.applyFxaa(alphaMode);
+            opaque.applyFxaa();
+            withoutAlpha.applyFxaa();
 
             for (int i = 0; i < unset.length; i++)
                 assertThat("%s pixel %d".formatted(alphaMode, i), withoutAlpha.data()[i] & 0xFFFFFF, is(opaque.data()[i] & 0xFFFFFF));
@@ -225,9 +246,10 @@ class PixelBufferFxaaTest {
         int drawn = ColorMath.pack(201, 200, 200, 200);
 
         for (AlphaMode alphaMode : AlphaMode.values()) {
-            PixelBuffer buffer = PixelBuffer.create(16, 16);
-            buffer.fill(drawn);
-            buffer.applyFxaa(alphaMode);
+            int[] pixels = new int[16 * 16];
+            Arrays.fill(pixels, drawn);
+            PixelBuffer buffer = held(alphaMode, pixels, 16, 16, true);
+            buffer.applyFxaa();
             assertThat(alphaMode.name(), Arrays.stream(buffer.data()).boxed().toList(), everyItem(is(drawn)));
         }
     }
@@ -247,22 +269,22 @@ class PixelBufferFxaaTest {
 
         for (AlphaMode alphaMode : AlphaMode.values()) {
             for (int[] pair : unfiltered) {
-                PixelBuffer drawn = shapes(40, pair[0], pair[1]);
+                PixelBuffer drawn = shapes(40, pair[0], pair[1], alphaMode);
                 PixelBuffer buffer = drawn.copy();
-                buffer.applyFxaa(alphaMode);
+                buffer.applyFxaa();
                 assertArrayEquals(drawn.data(), buffer.data(), "%s, %08X on %08X".formatted(alphaMode, pair[0], pair[1]));
             }
 
-            PixelBuffer drawn = shapes(40, ColorMath.pack(255, 12, 12, 12), darkField);
+            PixelBuffer drawn = shapes(40, ColorMath.pack(255, 12, 12, 12), darkField, alphaMode);
             PixelBuffer buffer = drawn.copy();
-            buffer.applyFxaa(alphaMode);
+            buffer.applyFxaa();
             assertThat("%s, a dark edge past the floor is smoothed".formatted(alphaMode),
                 Arrays.equals(drawn.data(), buffer.data()), is(false));
         }
     }
 
     @Test
-    @DisplayName("the scaled composite that filters as it samples lays down what FXAA and then the scaled blit lay down")
+    @DisplayName("the scaled composite that filters as it samples lays down what FXAA and then the scaled blit lay down, from and onto either convention")
     void theFilteringCompositeMatchesFxaaThenTheScaledBlit() {
         int seed = 0;
         int smoothed = 0;
@@ -272,30 +294,31 @@ class PixelBufferFxaaTest {
 
             for (boolean blocky : new boolean[]{ false, true }) {
                 int[] drawn = blocky ? blocky(srcW, srcH, ++seed) : noise(srcW, srcH, ++seed);
-                PixelBuffer destination = PixelBuffer.of(noise(dw + 3, dh + 2, ++seed), dw + 3, dh + 2);
+                PixelBuffer straightDestination = PixelBuffer.ofStraight(noise(dw + 3, dh + 2, ++seed), dw + 3, dh + 2);
 
-                for (boolean hasAlpha : new boolean[]{ true, false })
-                    for (AlphaMode alphaMode : AlphaMode.values())
-                        for (BlendMode mode : BlendMode.values()) {
-                            String label = "%dx%d -> %dx%d at (%d, %d), %s, hasAlpha %s, %s, %s"
-                                .formatted(srcW, srcH, dw, dh, dx, dy, blocky ? "blocky" : "noise", hasAlpha, alphaMode, mode);
-                            PixelBuffer source = PixelBuffer.of(drawn.clone(), srcW, srcH, hasAlpha);
+                for (PixelBuffer destination : new PixelBuffer[]{ straightDestination, straightDestination.toAlphaMode(AlphaMode.PREMULTIPLIED) })
+                    for (boolean hasAlpha : new boolean[]{ true, false })
+                        for (AlphaMode alphaMode : AlphaMode.values())
+                            for (BlendMode mode : BlendMode.values()) {
+                                String label = "%dx%d -> %dx%d at (%d, %d) onto %s, %s, hasAlpha %s, %s, %s"
+                                    .formatted(srcW, srcH, dw, dh, dx, dy, destination.alphaMode(), blocky ? "blocky" : "noise", hasAlpha, alphaMode, mode);
+                                PixelBuffer source = held(alphaMode, drawn.clone(), srcW, srcH, hasAlpha);
 
-                            PixelBuffer filtered = PixelBuffer.of(drawn.clone(), srcW, srcH, hasAlpha);
-                            filtered.applyFxaa(alphaMode);
-                            PixelBuffer expected = destination.copy();
-                            expected.blitScaled(filtered, dx, dy, dw, dh, mode);
+                                PixelBuffer filtered = held(alphaMode, drawn.clone(), srcW, srcH, hasAlpha);
+                                filtered.applyFxaa();
+                                PixelBuffer expected = destination.copy();
+                                expected.blitScaled(filtered, dx, dy, dw, dh, mode);
 
-                            PixelBuffer actual = destination.copy();
-                            actual.blitScaledFxaa(source, dx, dy, dw, dh, mode, alphaMode);
+                                PixelBuffer actual = destination.copy();
+                                actual.blitScaledFxaa(source, dx, dy, dw, dh, mode);
 
-                            assertArrayEquals(expected.data(), actual.data(), label);
-                            assertArrayEquals(drawn, source.data(), label + " left its source as drawn");
+                                assertArrayEquals(expected.data(), actual.data(), label);
+                                assertArrayEquals(drawn, source.data(), label + " left its source as drawn");
 
-                            PixelBuffer unfiltered = destination.copy();
-                            unfiltered.blitScaled(source, dx, dy, dw, dh, mode);
-                            if (!Arrays.equals(unfiltered.data(), actual.data())) smoothed++;
-                        }
+                                PixelBuffer unfiltered = destination.copy();
+                                unfiltered.blitScaled(source, dx, dy, dw, dh, mode);
+                                if (!Arrays.equals(unfiltered.data(), actual.data())) smoothed++;
+                            }
             }
         }
 
@@ -305,13 +328,13 @@ class PixelBufferFxaaTest {
     @Test
     @DisplayName("the scaled composite that filters as it samples refuses a source holding the target's pixels")
     void theFilteringCompositeRefusesItsOwnPixels() {
-        PixelBuffer buffer = PixelBuffer.of(noise(8, 8, 1), 8, 8);
-        PixelBuffer sharing = PixelBuffer.of(buffer.data(), 8, 8);
+        PixelBuffer buffer = PixelBuffer.ofPremultiplied(noise(8, 8, 1), 8, 8);
+        PixelBuffer sharing = PixelBuffer.ofPremultiplied(buffer.data(), 8, 8);
 
         assertThrows(IllegalArgumentException.class,
-            () -> buffer.blitScaledFxaa(buffer, 0, 0, 4, 4, BlendMode.PREMULTIPLIED, AlphaMode.PREMULTIPLIED));
+            () -> buffer.blitScaledFxaa(buffer, 0, 0, 4, 4, BlendMode.PREMULTIPLIED));
         assertThrows(IllegalArgumentException.class,
-            () -> buffer.blitScaledFxaa(sharing, 0, 0, 4, 4, BlendMode.PREMULTIPLIED, AlphaMode.PREMULTIPLIED));
+            () -> buffer.blitScaledFxaa(sharing, 0, 0, 4, 4, BlendMode.PREMULTIPLIED));
     }
 
     @Test
@@ -327,8 +350,8 @@ class PixelBufferFxaaTest {
 
                 for (boolean hasAlpha : new boolean[]{ true, false })
                     for (AlphaMode alphaMode : AlphaMode.values()) {
-                        PixelBuffer buffer = PixelBuffer.of(drawn.clone(), width, height, hasAlpha);
-                        buffer.applyFxaa(alphaMode);
+                        PixelBuffer buffer = held(alphaMode, drawn.clone(), width, height, hasAlpha);
+                        buffer.applyFxaa();
                         int[] expected = FrozenFxaa.apply(drawn, width, height, hasAlpha, alphaMode);
 
                         assertArrayEquals(expected, buffer.data(), "%dx%d %s, hasAlpha %s, %s"
@@ -364,8 +387,8 @@ class PixelBufferFxaaTest {
 
             for (boolean hasAlpha : new boolean[]{ true, false })
                 for (AlphaMode alphaMode : AlphaMode.values()) {
-                    PixelBuffer buffer = PixelBuffer.of(drawn.clone(), STENCIL_WIDTH, STENCIL_HEIGHT, hasAlpha);
-                    buffer.applyFxaa(alphaMode);
+                    PixelBuffer buffer = held(alphaMode, drawn.clone(), STENCIL_WIDTH, STENCIL_HEIGHT, hasAlpha);
+                    buffer.applyFxaa();
                     int[] expected = FrozenFxaa.apply(drawn, STENCIL_WIDTH, STENCIL_HEIGHT, hasAlpha, alphaMode);
 
                     assertArrayEquals(expected, buffer.data(), "%s, hasAlpha %s, %s"

@@ -136,7 +136,7 @@ class AnimatedImageDataTest {
         for (int index = 0; index < delaysMs.length; index++) {
             // Frames compare by pixel value, so identical buffers would make two frames equal and
             // resolving one back to its position would find the wrong index.
-            PixelBuffer pixels = PixelBuffer.create(2, 2);
+            PixelBuffer pixels = PixelBuffer.straight(2, 2);
             pixels.fill(0xFF000000 | (index + 1));
             builder.withFrame(ImageFrame.of(pixels, delaysMs[index]));
         }

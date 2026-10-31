@@ -213,7 +213,7 @@ public class VP8CodecTest {
 
         @Test @DisplayName("2x2 DC-only frame emits 10-byte uncompressed header with correct sync")
         void frameHeader2x2() {
-            PixelBuffer buf = PixelBuffer.create(2, 2);
+            PixelBuffer buf = PixelBuffer.straight(2, 2);
             buf.fill(0xFFFF0000);
             byte[] payload = VP8Encoder.encode(buf, 0.75f);
 
@@ -243,7 +243,7 @@ public class VP8CodecTest {
 
         @Test @DisplayName("2x2 DC-only VP8 decodes in libwebp via Python")
         void lossyVp82x2LibwebpRoundTrip() throws Exception {
-            PixelBuffer buf = PixelBuffer.create(2, 2);
+            PixelBuffer buf = PixelBuffer.straight(2, 2);
             buf.fill(0xFFFF0000);
             byte[] vp8Payload = VP8Encoder.encode(buf, 0.75f);
 
@@ -254,7 +254,7 @@ public class VP8CodecTest {
 
         @Test @DisplayName("16x16 DC-only VP8 decodes in libwebp")
         void lossyVp816x16LibwebpRoundTrip() throws Exception {
-            PixelBuffer buf = PixelBuffer.create(16, 16);
+            PixelBuffer buf = PixelBuffer.straight(16, 16);
             for (int y = 0; y < 16; y++)
                 for (int x = 0; x < 16; x++)
                     buf.setPixel(x, y, 0xFF000000 | ((x * 16) << 16) | ((y * 16) << 8));
@@ -267,21 +267,21 @@ public class VP8CodecTest {
 
         @Test @DisplayName("QI=0 solid gray reconstructs losslessly through libwebp")
         void pixelFidelitySolidGray() throws Exception {
-            PixelBuffer buf = PixelBuffer.create(16, 16);
+            PixelBuffer buf = PixelBuffer.straight(16, 16);
             buf.fill(0xFF808080);  // mid-gray matches the prediction baseline (128)
             assertLibwebpDecodesPixel(buf, 1.0f, 0x80, 0x80, 0x80, 4);
         }
 
         @Test @DisplayName("QI=0 solid red reconstructs through libwebp within YUV quantization tolerance")
         void pixelFidelitySolidRed() throws Exception {
-            PixelBuffer buf = PixelBuffer.create(16, 16);
+            PixelBuffer buf = PixelBuffer.straight(16, 16);
             buf.fill(0xFFFF0000);
             assertLibwebpDecodesPixel(buf, 1.0f, 0xFF, 0x00, 0x00, 16);
         }
 
         @Test @DisplayName("horizontal stripes pick V_PRED when available")
         void modeSelectionPicksVertical() throws Exception {
-            PixelBuffer buf = PixelBuffer.create(16, 32);
+            PixelBuffer buf = PixelBuffer.straight(16, 32);
             for (int y = 0; y < 32; y++)
                 for (int x = 0; x < 16; x++) {
                     int g = (y * 255) / 31;
@@ -300,7 +300,7 @@ public class VP8CodecTest {
         @Test @DisplayName("loop filter level is non-zero at moderate quality")
         void loopFilterEnabled() {
             // Encoder should emit a non-zero filter level so the decoder smooths block edges.
-            PixelBuffer buf = PixelBuffer.create(16, 16);
+            PixelBuffer buf = PixelBuffer.straight(16, 16);
             buf.fill(0xFF808080);
             byte[] vp8 = VP8Encoder.encode(buf, 0.5f);     // q=0.5 -> mid-quality, mid-filter
             int filterLevel = readFilterLevelFromHeader(vp8);
@@ -313,7 +313,7 @@ public class VP8CodecTest {
             // The encoder emits filter_level > 0 at q=0.9; asserting a healthy PSNR there
             // guarantees the filter (applied by libwebp on decode) isn't degrading
             // output. If LoopFilter or filter_level computation drifts, this fails.
-            PixelBuffer buf = PixelBuffer.create(32, 48);
+            PixelBuffer buf = PixelBuffer.straight(32, 48);
             for (int y = 0; y < 48; y++)
                 for (int x = 0; x < 32; x++) {
                     int r = (x * 255) / 31;
@@ -351,7 +351,7 @@ public class VP8CodecTest {
         void bPredSharpEdgesLibwebpRoundTrip() throws Exception {
             // Vertical bars create sharp intra-block gradients that strongly favor B_PRED
             // over 16x16 DC. Verifies the B_PRED wire format is libwebp-compatible.
-            PixelBuffer buf = PixelBuffer.create(16, 16);
+            PixelBuffer buf = PixelBuffer.straight(16, 16);
             for (int y = 0; y < 16; y++)
                 for (int x = 0; x < 16; x++) {
                     int v = ((x / 2) & 1) == 0 ? 0 : 0xFF;
@@ -371,7 +371,7 @@ public class VP8CodecTest {
 
         @Test @DisplayName("16x16 gradient reconstructs through libwebp with bounded error at high quality")
         void pixelFidelityGradient() throws Exception {
-            PixelBuffer buf = PixelBuffer.create(16, 16);
+            PixelBuffer buf = PixelBuffer.straight(16, 16);
             for (int y = 0; y < 16; y++)
                 for (int x = 0; x < 16; x++)
                     buf.setPixel(x, y, 0xFF000000 | ((x * 16) << 16) | ((y * 16) << 8));
@@ -539,7 +539,7 @@ public class VP8CodecTest {
 
         @Test @DisplayName("self round-trip: 2x2 solid red decodes to encoder-reconstructed pixels")
         void selfRoundTrip2x2Red() {
-            PixelBuffer buf = PixelBuffer.create(2, 2);
+            PixelBuffer buf = PixelBuffer.straight(2, 2);
             buf.fill(0xFFFF0000);
             byte[] vp8 = VP8Encoder.encode(buf, 0.75f);
             PixelBuffer decoded = VP8Decoder.decode(vp8);
@@ -561,7 +561,7 @@ public class VP8CodecTest {
 
         @Test @DisplayName("self round-trip: 16x16 gradient decodes to source within PSNR bound")
         void selfRoundTrip16x16Gradient() {
-            PixelBuffer buf = PixelBuffer.create(16, 16);
+            PixelBuffer buf = PixelBuffer.straight(16, 16);
             for (int y = 0; y < 16; y++)
                 for (int x = 0; x < 16; x++)
                     buf.setPixel(x, y, 0xFF000000 | ((x * 16) << 16) | ((y * 16) << 8));
@@ -577,7 +577,7 @@ public class VP8CodecTest {
 
         @Test @DisplayName("self round-trip: 32x48 multi-MB image decodes to source within PSNR bound")
         void selfRoundTrip32x48MultiMb() {
-            PixelBuffer buf = PixelBuffer.create(32, 48);
+            PixelBuffer buf = PixelBuffer.straight(32, 48);
             for (int y = 0; y < 48; y++)
                 for (int x = 0; x < 32; x++) {
                     int r = (x * 255) / 31;
@@ -596,7 +596,7 @@ public class VP8CodecTest {
 
         @Test @DisplayName("decodes libwebp-produced 32x32 gradient to a recognizable image")
         void libwebpProducedGradientQi0() throws Exception {
-            PixelBuffer src = PixelBuffer.create(32, 32);
+            PixelBuffer src = PixelBuffer.straight(32, 32);
             for (int y = 0; y < 32; y++)
                 for (int x = 0; x < 32; x++)
                     src.setPixel(x, y, 0xFF000000 | ((x * 8) << 16) | ((y * 8) << 8));
@@ -624,7 +624,7 @@ public class VP8CodecTest {
         void wireFormatVersionAndSimpleFilterBit() {
             // RFC 6386 section 9.1: version=0 pairs with bicubic (6-tap) sub-pel + normal
             // loop filter. Our sub-pel is 6-tap everywhere, so simple_filter must be 0.
-            PixelBuffer buf = PixelBuffer.create(16, 16);
+            PixelBuffer buf = PixelBuffer.straight(16, 16);
             buf.fill(0xFF808080);
             byte[] vp8 = VP8Encoder.encode(buf, 0.5f);
 
@@ -643,7 +643,7 @@ public class VP8CodecTest {
 
         @Test @DisplayName("conformance: normal-filter keyframe decodes via libwebp at >= 30 dB PSNR")
         void normalFilterLibwebpRoundtrip() throws Exception {
-            PixelBuffer src = PixelBuffer.create(32, 32);
+            PixelBuffer src = PixelBuffer.straight(32, 32);
             for (int y = 0; y < 32; y++)
                 for (int x = 0; x < 32; x++)
                     src.setPixel(x, y, 0xFF000000 | ((x * 8) << 16) | ((y * 8) << 8));
@@ -662,7 +662,7 @@ public class VP8CodecTest {
 
         @Test @DisplayName("conformance: our decoder matches libwebp's decode of the same libwebp-encoded stream")
         void decoderParityWithLibwebpOnLibwebpStream() throws Exception {
-            PixelBuffer src = PixelBuffer.create(32, 32);
+            PixelBuffer src = PixelBuffer.straight(32, 32);
             for (int y = 0; y < 32; y++)
                 for (int x = 0; x < 32; x++)
                     src.setPixel(x, y, 0xFF000000 | ((x * 8) << 16) | ((y * 8) << 8));
@@ -691,7 +691,7 @@ public class VP8CodecTest {
             // Quantization-induced block artefacts differ dramatically between mild
             // baseline filtering and maxed-out filtering - any decoder that ignores
             // the deltas produces identical pixels for both streams.
-            PixelBuffer src = PixelBuffer.create(32, 32);
+            PixelBuffer src = PixelBuffer.straight(32, 32);
             for (int y = 0; y < 32; y++)
                 for (int x = 0; x < 32; x++) {
                     // Smooth gradient produces quantization artefacts across MB edges
@@ -740,10 +740,10 @@ public class VP8CodecTest {
             // be emitted for at least some MBs. The round-trip proves our encoder's B_PRED
             // emission (YMODE_TREE=B_PRED + BMODE_PROBA_INTER per sub-block + no Y2) is
             // parseable by our decoder.
-            PixelBuffer base = PixelBuffer.create(32, 32);
+            PixelBuffer base = PixelBuffer.straight(32, 32);
             base.fill(0xFF808080);
 
-            PixelBuffer bars = PixelBuffer.create(32, 32);
+            PixelBuffer bars = PixelBuffer.straight(32, 32);
             for (int y = 0; y < 32; y++)
                 for (int x = 0; x < 32; x++) {
                     int v = ((x / 2) & 1) == 0 ? 0 : 0xFF;
@@ -785,7 +785,7 @@ public class VP8CodecTest {
 
         @Test @DisplayName("conformance: keyframe populates all three reference slots (LAST/GOLDEN/ALTREF)")
         void keyframeRefreshesAllThreeSlots() {
-            PixelBuffer src = PixelBuffer.create(16, 16);
+            PixelBuffer src = PixelBuffer.straight(16, 16);
             src.fill(0xFF206080);
 
             VP8EncoderSession enc = new VP8EncoderSession();
@@ -807,9 +807,9 @@ public class VP8CodecTest {
 
         @Test @DisplayName("conformance: default P-frame refreshes LAST but not GOLDEN/ALTREF")
         void defaultPFrameOnlyRefreshesLast() {
-            PixelBuffer frame0 = PixelBuffer.create(16, 16);
+            PixelBuffer frame0 = PixelBuffer.straight(16, 16);
             frame0.fill(0xFF206080);
-            PixelBuffer frame1 = PixelBuffer.create(16, 16);
+            PixelBuffer frame1 = PixelBuffer.straight(16, 16);
             frame1.fill(0xFFA040C0);
 
             VP8EncoderSession enc = new VP8EncoderSession();
@@ -843,7 +843,7 @@ public class VP8CodecTest {
             // at q=0.5 (filter_level > 0) stays within a bounded MSE against frame 0 -
             // without the default, the MB-outer-edge filter re-application per frame
             // produces unbounded drift.
-            PixelBuffer buf = PixelBuffer.create(32, 32);
+            PixelBuffer buf = PixelBuffer.straight(32, 32);
             for (int y = 0; y < 32; y++)
                 for (int x = 0; x < 32; x++)
                     buf.setPixel(x, y, 0xFF000000 | ((x * 8) << 16) | ((y * 8) << 8));
@@ -888,7 +888,7 @@ public class VP8CodecTest {
             int w = 64, h = 32;
             PixelBuffer[] frames = new PixelBuffer[4];
             for (int i = 0; i < 4; i++) {
-                PixelBuffer f = PixelBuffer.create(w, h);
+                PixelBuffer f = PixelBuffer.straight(w, h);
                 for (int y = 0; y < h; y++) {
                     for (int x = 0; x < w; x++) {
                         int srcX = (x - 4 * i + w * 4) % w;          // +4 px shift per frame
@@ -946,7 +946,7 @@ public class VP8CodecTest {
             int[] colors = { 0xFF203040, 0xFFE0A030, 0xFF30C0E0, 0xFF9030F0 };
             PixelBuffer[] frames = new PixelBuffer[colors.length];
             for (int i = 0; i < colors.length; i++) {
-                PixelBuffer f = PixelBuffer.create(w, h);
+                PixelBuffer f = PixelBuffer.straight(w, h);
                 f.fill(colors[i]);
                 frames[i] = f;
             }
@@ -991,7 +991,7 @@ public class VP8CodecTest {
             int w = 32, h = 32;
             PixelBuffer[] frames = new PixelBuffer[3];
             for (int i = 0; i < 3; i++) {
-                PixelBuffer f = PixelBuffer.create(w, h);
+                PixelBuffer f = PixelBuffer.straight(w, h);
                 for (int y = 0; y < h; y++) {
                     for (int x = 0; x < w; x++) {
                         // Each frame shifts +4 px right (with wrap). Luma gradient content
@@ -1059,8 +1059,8 @@ public class VP8CodecTest {
             // bound. The threshold is chosen empirically to be unreachable under half-pel
             // alone on this gradient.
             int w = 32, h = 32;
-            PixelBuffer f0 = PixelBuffer.create(w, h);
-            PixelBuffer f1 = PixelBuffer.create(w, h);
+            PixelBuffer f0 = PixelBuffer.straight(w, h);
+            PixelBuffer f1 = PixelBuffer.straight(w, h);
             for (int y = 0; y < h; y++) {
                 for (int x = 0; x < w; x++) {
                     // ref[x] = x*6 + 40. Keeps samples in [40, 226] with headroom for
@@ -1238,7 +1238,7 @@ public class VP8CodecTest {
             // SUB_MV_REF_TREE=ZERO4X4 at the LEFT_ABOVE_BOTH_ZERO context, plus the
             // cross-MB bmi neighbour lookups (MB 0,0 is the seed; MBs 1,0 / 0,1 / 1,1
             // each read bmi slots from their SPLITMV neighbours).
-            PixelBuffer src = PixelBuffer.create(32, 32);
+            PixelBuffer src = PixelBuffer.straight(32, 32);
             for (int y = 0; y < 32; y++)
                 for (int x = 0; x < 32; x++)
                     src.setPixel(x, y, 0xFF000000 | ((x * 8) << 16) | ((y * 8) << 8));
@@ -1278,7 +1278,7 @@ public class VP8CodecTest {
             // fully determined. A bug in the SPLITMV parse, the LF mode mapping, or
             // the cross-MB bmi lookup would either crash, mis-consume the token
             // partition, or produce garbage with PSNR below ~25 dB.
-            PixelBuffer src = PixelBuffer.create(32, 32);
+            PixelBuffer src = PixelBuffer.straight(32, 32);
             for (int y = 0; y < 32; y++)
                 for (int x = 0; x < 32; x++) {
                     int r = (x * 255) / 31;
@@ -1327,7 +1327,7 @@ public class VP8CodecTest {
             // halves cleanly. If the R-D enumeration picks SPLITMV correctly, the P-frame
             // decode is near-pixel-exact (PSNR limited only by keyframe quantization at q=1.0).
             int W = 32, H = 32;
-            PixelBuffer keyframe = PixelBuffer.create(W, H);
+            PixelBuffer keyframe = PixelBuffer.straight(W, H);
             for (int y = 0; y < H; y++)
                 for (int x = 0; x < W; x++) {
                     // High-entropy luma so the MV search has unique SAD minima.
@@ -1336,7 +1336,7 @@ public class VP8CodecTest {
                     keyframe.setPixel(x, y, 0xFF000000 | (luma << 16) | (luma << 8) | luma);
                 }
 
-            PixelBuffer pframe = PixelBuffer.create(W, H);
+            PixelBuffer pframe = PixelBuffer.straight(W, H);
             for (int y = 0; y < H; y++) {
                 int yLocal = y & 15;   // position within the MB row
                 for (int x = 0; x < W; x++) {
@@ -1388,14 +1388,14 @@ public class VP8CodecTest {
             // cause the decoder to mis-consume the token partition and either crash or
             // drop PSNR well below 20 dB.
             int W = 32, H = 32;
-            PixelBuffer keyframe = PixelBuffer.create(W, H);
+            PixelBuffer keyframe = PixelBuffer.straight(W, H);
             for (int y = 0; y < H; y++)
                 for (int x = 0; x < W; x++) {
                     int mix = x * 0x9E3779B1 ^ y * 0x85EBCA77;
                     int luma = (mix >>> 24) & 0xFF;
                     keyframe.setPixel(x, y, 0xFF000000 | (luma << 16) | (luma << 8) | luma);
                 }
-            PixelBuffer pframe = PixelBuffer.create(W, H);
+            PixelBuffer pframe = PixelBuffer.straight(W, H);
             for (int y = 0; y < H; y++) {
                 int yLocal = y & 15;
                 for (int x = 0; x < W; x++) {
@@ -1442,7 +1442,7 @@ public class VP8CodecTest {
             // Smooth: an unchanged solid source predicts every MB with zero error, under the
             // gate, so no MB reaches the SPLITMV search.
             int W = 32, H = 32;
-            PixelBuffer solid = PixelBuffer.create(W, H);
+            PixelBuffer solid = PixelBuffer.straight(W, H);
             solid.fill(0xFF8080A0);
 
             VP8EncoderSession smooth = new VP8EncoderSession();
@@ -1461,8 +1461,8 @@ public class VP8CodecTest {
             // search runs. A candidate's error is measured after its residual is coded, so at
             // a fine quantizer even noise can reconstruct under the gate.
             java.util.Random random = new java.util.Random(7);
-            PixelBuffer first = PixelBuffer.create(W, H);
-            PixelBuffer second = PixelBuffer.create(W, H);
+            PixelBuffer first = PixelBuffer.straight(W, H);
+            PixelBuffer second = PixelBuffer.straight(W, H);
             for (int i = 0; i < W * H; i++) {
                 first.data()[i] = 0xFF000000 | random.nextInt(0x1000000);
                 second.data()[i] = 0xFF000000 | random.nextInt(0x1000000);
@@ -1516,7 +1516,7 @@ public class VP8CodecTest {
             // perturb reconstruction when the deltas are neutral. A misaligned segment
             // tree read would desynchronize every downstream MB bit and catastrophically
             // corrupt the image.
-            PixelBuffer src = PixelBuffer.create(32, 32);
+            PixelBuffer src = PixelBuffer.straight(32, 32);
             for (int y = 0; y < 32; y++)
                 for (int x = 0; x < 32; x++)
                     src.setPixel(x, y, 0xFF000000 | ((x * 8) << 16) | ((y * 8) << 8));
@@ -1556,7 +1556,7 @@ public class VP8CodecTest {
             // segment ID, 64 bytes on the map alone; probabilities taken from the histogram put
             // 255 of the 256 IDs on near-certain branches.
             int size = 256;
-            PixelBuffer src = PixelBuffer.create(size, size);
+            PixelBuffer src = PixelBuffer.straight(size, size);
             for (int y = 0; y < size; y++)
                 for (int x = 0; x < size; x++)
                     src.setPixel(x, y, 0xFF000000 | (x << 16) | (y << 8) | ((x + y) >> 1));
@@ -1577,7 +1577,7 @@ public class VP8CodecTest {
             // time, the bottom MBs will see substantially more filtering than the
             // top MBs - producing observable pixel divergence between the two decodes
             // (with zero delta vs with non-zero delta).
-            PixelBuffer src = PixelBuffer.create(32, 32);
+            PixelBuffer src = PixelBuffer.straight(32, 32);
             for (int y = 0; y < 32; y++)
                 for (int x = 0; x < 32; x++) {
                     int r = (x * 255) / 31;
@@ -1642,7 +1642,7 @@ public class VP8CodecTest {
             // to an all-zero delta baseline - proving the per-segment quantizer path
             // is actually wired end-to-end rather than falling back to the base QI on
             // every MB.
-            PixelBuffer src = PixelBuffer.create(32, 32);
+            PixelBuffer src = PixelBuffer.straight(32, 32);
             for (int y = 0; y < 32; y++)
                 for (int x = 0; x < 32; x++)
                     src.setPixel(x, y, 0xFF000000 | ((x * 8) << 16) | ((y * 8) << 8));
@@ -1687,7 +1687,7 @@ public class VP8CodecTest {
             // that a negative delta (which lowers the segment's QI, raising quality)
             // strictly increases byte output and a positive delta strictly decreases
             // it, so the encoder-side swap is wired.
-            PixelBuffer src = PixelBuffer.create(32, 32);
+            PixelBuffer src = PixelBuffer.straight(32, 32);
             for (int y = 0; y < 32; y++)
                 for (int x = 0; x < 32; x++)
                     src.setPixel(x, y, 0xFF000000 | ((x * 8) << 16) | ((y * 8) << 8));
@@ -1729,7 +1729,7 @@ public class VP8CodecTest {
             // reproduce, such as regular stripes, leaves no residual for the coarser
             // quantizer to cut, so it pays for the segment map and saves nothing.
             int w = 64, h = 64;
-            PixelBuffer src = PixelBuffer.create(w, h);
+            PixelBuffer src = PixelBuffer.straight(w, h);
             for (int y = 0; y < h; y++) {
                 for (int x = 0; x < w; x++) {
                     int argb;
@@ -1789,7 +1789,7 @@ public class VP8CodecTest {
             // normal single-segment VP8Encoder.encode path, producing byte-identical
             // output (no wasted segment-tree emit bits on content that can't benefit).
             int w = 32, h = 32;
-            PixelBuffer src = PixelBuffer.create(w, h);
+            PixelBuffer src = PixelBuffer.straight(w, h);
             for (int y = 0; y < h; y++)
                 for (int x = 0; x < w; x++)
                     src.setPixel(x, y, 0xFF808080);
@@ -1819,8 +1819,8 @@ public class VP8CodecTest {
             // not a correctness requirement - R-D still picks the final MV - so thread
             // count must not leak into bit output.
             int w = 48, h = 48;
-            PixelBuffer frame0 = PixelBuffer.create(w, h);
-            PixelBuffer frame1 = PixelBuffer.create(w, h);
+            PixelBuffer frame0 = PixelBuffer.straight(w, h);
+            PixelBuffer frame1 = PixelBuffer.straight(w, h);
             for (int y = 0; y < h; y++)
                 for (int x = 0; x < w; x++) {
                     frame0.setPixel(x, y, 0xFF000000 | ((x * 5) << 16) | ((y * 5) << 8));
@@ -1869,14 +1869,14 @@ public class VP8CodecTest {
             // confirming the sub-block cache + findBestSubBlockMv fallback path
             // preserves the existing bit-exact-across-threads contract.
             int W = 32, H = 32;
-            PixelBuffer keyframe = PixelBuffer.create(W, H);
+            PixelBuffer keyframe = PixelBuffer.straight(W, H);
             for (int y = 0; y < H; y++)
                 for (int x = 0; x < W; x++) {
                     int mix = x * 0x9E3779B1 ^ y * 0x85EBCA77;
                     int luma = (mix >>> 24) & 0xFF;
                     keyframe.setPixel(x, y, 0xFF000000 | (luma << 16) | (luma << 8) | luma);
                 }
-            PixelBuffer pframe = PixelBuffer.create(W, H);
+            PixelBuffer pframe = PixelBuffer.straight(W, H);
             for (int y = 0; y < H; y++) {
                 int yLocal = y & 15;
                 for (int x = 0; x < W; x++) {
@@ -1933,7 +1933,7 @@ public class VP8CodecTest {
             // that give the encoder a realistic mix of intra-DC and intra-other
             // mode picks to reason about.
             int W = 64, H = 64;
-            PixelBuffer src = PixelBuffer.create(W, H);
+            PixelBuffer src = PixelBuffer.straight(W, H);
             for (int y = 0; y < H; y++) {
                 for (int x = 0; x < W; x++) {
                     int argb;
@@ -2127,7 +2127,7 @@ public class VP8CodecTest {
 
         @Test @DisplayName("session encode produces bitstream identical to static encode")
         void sessionEncodeMatchesStaticEncode() {
-            PixelBuffer buf = PixelBuffer.create(32, 32);
+            PixelBuffer buf = PixelBuffer.straight(32, 32);
             for (int y = 0; y < 32; y++)
                 for (int x = 0; x < 32; x++)
                     buf.setPixel(x, y, 0xFF000000 | ((x * 8) << 16) | ((y * 8) << 8));
@@ -2142,9 +2142,9 @@ public class VP8CodecTest {
 
         @Test @DisplayName("two sequential session encodes match two independent static encodes")
         void sequentialSessionEncodesMatchIndependentStaticEncodes() {
-            PixelBuffer frame0 = PixelBuffer.create(16, 16);
+            PixelBuffer frame0 = PixelBuffer.straight(16, 16);
             frame0.fill(0xFF205080);
-            PixelBuffer frame1 = PixelBuffer.create(16, 16);
+            PixelBuffer frame1 = PixelBuffer.straight(16, 16);
             for (int y = 0; y < 16; y++)
                 for (int x = 0; x < 16; x++)
                     frame1.setPixel(x, y, 0xFF000000 | ((x * 16) << 16) | ((y * 16) << 8));
@@ -2164,7 +2164,7 @@ public class VP8CodecTest {
 
         @Test @DisplayName("session captures reference planes after encoding")
         void sessionCapturesReferenceAfterEncode() {
-            PixelBuffer buf = PixelBuffer.create(16, 16);
+            PixelBuffer buf = PixelBuffer.straight(16, 16);
             buf.fill(0xFFFF8040);
 
             VP8EncoderSession session = new VP8EncoderSession();
@@ -2182,7 +2182,7 @@ public class VP8CodecTest {
 
         @Test @DisplayName("session reset clears the cached reference")
         void sessionResetClearsReference() {
-            PixelBuffer buf = PixelBuffer.create(16, 16);
+            PixelBuffer buf = PixelBuffer.straight(16, 16);
             buf.fill(0xFFFF8040);
             VP8EncoderSession session = new VP8EncoderSession();
             session.encode(buf, 0.75f, true);
@@ -2195,7 +2195,7 @@ public class VP8CodecTest {
 
         @Test @DisplayName("session decode matches static decode pixel-for-pixel")
         void sessionDecodeMatchesStaticDecode() {
-            PixelBuffer src = PixelBuffer.create(16, 16);
+            PixelBuffer src = PixelBuffer.straight(16, 16);
             for (int y = 0; y < 16; y++)
                 for (int x = 0; x < 16; x++)
                     src.setPixel(x, y, 0xFF000000 | ((x * 16) << 16) | ((y * 16) << 8));
@@ -2217,7 +2217,7 @@ public class VP8CodecTest {
 
         @Test @DisplayName("P-frame: identical frame 1 round-trips to frame 0 reconstruction (all inter-skip)")
         void pFrameIdenticalFrameRoundTrip() {
-            PixelBuffer buf = PixelBuffer.create(16, 16);
+            PixelBuffer buf = PixelBuffer.straight(16, 16);
             buf.fill(0xFF205080);
 
             VP8EncoderSession encSess = new VP8EncoderSession();
@@ -2247,9 +2247,9 @@ public class VP8CodecTest {
 
         @Test @DisplayName("P-frame: changed frame 1 uses intra-in-P fallback and decodes close to source")
         void pFrameChangedFrameFallsBackToIntra() {
-            PixelBuffer f0 = PixelBuffer.create(16, 16);
+            PixelBuffer f0 = PixelBuffer.straight(16, 16);
             f0.fill(0xFF101010);
-            PixelBuffer f1 = PixelBuffer.create(16, 16);
+            PixelBuffer f1 = PixelBuffer.straight(16, 16);
             f1.fill(0xFFF0F0F0);
 
             VP8EncoderSession encSess = new VP8EncoderSession();
@@ -2272,7 +2272,7 @@ public class VP8CodecTest {
 
         @Test @DisplayName("P-frame: multi-MB stationary content shrinks at high quality")
         void pFrameStationaryMultiMbShrinks() {
-            PixelBuffer buf = PixelBuffer.create(32, 32);
+            PixelBuffer buf = PixelBuffer.straight(32, 32);
             for (int y = 0; y < 32; y++)
                 for (int x = 0; x < 32; x++)
                     buf.setPixel(x, y, 0xFF000000 | ((x * 8) << 16) | ((y * 8) << 8));
@@ -2302,7 +2302,7 @@ public class VP8CodecTest {
             // inter-skip copies the ref directly and pixel-exact parity across frames is
             // guaranteed. This test catches regressions of the encoder's loop-filter pass
             // and the MV-ref context-probability derivation at the same time.
-            PixelBuffer buf = PixelBuffer.create(32, 32);
+            PixelBuffer buf = PixelBuffer.straight(32, 32);
             for (int y = 0; y < 32; y++)
                 for (int x = 0; x < 32; x++)
                     buf.setPixel(x, y, 0xFF000000 | ((x * 8) << 16) | ((y * 8) << 8));
@@ -2332,8 +2332,8 @@ public class VP8CodecTest {
             // shifted by (0, 8 pixels horizontal). With motion search at 2-pel luma steps,
             // the encoder should pick MV=(0, 8), emit NEW_MV, and reconstruct close to frame 1.
             int w = 32, h = 32;
-            PixelBuffer f0 = PixelBuffer.create(w, h);
-            PixelBuffer f1 = PixelBuffer.create(w, h);
+            PixelBuffer f0 = PixelBuffer.straight(w, h);
+            PixelBuffer f1 = PixelBuffer.straight(w, h);
             for (int y = 0; y < h; y++) {
                 for (int x = 0; x < w; x++) {
                     int color = 0xFF000000 | ((x * 8) << 16) | ((y * 8) << 8);
@@ -2383,8 +2383,8 @@ public class VP8CodecTest {
             // NEWMV, subsequent MBs whose above/left neighbour shares the MV should use
             // NEARESTMV/NEARMV - measurably smaller than the same frame forced to all NEWMV.
             int w = 64, h = 32;
-            PixelBuffer f0 = PixelBuffer.create(w, h);
-            PixelBuffer f1 = PixelBuffer.create(w, h);
+            PixelBuffer f0 = PixelBuffer.straight(w, h);
+            PixelBuffer f1 = PixelBuffer.straight(w, h);
             for (int y = 0; y < h; y++) {
                 for (int x = 0; x < w; x++) {
                     int pattern = ((x / 4) + y) * 4 & 0xFF;   // diagonal stripes
@@ -2439,8 +2439,8 @@ public class VP8CodecTest {
             // fractional position rather than refuse it: one that threw on a sub-pel
             // MV fails here.
             int w = 64, h = 32;
-            PixelBuffer f0 = PixelBuffer.create(w, h);
-            PixelBuffer f1 = PixelBuffer.create(w, h);
+            PixelBuffer f0 = PixelBuffer.straight(w, h);
+            PixelBuffer f1 = PixelBuffer.straight(w, h);
             for (int y = 0; y < h; y++) {
                 for (int x = 0; x < w; x++) {
                     int color = 0xFF000000 | ((x * 4) << 16) | ((y * 8) << 8);
@@ -2515,7 +2515,7 @@ public class VP8CodecTest {
 
         @Test @DisplayName("decoder session captures reference planes after decoding")
         void decoderSessionCapturesReferenceAfterDecode() {
-            PixelBuffer src = PixelBuffer.create(16, 16);
+            PixelBuffer src = PixelBuffer.straight(16, 16);
             src.fill(0xFF205080);
             byte[] vp8 = VP8Encoder.encode(src, 0.75f);
 
@@ -2685,7 +2685,7 @@ public class VP8CodecTest {
      * than the band above.
      */
     private static PixelBuffer shear(int width, int height, int frame) {
-        PixelBuffer pixels = PixelBuffer.create(width, height);
+        PixelBuffer pixels = PixelBuffer.straight(width, height);
         for (int y = 0; y < height; y++) {
             for (int x = 0; x < width; x++) {
                 int sx = x - (y / 8) * frame;

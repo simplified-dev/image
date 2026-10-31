@@ -117,8 +117,8 @@ class PremultipliedEncodeTest {
     @Test
     @DisplayName("PNM stores straight colour with alpha dropped")
     void pnmStoresStraightWithoutAlpha() {
-        PixelBuffer pixels = row(PREMULTIPLIED);
-        PixelBuffer decoded = new PnmImageReader().read(new PnmImageWriter().write(StaticImageData.of(pixels, AlphaMode.PREMULTIPLIED))).toPixelBuffer();
+        PixelBuffer pixels = row(PREMULTIPLIED, AlphaMode.PREMULTIPLIED);
+        PixelBuffer decoded = new PnmImageReader().read(new PnmImageWriter().write(StaticImageData.of(pixels))).toPixelBuffer();
 
         for (int x = 0; x < STRAIGHT.length; x++)
             assertThat("pixel " + x, decoded.getPixel(x, 0), equalTo(0xFF000000 | STRAIGHT[x]));
@@ -146,7 +146,7 @@ class PremultipliedEncodeTest {
     @DisplayName("lossy WebP takes its colour from straight pixels and keeps the alpha plane exact")
     void webpLossyTakesStraightColour() {
         PixelBuffer pixels = halves(0x80800000, 0x40202020);
-        ImageData data = StaticImageData.of(pixels, AlphaMode.PREMULTIPLIED);
+        ImageData data = StaticImageData.of(pixels);
         byte[] webp = new WebPImageWriter().write(data, WebPWriteOptions.builder().isLossless(false).withQuality(0.9f).build());
 
         assertLossyStraight(new WebPImageReader().read(webp).toPixelBuffer(), 0x80FF0000, 0x40808080);
@@ -158,25 +158,25 @@ class PremultipliedEncodeTest {
     @Test
     @DisplayName("a multi-page TIFF stores every page as straight colour")
     void tiffAnimationStoresStraight() {
-        AnimatedImageData data = animation(AlphaMode.PREMULTIPLIED);
+        AnimatedImageData data = animation();
         List<PixelBuffer> pages = tiffPages(new TiffImageWriter().write(data));
 
         assertThat(pages.size(), equalTo(2));
-        assertThat(pages.getFirst().data(), equalTo(frame(STRAIGHT, false, CHANGED_STRAIGHT).data()));
-        assertThat(pages.getLast().data(), equalTo(frame(STRAIGHT, true, CHANGED_STRAIGHT).data()));
+        assertThat(pages.getFirst().data(), equalTo(frame(STRAIGHT, false, CHANGED_STRAIGHT)));
+        assertThat(pages.getLast().data(), equalTo(frame(STRAIGHT, true, CHANGED_STRAIGHT)));
         assertAnimationUntouched(data);
     }
 
     @Test
     @DisplayName("a lossless animated WebP stores every partial frame as straight colour")
     void webpLosslessAnimationStoresStraight() {
-        AnimatedImageData data = animation(AlphaMode.PREMULTIPLIED);
+        AnimatedImageData data = animation();
         ImageData decoded = new WebPImageReader().read(new WebPImageWriter().write(data));
 
         assertThat(decoded, instanceOf(AnimatedImageData.class));
         assertThat(decoded.getFrames().size(), equalTo(2));
-        assertThat(decoded.getFrames().getFirst().pixels().data(), equalTo(frame(STRAIGHT, false, CHANGED_STRAIGHT).data()));
-        assertThat(decoded.getFrames().getLast().pixels().data(), equalTo(frame(STRAIGHT, true, CHANGED_STRAIGHT).data()));
+        assertThat(decoded.getFrames().getFirst().pixels().data(), equalTo(frame(STRAIGHT, false, CHANGED_STRAIGHT)));
+        assertThat(decoded.getFrames().getLast().pixels().data(), equalTo(frame(STRAIGHT, true, CHANGED_STRAIGHT)));
         assertAnimationUntouched(data);
     }
 
@@ -186,7 +186,6 @@ class PremultipliedEncodeTest {
         AnimatedImageData data = AnimatedImageData.builder()
             .withFrame(ImageFrame.of(halves(0x80800000, 0x40202020), 100, 0, 0, FrameDisposal.RESTORE_TO_BACKGROUND, FrameBlend.SOURCE))
             .withFrame(ImageFrame.of(halves(0x40202020, 0x80800000), 100, 0, 0, FrameDisposal.RESTORE_TO_BACKGROUND, FrameBlend.SOURCE))
-            .withAlphaMode(AlphaMode.PREMULTIPLIED)
             .build();
         WebPWriteOptions options = WebPWriteOptions.builder().isLossless(false).withQuality(0.9f).usePFrames(true).build();
         ImageData decoded = new WebPImageReader().read(new WebPImageWriter().write(data, options));
@@ -206,14 +205,11 @@ class PremultipliedEncodeTest {
      * back, and that the write left the row alone.
      */
     private static void assertDecodesStraight(@NotNull Function<ImageData, PixelBuffer> roundTrip) {
-        PixelBuffer pixels = row(PREMULTIPLIED);
-        PixelBuffer decoded = roundTrip.apply(StaticImageData.of(pixels, AlphaMode.PREMULTIPLIED));
+        PixelBuffer pixels = row(PREMULTIPLIED, AlphaMode.PREMULTIPLIED);
+        PixelBuffer decoded = roundTrip.apply(StaticImageData.of(pixels));
 
         assertThat(decoded.data(), equalTo(STRAIGHT));
-
-        PixelBuffer premultiplied = decoded.copy();
-        premultiplied.premultiplyAlpha();
-        assertThat(premultiplied.data(), equalTo(PREMULTIPLIED));
+        assertThat(decoded.toAlphaMode(AlphaMode.PREMULTIPLIED).data(), equalTo(PREMULTIPLIED));
         assertThat(pixels.data(), equalTo(PREMULTIPLIED));
     }
 
@@ -227,10 +223,10 @@ class PremultipliedEncodeTest {
         for (int x = 0; x < opaque.length; x++)
             opaque[x] = 0xFF000000 | PREMULTIPLIED[x];
 
-        PixelBuffer pixels = row(PREMULTIPLIED);
-        byte[] written = writer.write(StaticImageData.of(pixels, AlphaMode.PREMULTIPLIED));
+        PixelBuffer pixels = row(PREMULTIPLIED, AlphaMode.PREMULTIPLIED);
+        byte[] written = writer.write(StaticImageData.of(pixels));
 
-        assertThat(written, equalTo(writer.write(StaticImageData.of(row(opaque)))));
+        assertThat(written, equalTo(writer.write(StaticImageData.of(row(opaque, AlphaMode.STRAIGHT)))));
         assertThat(pixels.data(), equalTo(PREMULTIPLIED));
     }
 
@@ -257,22 +253,32 @@ class PremultipliedEncodeTest {
     }
 
     private static void assertAnimationUntouched(@NotNull AnimatedImageData data) {
-        assertThat(data.getFrames().getFirst().pixels().data(), equalTo(frame(PREMULTIPLIED, false, CHANGED_PREMULTIPLIED).data()));
-        assertThat(data.getFrames().getLast().pixels().data(), equalTo(frame(PREMULTIPLIED, true, CHANGED_PREMULTIPLIED).data()));
+        assertThat(data.getFrames().getFirst().pixels().data(), equalTo(frame(PREMULTIPLIED, false, CHANGED_PREMULTIPLIED)));
+        assertThat(data.getFrames().getLast().pixels().data(), equalTo(frame(PREMULTIPLIED, true, CHANGED_PREMULTIPLIED)));
     }
 
     // ──── fixtures ────
 
-    private static @NotNull PixelBuffer row(int @NotNull [] pixels) {
-        return PixelBuffer.of(pixels.clone(), pixels.length, 1);
+    /**
+     * Wraps a copy of {@code pixels}, one pixel tall, in a buffer holding {@code alphaMode}.
+     *
+     * @param pixels the pixels, copied
+     * @param alphaMode the convention the buffer holds
+     * @return the buffer
+     */
+    private static @NotNull PixelBuffer row(int @NotNull [] pixels, @NotNull AlphaMode alphaMode) {
+        return switch (alphaMode) {
+            case STRAIGHT -> PixelBuffer.ofStraight(pixels.clone(), pixels.length, 1);
+            case PREMULTIPLIED -> PixelBuffer.ofPremultiplied(pixels.clone(), pixels.length, 1);
+        };
     }
 
     /**
-     * An 8x4 frame whose every row is {@code row} turned left by the row's index, with a 2x2 block at
-     * (2, 2) set to {@code changed} when {@code withBlock} is set - so the second frame of an animation
-     * differs from the first only inside that block.
+     * The pixels of an 8x4 frame whose every row is {@code row} turned left by the row's index, with a
+     * 2x2 block at (2, 2) set to {@code changed} when {@code withBlock} is set - so the second frame of
+     * an animation differs from the first only inside that block.
      */
-    private static @NotNull PixelBuffer frame(int @NotNull [] row, boolean withBlock, int changed) {
+    private static int @NotNull [] frame(int @NotNull [] row, boolean withBlock, int changed) {
         int width = row.length;
         int[] pixels = new int[width * 4];
 
@@ -283,25 +289,32 @@ class PremultipliedEncodeTest {
             }
         }
 
-        return PixelBuffer.of(pixels, width, 4);
+        return pixels;
     }
 
-    private static @NotNull AnimatedImageData animation(@NotNull AlphaMode alphaMode) {
+    /**
+     * Builds a premultiplied animation of two {@link #frame} pictures, the second holding the changed
+     * block.
+     *
+     * @return the animation
+     */
+    private static @NotNull AnimatedImageData animation() {
+        int width = PREMULTIPLIED.length;
+
         return AnimatedImageData.builder()
-            .withFrame(ImageFrame.of(frame(PREMULTIPLIED, false, CHANGED_PREMULTIPLIED), 100, 0, 0, FrameDisposal.RESTORE_TO_BACKGROUND, FrameBlend.SOURCE))
-            .withFrame(ImageFrame.of(frame(PREMULTIPLIED, true, CHANGED_PREMULTIPLIED), 100, 0, 0, FrameDisposal.RESTORE_TO_BACKGROUND, FrameBlend.SOURCE))
-            .withAlphaMode(alphaMode)
+            .withFrame(ImageFrame.of(PixelBuffer.ofPremultiplied(frame(PREMULTIPLIED, false, CHANGED_PREMULTIPLIED), width, 4), 100, 0, 0, FrameDisposal.RESTORE_TO_BACKGROUND, FrameBlend.SOURCE))
+            .withFrame(ImageFrame.of(PixelBuffer.ofPremultiplied(frame(PREMULTIPLIED, true, CHANGED_PREMULTIPLIED), width, 4), 100, 0, 0, FrameDisposal.RESTORE_TO_BACKGROUND, FrameBlend.SOURCE))
             .build();
     }
 
-    /** A 32x16 buffer, {@code left} over its left half and {@code right} over its right. */
+    /** A premultiplied 32x16 buffer, {@code left} over its left half and {@code right} over its right. */
     private static @NotNull PixelBuffer halves(int left, int right) {
         int[] pixels = new int[32 * 16];
 
         for (int i = 0; i < pixels.length; i++)
             pixels[i] = i % 32 < 16 ? left : right;
 
-        return PixelBuffer.of(pixels, 32, 16);
+        return PixelBuffer.ofPremultiplied(pixels, 32, 16);
     }
 
     /**
@@ -328,7 +341,7 @@ class PremultipliedEncodeTest {
                     }
                 }
 
-                pages.add(PixelBuffer.of(pixels, raster.getWidth(), raster.getHeight()));
+                pages.add(PixelBuffer.ofStraight(pixels, raster.getWidth(), raster.getHeight()));
             }
 
             reader.dispose();

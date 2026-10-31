@@ -122,7 +122,7 @@ class VP8RateDistortionTest {
     @Test
     @DisplayName("a flat frame codes every macroblock with 16x16 prediction")
     void flatFramePredictsWhole() {
-        PixelBuffer flat = PixelBuffer.create(48, 48);
+        PixelBuffer flat = PixelBuffer.straight(48, 48);
         flat.fill(0xFF5A7D3C);
 
         for (float quality : new float[] { 0.25f, 0.75f, 1.0f }) {
