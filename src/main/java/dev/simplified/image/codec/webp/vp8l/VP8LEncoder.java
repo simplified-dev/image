@@ -130,7 +130,8 @@ public final class VP8LEncoder {
      * Encodes {@code pixels} into a VP8L payload suitable for wrapping in a {@code VP8L}
      * WebP chunk (via {@code RiffContainer#createChunk}), keeping the smallest of every
      * transform, color-cache and meta-Huffman combination tried. Each transform is applied
-     * once, and every color-cache and meta-Huffman trial of it codes that one output.
+     * and its output LZ77-parsed once, and every color-cache and meta-Huffman trial of it
+     * codes that one output from that one parse.
      *
      * @param pixels the ARGB source buffer
      * @return the encoded VP8L bitstream
@@ -146,9 +147,10 @@ public final class VP8LEncoder {
         // bits, tile mode sub-image, expanded alphabets) that can exceed the savings
         // on tiny images. Trying and picking is the simplest way to guarantee a
         // non-regression without replicating libwebp's entropy-estimation heuristic.
-        // A transform's output depends only on the pixels, so each is applied once up
-        // front and every cache x meta-Huffman trial of it codes the same output. The
-        // trials run in the order listed, and a tie keeps the one tried first.
+        // A transform's output and its LZ77 parse depend only on the pixels, so each
+        // transform is applied and parsed once up front and every cache x meta-Huffman
+        // trial of it codes the same output. The trials run in the order listed, and a
+        // tie keeps the one tried first.
         List<Transformed> transforms = new ArrayList<>(TransformMode.values().length);
         transforms.add(transform(pixels, TransformMode.NONE));
         if (detectPalette(pixels.data()) != null)
@@ -221,16 +223,16 @@ public final class VP8LEncoder {
     }
 
     /**
-     * Writes the VP8L header and the transform section {@code transformMode} selects, and
-     * applies that transform to {@code pixels}. The palette transform falls back to none
-     * when {@code pixels} holds more than 256 unique colors.
+     * Writes the VP8L header and the transform section {@code transformMode} selects,
+     * applies that transform to {@code pixels} and parses the result. The palette transform
+     * falls back to none when {@code pixels} holds more than 256 unique colors.
      *
      * @param pixels the source buffer
      * @param transformMode which reversible transform to apply, if any
      * @return the bitstream through the end of the transform section, with the pixels the
-     *         body codes after it
+     *         body codes after it and their LZ77 parse
      */
-    private static @NotNull Transformed transform(@NotNull PixelBuffer pixels, @NotNull TransformMode transformMode) {
+    static @NotNull Transformed transform(@NotNull PixelBuffer pixels, @NotNull TransformMode transformMode) {
         int width = pixels.width();
         int height = pixels.height();
         int[] pixelData = pixels.data();
@@ -318,15 +320,16 @@ public final class VP8LEncoder {
         // --- End of transform loop ---
         writer.writeBit(0);
 
-        return new Transformed(writer, bodyPixels, bodyWidth);
+        return new Transformed(writer, bodyPixels, bodyWidth, parse(bodyPixels));
     }
 
     /**
      * Encodes one transformed image: continues a copy of its header and transform section
-     * with the color-cache and meta-prefix bits, then the entropy-coded body. The
-     * transformed image itself is left unchanged, so any number of trials can code it.
+     * with the color-cache and meta-prefix bits, then the entropy-coded body replayed from
+     * its LZ77 parse. The transformed image itself is left unchanged, so any number of
+     * trials can code it.
      *
-     * @param transformed the header, transform section and body pixels to code
+     * @param transformed the header, transform section, body pixels and parse to code
      * @param colorCacheBits {@code 0} to disable the color cache, otherwise {@code 1..11}
      *                       for a cache of {@code 1 << colorCacheBits} entries
      * @param metaTileBits {@code 0} to use a single Huffman group for the whole image;
@@ -334,13 +337,14 @@ public final class VP8LEncoder {
      *                     meta-Huffman (multi-group) entropy coder
      * @return the encoded VP8L bitstream
      */
-    private static byte @NotNull [] encodeTransformed(
+    static byte @NotNull [] encodeTransformed(
         @NotNull Transformed transformed,
         int colorCacheBits,
         int metaTileBits
     ) {
         int[] bodyPixels = transformed.bodyPixels();
         int bodyWidth = transformed.bodyWidth();
+        Parse parse = transformed.parse();
         BitWriter writer = new BitWriter(transformed.prefix(), Math.max(1024, bodyPixels.length * 4));
 
         // --- Color cache ---
@@ -360,10 +364,10 @@ public final class VP8LEncoder {
                 throw new IllegalArgumentException("metaTileBits must be 0 or 2..9, got " + metaTileBits);
             writer.writeBit(1);
             writer.writeBits(metaTileBits - 2, 3);
-            encodePixelStreamBodyMultiHuffman(writer, bodyPixels, bodyWidth, colorCacheBits, metaTileBits);
+            encodePixelStreamBodyMultiHuffman(writer, bodyPixels, bodyWidth, colorCacheBits, metaTileBits, parse);
         } else {
             writer.writeBit(0);
-            encodePixelStreamBody(writer, bodyPixels, bodyWidth, colorCacheBits);
+            encodePixelStreamBody(writer, bodyPixels, bodyWidth, colorCacheBits, parse);
         }
 
         return writer.toByteArray();
@@ -483,7 +487,7 @@ public final class VP8LEncoder {
      */
     private static void encodeSubImage(@NotNull BitWriter writer, int @NotNull [] pixels, int width) {
         writer.writeBit(0);                     // no color cache in sub-image
-        encodePixelStreamBody(writer, pixels, width, 0);
+        encodePixelStreamBody(writer, pixels, width, 0, parse(pixels));
     }
 
     /**
@@ -544,6 +548,52 @@ public final class VP8LEncoder {
         }
         if (chosenLen == bestLen) return match;
         return new int[] { chosenLen, bestDist };
+    }
+
+    /**
+     * Finds the LZ77 matches every trial coding {@code pixels} replays. The greedy walk takes
+     * the match {@link #findBestMatchWithLookahead} finds at each position it reaches, or
+     * takes the pixel on its own, and inserts every position it passes into the hash chain;
+     * then the longest match at every position is found over the fully populated chain, for
+     * the single-group body's dynamic-programming pass. Neither reads the color cache or the
+     * meta-Huffman tile grid, so one parse serves every cache size and tile size.
+     *
+     * @param pixels the pixels to parse
+     * @return the walk's steps and the longest match at every position
+     */
+    private static @NotNull Parse parse(int @NotNull [] pixels) {
+        int pixelCount = pixels.length;
+        int[] stepLength = new int[pixelCount];
+        int[] stepDistance = new int[pixelCount];
+        int steps = 0;
+
+        int[] hashHead = LZ77.newHashHead();
+        int[] hashPrev = LZ77.newHashPrev(pixelCount);
+        int pos = 0;
+        while (pos < pixelCount) {
+            int[] match = findBestMatchWithLookahead(pixels, pos, pixelCount, hashHead, hashPrev);
+            int matchLen = match[0];
+            stepLength[steps] = matchLen;
+            stepDistance[steps] = match[1];
+            steps++;
+
+            // A match covers matchLen positions and a pixel taken on its own covers one;
+            // each enters the hash chain as the walk passes it.
+            int covered = matchLen >= LZ77.MIN_MATCH ? matchLen : 1;
+            for (int k = 0; k < covered; k++)
+                LZ77.updateHash(pixels, pos + k, hashHead, hashPrev);
+            pos += covered;
+        }
+
+        int[] matchLength = new int[pixelCount];
+        int[] matchDistance = new int[pixelCount];
+        for (int i = 0; i < pixelCount; i++) {
+            int[] m = LZ77.findMatch(pixels, i, Math.min(pixelCount - i, LZ77.MAX_LENGTH), hashHead, hashPrev);
+            matchLength[i] = m[0];
+            matchDistance[i] = m[1];
+        }
+
+        return new Parse(stepLength, stepDistance, steps, matchLength, matchDistance);
     }
 
     // ---------------------------------------------------------------------
@@ -660,7 +710,9 @@ public final class VP8LEncoder {
      * Huffman group (no clustering in this first cut, so {@code numGroups = numTiles}).
      * Emits a meta-prefix sub-image mapping tile index to group index, then the
      * per-group prefix-code declarations, then the replayed token stream with each
-     * token's symbols coded under its owning tile's Huffman tables.
+     * token's symbols coded under its owning tile's Huffman tables. The tokens follow
+     * {@code parse}'s greedy walk, each pixel it takes on its own coded as a literal or a
+     * color-cache index.
      * <p>
      * Win condition: the per-tile entropy advantage (regions with distinct statistics
      * each get a tightly-tuned prefix code) must exceed the per-group header overhead
@@ -673,7 +725,8 @@ public final class VP8LEncoder {
         int @NotNull [] pixelData,
         int width,
         int colorCacheBits,
-        int tileBits
+        int tileBits,
+        @NotNull Parse parse
     ) {
         int pixelCount = pixelData.length;
         int height = pixelCount / width;
@@ -697,17 +750,16 @@ public final class VP8LEncoder {
         int tokenCount = 0;
 
         ColorCache cache = new ColorCache(colorCacheBits);
-        int[] hashHead = LZ77.newHashHead();
-        int[] hashPrev = LZ77.newHashPrev(pixelCount);
+        int[] stepLength = parse.stepLength();
+        int[] stepDistance = parse.stepDistance();
 
         int pos = 0;
         int x = 0;
         int y = 0;
-        while (pos < pixelCount) {
+        for (int step = 0; step < parse.steps(); step++) {
             int group = (y >> tileBits) * prefixXsize + (x >> tileBits);
-            int[] match = findBestMatchWithLookahead(pixelData, pos, pixelCount, hashHead, hashPrev);
-            int matchLen = match[0];
-            int matchDist = match[1];
+            int matchLen = stepLength[step];
+            int matchDist = stepDistance[step];
 
             if (matchLen >= LZ77.MIN_MATCH) {
                 int[] lenPrefix = LZ77.prefixEncode(matchLen);
@@ -728,9 +780,9 @@ public final class VP8LEncoder {
                 tokenGroup[tokenCount] = group;
                 tokenCount++;
 
-                for (int k = 0; k < matchLen; k++) {
-                    LZ77.updateHash(pixelData, pos + k, hashHead, hashPrev);
-                    if (cacheSize > 0) cache.insert(pixelData[pos + k]);
+                if (cacheSize > 0) {
+                    for (int k = 0; k < matchLen; k++)
+                        cache.insert(pixelData[pos + k]);
                 }
                 pos += matchLen;
                 // Advance (x, y) over matchLen pixels with row-wrap.
@@ -767,7 +819,6 @@ public final class VP8LEncoder {
                     if (cacheSize > 0) cache.insert(argb);
                 }
 
-                LZ77.updateHash(pixelData, pos, hashHead, hashPrev);
                 pos++;
                 if (++x == width) { x = 0; y++; }
             }
@@ -998,26 +1049,25 @@ public final class VP8LEncoder {
     // ---------------------------------------------------------------------
 
     /**
-     * Writes the entropy-coded pixel body: a first pass walks the pixels with hash-chain
-     * LZ77 match finding and records a token stream plus per-alphabet frequency tables;
-     * the five prefix codes (G+length, R, B, A, distance) are declared; then the token
-     * stream is replayed into the bitstream.
+     * Writes the entropy-coded pixel body: a first pass replays {@code parse}'s greedy
+     * walk and records a token stream plus per-alphabet frequency tables, each pixel the
+     * walk takes on its own coded as a literal or a color-cache index; a
+     * dynamic-programming pass re-decides every choice over the parse's longest match at
+     * each position; the five prefix codes (G+length, R, B, A, distance) are declared;
+     * then the cheaper token stream is replayed into the bitstream.
      * <p>
      * The caller is responsible for having emitted the transform / color-cache /
      * meta-prefix header bits before invoking this helper. On the main image body
      * {@code width} is the post-transform "effective" width (equal to
      * {@code ceil(width / pixelsPerByte)} when a sub-bit-packed color-indexing
      * transform was applied); on sub-images it is the sub-image's own width.
-     * <p>
-     * Libwebp's {@code BackwardReferencesLz77} additionally does a "longest-reach
-     * lookahead" that can truncate a match if a later match reaches further; we skip
-     * that here (first-pass port).
      */
     private static void encodePixelStreamBody(
         @NotNull BitWriter writer,
         int @NotNull [] pixelData,
         int width,
-        int colorCacheBits
+        int colorCacheBits,
+        @NotNull Parse parse
     ) {
         int pixelCount = pixelData.length;
         int cacheSize = colorCacheBits > 0 ? (1 << colorCacheBits) : 0;
@@ -1039,13 +1089,12 @@ public final class VP8LEncoder {
 
         ColorCache cache = new ColorCache(colorCacheBits);
 
-        int[] hashHead = LZ77.newHashHead();
-        int[] hashPrev = LZ77.newHashPrev(pixelCount);
+        int[] stepLength = parse.stepLength();
+        int[] stepDistance = parse.stepDistance();
         int pos = 0;
-        while (pos < pixelCount) {
-            int[] match = findBestMatchWithLookahead(pixelData, pos, pixelCount, hashHead, hashPrev);
-            int matchLen = match[0];
-            int matchDist = match[1];
+        for (int step = 0; step < parse.steps(); step++) {
+            int matchLen = stepLength[step];
+            int matchDist = stepDistance[step];
 
             if (matchLen >= LZ77.MIN_MATCH) {
                 // Emit COPY token. Length is encoded via the 24-symbol length
@@ -1070,13 +1119,13 @@ public final class VP8LEncoder {
                 tokenValue[tokenCount] = matchDist;
                 tokenCount++;
 
-                // Advance the hash chain + color cache over every position in the
-                // match. The decoder inserts each copied pixel into the cache as it
+                // Advance the color cache over every position in the match. The
+                // decoder inserts each copied pixel into the cache as it
                 // materialises, so the encoder's cache state must track the same
                 // sequence of inserts to keep later cache-hit checks in sync.
-                for (int k = 0; k < matchLen; k++) {
-                    LZ77.updateHash(pixelData, pos + k, hashHead, hashPrev);
-                    if (cacheSize > 0) cache.insert(pixelData[pos + k]);
+                if (cacheSize > 0) {
+                    for (int k = 0; k < matchLen; k++)
+                        cache.insert(pixelData[pos + k]);
                 }
                 pos += matchLen;
             } else {
@@ -1114,7 +1163,6 @@ public final class VP8LEncoder {
                     if (cacheSize > 0) cache.insert(argb);
                 }
 
-                LZ77.updateHash(pixelData, pos, hashHead, hashPrev);
                 pos++;
             }
         }
@@ -1135,18 +1183,11 @@ public final class VP8LEncoder {
         PrefixCode alphaPrefixEst = buildPrefixCode(alphaFreq, MAX_HUFFMAN_BITS);
         PrefixCode distPrefixEst = buildPrefixCode(distFreq, MAX_HUFFMAN_BITS);
 
-        // Step 2: pre-compute best match at every pixel position. The hash chain
-        // is fully populated from the initial LZ77 pass so findMatch at any pos
-        // finds the globally-best backward reference.
-        int[] bestMatchLen = new int[pixelCount];
-        int[] bestMatchDist = new int[pixelCount];
-        for (int i = 0; i < pixelCount; i++) {
-            int rem = pixelCount - i;
-            int maxL = Math.min(rem, LZ77.MAX_LENGTH);
-            int[] m = LZ77.findMatch(pixelData, i, maxL, hashHead, hashPrev);
-            bestMatchLen[i] = m[0];
-            bestMatchDist[i] = m[1];
-        }
+        // Step 2: the best match at every pixel position, which the parse found over
+        // the hash chain the greedy walk fully populated, so it is the globally-best
+        // backward reference at each position. Read only - other trials share it.
+        int[] bestMatchLen = parse.matchLength();
+        int[] bestMatchDist = parse.matchDistance();
 
         // Step 2b: estimate cache state. Insert every pixel (conservative:
         // over-estimates cache availability, matching libwebp's approach).
@@ -1786,14 +1827,36 @@ public final class VP8LEncoder {
     /**
      * One reversible transform applied to one image, coded by every color-cache and
      * meta-Huffman trial of it. A trial writes to a copy of {@code prefix} and only reads
-     * {@code bodyPixels}, so the trials share it.
+     * {@code bodyPixels} and {@code parse}, so the trials share it.
      *
      * @param prefix the VP8L header and transform section, through the end-of-transforms bit
      * @param bodyPixels the transformed pixels the main image body codes
      * @param bodyWidth the width of {@code bodyPixels}, narrower than the image when a
      *                  palette packs several indices into each pixel
+     * @param parse the LZ77 parse of {@code bodyPixels}
      */
-    private record Transformed(@NotNull BitWriter prefix, int @NotNull [] bodyPixels, int bodyWidth) { }
+    record Transformed(@NotNull BitWriter prefix, int @NotNull [] bodyPixels, int bodyWidth, @NotNull Parse parse) { }
+
+    /**
+     * The LZ77 parse of one pixel array, which every trial coding the array replays and
+     * none writes.
+     *
+     * @param stepLength the length of each step of the greedy walk - a match when at least
+     *                   {@link LZ77#MIN_MATCH}, otherwise one pixel taken on its own
+     * @param stepDistance the backward distance of each step that is a match
+     * @param steps the number of steps the walk took
+     * @param matchLength the length of the longest match at each position over the fully
+     *                    populated hash chain, {@code 0} where none reaches
+     *                    {@link LZ77#MIN_MATCH}
+     * @param matchDistance the backward distance of each position's longest match
+     */
+    record Parse(
+        int @NotNull [] stepLength,
+        int @NotNull [] stepDistance,
+        int steps,
+        int @NotNull [] matchLength,
+        int @NotNull [] matchDistance
+    ) { }
 
     /**
      * One prefix code for one VP8L alphabet. Either a simple-mode code (1 or 2 distinct

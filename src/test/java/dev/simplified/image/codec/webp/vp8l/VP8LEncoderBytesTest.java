@@ -22,21 +22,25 @@ import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.greaterThan;
 
 /**
- * Pins the bytes {@link VP8LEncoder} writes for fixed images: six holding more than 256 colours so
+ * Pins the bytes {@link VP8LEncoder} writes for fixed images: seven holding more than 256 colours so
  * no palette applies, one of 16 colours that takes it, and one pixel whose trials tie.
  * <p>
- * Each digest was taken from an encoder that applied the transform afresh for every color-cache and
- * meta-Huffman trial, so they hold the encoder, which applies each transform once and shares it
- * across its trials, to that encoder's bytes. The unforced cases pin the trial
- * {@link VP8LEncoder#encode(PixelBuffer)} chooses as well as its bytes; the forced cases pin each
- * transform's header, sub-image and body with the color cache and meta-Huffman on.
+ * Each digest was taken from an encoder that applied the transform and walked the LZ77 parse afresh
+ * for every color-cache and meta-Huffman trial, so they hold the encoder, which does both once per
+ * transform and shares them across its trials, to that encoder's bytes. The unforced cases pin the
+ * trial {@link VP8LEncoder#encode(PixelBuffer)} chooses as well as its bytes; the forced cases pin
+ * each transform's header, sub-image and body with the color cache and meta-Huffman on.
  * <p>
- * Three images pin how the trials share a transform. The color cache wins the cached picks and
- * meta-Huffman wins the split halves, each a later trial of its transform than the first, so their
- * digests hold a trial to its transform's own header and pixels rather than what an earlier trial
- * left in them. The one-pixel image codes to 12 bytes three ways, each different - no transform
- * and subtract-green with the cache off, and no transform with it on - so its digest pins the order
- * the trials run in and that a tie keeps the first.
+ * Four images pin how the trials share a transform. The color cache wins the cached picks and the
+ * copied rows, and meta-Huffman wins the split halves, each a later trial of its transform than the
+ * first, so their digests hold a trial to its transform's own header, pixels and parse rather than
+ * what an earlier trial left in them, and of the three the copied rows' parse holds matches. The
+ * one-pixel image codes to 12 bytes three ways, each different - no transform and subtract-green
+ * with the cache off, and no transform with it on - so its digest pins the order the trials run in
+ * and that a tie keeps the first. A trial that wrote to the parse's longest matches would change
+ * only a later single-group trial that the dynamic-programming pass decides, and no fixture's
+ * chosen trial is one, so {@link #theTrialsOfOneTransformLeaveItUnchanged()} runs every trial of
+ * one shared transform and holds the transform to what it was.
  */
 class VP8LEncoderBytesTest {
 
@@ -49,6 +53,12 @@ class VP8LEncoderBytesTest {
         VP8LEncoder.TransformMode.CROSS_COLOR
     );
 
+    /** The color-cache sizes {@link VP8LEncoder#encode(PixelBuffer)} tries, its outer loop. */
+    private static final int[] CACHE_BITS_TRIALS = { 0, 10 };
+
+    /** The meta-Huffman tile sizes {@link VP8LEncoder#encode(PixelBuffer)} tries, inside the cache loop. */
+    private static final int[] META_TILE_BITS_TRIALS = { 0, 8 };
+
     private static final List<Image> IMAGES = List.of(
         new Image("NOISY_GRADIENT", VP8LEncoderBytesTest::noisyGradient, true),
         new Image("TRANSLUCENT_NOISE", VP8LEncoderBytesTest::translucentNoise, true),
@@ -56,6 +66,7 @@ class VP8LEncoderBytesTest {
         new Image("SMOOTH_GRADIENT", VP8LEncoderBytesTest::smoothGradient, true),
         new Image("CACHED_PICKS", VP8LEncoderBytesTest::cachedPicks, true),
         new Image("SPLIT_HALVES", VP8LEncoderBytesTest::splitHalves, true),
+        new Image("COPIED_ROWS", VP8LEncoderBytesTest::copiedRows, true),
         new Image("PALETTE_16", VP8LEncoderBytesTest::palette16, false),
         new Image("ONE_PIXEL", VP8LEncoderBytesTest::onePixel, false)
     );
@@ -67,6 +78,7 @@ class VP8LEncoderBytesTest {
         new Case("SMOOTH_GRADIENT", VP8LEncoderBytesTest::smoothGradient, null),
         new Case("CACHED_PICKS", VP8LEncoderBytesTest::cachedPicks, null),
         new Case("SPLIT_HALVES", VP8LEncoderBytesTest::splitHalves, null),
+        new Case("COPIED_ROWS", VP8LEncoderBytesTest::copiedRows, null),
         new Case("PALETTE_16", VP8LEncoderBytesTest::palette16, null),
         new Case("ONE_PIXEL", VP8LEncoderBytesTest::onePixel, null),
         new Case("NOISY_GRADIENT_NONE", VP8LEncoderBytesTest::noisyGradient, VP8LEncoder.TransformMode.NONE),
@@ -84,6 +96,7 @@ class VP8LEncoderBytesTest {
         Map.entry("SMOOTH_GRADIENT", "fdab050669f2ed93b41299d79b0b1e29591a42414ce7d174228b2d5086003d1b"),
         Map.entry("CACHED_PICKS", "444b00839c11f5f147e12efb7dd806009a962c638528d875ba36d46fea5ee8d6"),
         Map.entry("SPLIT_HALVES", "39f44660b416b74ebb59a5214464f81443b11254c61ca63be2159e579f5d95ad"),
+        Map.entry("COPIED_ROWS", "d8a7a0c50e56f5eb5737e39b9729ec42179c71ab726c59b4cf983eed576b226c"),
         Map.entry("PALETTE_16", "eeeaf45e202dfe418b6c260a45c713e6af7dab9fb10a27993b0af8d40e463c3d"),
         Map.entry("ONE_PIXEL", "745fd448c000140e096947520944da5b6d41a69ba680f91b293638b082a70f7b"),
         Map.entry("NOISY_GRADIENT_NONE", "cef8adbc014cad3dd4498788398cad5011cc39340fc401c332e9e1ab1eb65ddb"),
@@ -109,8 +122,8 @@ class VP8LEncoderBytesTest {
                 boolean paletteEligible = !image.overPalette();
                 byte[] best = null;
 
-                for (int cacheBits : new int[] { 0, 10 }) {
-                    for (int metaTileBits : new int[] { 0, 8 }) {
+                for (int cacheBits : CACHE_BITS_TRIALS) {
+                    for (int metaTileBits : META_TILE_BITS_TRIALS) {
                         for (VP8LEncoder.TransformMode mode : TRIAL_ORDER) {
                             if (mode == VP8LEncoder.TransformMode.PALETTE && !paletteEligible)
                                 continue;
@@ -125,6 +138,39 @@ class VP8LEncoderBytesTest {
 
                 assertThat(VP8LEncoder.encode(pixels), equalTo(best));
             }));
+    }
+
+    @TestFactory
+    Stream<DynamicTest> theTrialsOfOneTransformLeaveItUnchanged() {
+        return IMAGES.stream()
+            .flatMap(image -> TRIAL_ORDER.stream()
+                .filter(mode -> mode != VP8LEncoder.TransformMode.PALETTE || !image.overPalette())
+                .map(mode -> DynamicTest.dynamicTest(image.name() + "_" + mode, () -> {
+                    PixelBuffer pixels = image.pixels().get();
+                    VP8LEncoder.Transformed shared = VP8LEncoder.transform(pixels, mode);
+                    VP8LEncoder.Parse parse = shared.parse();
+                    int[] bodyPixels = shared.bodyPixels().clone();
+                    int[] stepLength = parse.stepLength().clone();
+                    int[] stepDistance = parse.stepDistance().clone();
+                    int[] matchLength = parse.matchLength().clone();
+                    int[] matchDistance = parse.matchDistance().clone();
+
+                    for (int cacheBits : CACHE_BITS_TRIALS) {
+                        for (int metaTileBits : META_TILE_BITS_TRIALS) {
+                            assertThat(
+                                cacheBits + "/" + metaTileBits,
+                                VP8LEncoder.encodeTransformed(shared, cacheBits, metaTileBits),
+                                equalTo(VP8LEncoder.encode(pixels, mode, cacheBits, metaTileBits))
+                            );
+                        }
+                    }
+
+                    assertThat("body pixels", shared.bodyPixels(), equalTo(bodyPixels));
+                    assertThat("step lengths", parse.stepLength(), equalTo(stepLength));
+                    assertThat("step distances", parse.stepDistance(), equalTo(stepDistance));
+                    assertThat("match lengths", parse.matchLength(), equalTo(matchLength));
+                    assertThat("match distances", parse.matchDistance(), equalTo(matchDistance));
+                })));
     }
 
     @TestFactory
@@ -226,6 +272,32 @@ class VP8LEncoderBytesTest {
                 pixels[y * 512 + x] = x < 256 ? 0xFF000000 | random.nextInt(256) << 16 : 0xFF000000 | random.nextInt(256);
 
         return PixelBuffer.ofStraight(pixels, 512, 16);
+    }
+
+    /**
+     * A 32x32 image of seeded random picks from 400 opaque colours, row by row, where each row from
+     * the fifth on copies a seeded earlier row half the time: LZ77 matches the copies and the color
+     * cache codes the recurring colours of the rest.
+     */
+    private static @NotNull PixelBuffer copiedRows() {
+        Random random = new Random(3);
+        int[] colours = new int[400];
+
+        for (int i = 0; i < colours.length; i++)
+            colours[i] = 0xFF000000 | random.nextInt(0x01000000);
+
+        int[] pixels = new int[32 * 32];
+
+        for (int y = 0; y < 32; y++) {
+            if (y >= 4 && random.nextDouble() < 0.5) {
+                System.arraycopy(pixels, random.nextInt(y) * 32, pixels, y * 32, 32);
+            } else {
+                for (int x = 0; x < 32; x++)
+                    pixels[y * 32 + x] = colours[random.nextInt(colours.length)];
+            }
+        }
+
+        return PixelBuffer.ofStraight(pixels, 32, 32);
     }
 
     /** A 40x24 diagonal pattern of 16 opaque colours, which the palette packs two to a pixel. */
