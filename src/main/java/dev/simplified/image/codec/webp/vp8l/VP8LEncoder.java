@@ -8,6 +8,9 @@ import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
  * Pure Java VP8L (WebP lossless) encoder.
  * <p>
@@ -126,7 +129,8 @@ public final class VP8LEncoder {
     /**
      * Encodes {@code pixels} into a VP8L payload suitable for wrapping in a {@code VP8L}
      * WebP chunk (via {@code RiffContainer#createChunk}), keeping the smallest of every
-     * transform, color-cache and meta-Huffman combination tried.
+     * transform, color-cache and meta-Huffman combination tried. Each transform is applied
+     * once, and every color-cache and meta-Huffman trial of it codes that one output.
      *
      * @param pixels the ARGB source buffer
      * @return the encoded VP8L bitstream
@@ -142,24 +146,24 @@ public final class VP8LEncoder {
         // bits, tile mode sub-image, expanded alphabets) that can exceed the savings
         // on tiny images. Trying and picking is the simplest way to guarantee a
         // non-regression without replicating libwebp's entropy-estimation heuristic.
-        int[] palette = detectPalette(pixels.data());
-        boolean paletteEligible = palette != null;
+        // A transform's output depends only on the pixels, so each is applied once up
+        // front and every cache x meta-Huffman trial of it codes the same output. The
+        // trials run in the order listed, and a tie keeps the one tried first.
+        List<Transformed> transforms = new ArrayList<>(TransformMode.values().length);
+        transforms.add(transform(pixels, TransformMode.NONE));
+        if (detectPalette(pixels.data()) != null)
+            transforms.add(transform(pixels, TransformMode.PALETTE));
+        transforms.add(transform(pixels, TransformMode.PREDICTOR));
+        transforms.add(transform(pixels, TransformMode.SUBTRACT_GREEN));
+        transforms.add(transform(pixels, TransformMode.CROSS_COLOR));
 
         byte[] best = null;
         for (int cacheBits : CACHE_BITS_TRIALS) {
             for (int metaTileBits : META_TILE_BITS_TRIALS) {
-                byte[] cand = encode(pixels, TransformMode.NONE, cacheBits, metaTileBits);
-                if (best == null || cand.length < best.length) best = cand;
-                if (paletteEligible) {
-                    cand = encode(pixels, TransformMode.PALETTE, cacheBits, metaTileBits);
-                    if (cand.length < best.length) best = cand;
+                for (Transformed transformed : transforms) {
+                    byte[] cand = encodeTransformed(transformed, cacheBits, metaTileBits);
+                    if (best == null || cand.length < best.length) best = cand;
                 }
-                cand = encode(pixels, TransformMode.PREDICTOR, cacheBits, metaTileBits);
-                if (cand.length < best.length) best = cand;
-                cand = encode(pixels, TransformMode.SUBTRACT_GREEN, cacheBits, metaTileBits);
-                if (cand.length < best.length) best = cand;
-                cand = encode(pixels, TransformMode.CROSS_COLOR, cacheBits, metaTileBits);
-                if (cand.length < best.length) best = cand;
             }
         }
         return best;
@@ -213,11 +217,25 @@ public final class VP8LEncoder {
         int colorCacheBits,
         int metaTileBits
     ) {
+        return encodeTransformed(transform(pixels, transformMode), colorCacheBits, metaTileBits);
+    }
+
+    /**
+     * Writes the VP8L header and the transform section {@code transformMode} selects, and
+     * applies that transform to {@code pixels}. The palette transform falls back to none
+     * when {@code pixels} holds more than 256 unique colors.
+     *
+     * @param pixels the source buffer
+     * @param transformMode which reversible transform to apply, if any
+     * @return the bitstream through the end of the transform section, with the pixels the
+     *         body codes after it
+     */
+    private static @NotNull Transformed transform(@NotNull PixelBuffer pixels, @NotNull TransformMode transformMode) {
         int width = pixels.width();
         int height = pixels.height();
         int[] pixelData = pixels.data();
 
-        BitWriter writer = new BitWriter(Math.max(1024, width * height * 4));
+        BitWriter writer = new BitWriter();
 
         // --- Header ---
         writer.writeBits(VP8L_SIGNATURE, 8);
@@ -299,6 +317,31 @@ public final class VP8LEncoder {
 
         // --- End of transform loop ---
         writer.writeBit(0);
+
+        return new Transformed(writer, bodyPixels, bodyWidth);
+    }
+
+    /**
+     * Encodes one transformed image: continues a copy of its header and transform section
+     * with the color-cache and meta-prefix bits, then the entropy-coded body. The
+     * transformed image itself is left unchanged, so any number of trials can code it.
+     *
+     * @param transformed the header, transform section and body pixels to code
+     * @param colorCacheBits {@code 0} to disable the color cache, otherwise {@code 1..11}
+     *                       for a cache of {@code 1 << colorCacheBits} entries
+     * @param metaTileBits {@code 0} to use a single Huffman group for the whole image;
+     *                     otherwise the tile-size exponent in {@code 2..9} enabling the
+     *                     meta-Huffman (multi-group) entropy coder
+     * @return the encoded VP8L bitstream
+     */
+    private static byte @NotNull [] encodeTransformed(
+        @NotNull Transformed transformed,
+        int colorCacheBits,
+        int metaTileBits
+    ) {
+        int[] bodyPixels = transformed.bodyPixels();
+        int bodyWidth = transformed.bodyWidth();
+        BitWriter writer = new BitWriter(transformed.prefix(), Math.max(1024, bodyPixels.length * 4));
 
         // --- Color cache ---
         if (colorCacheBits > 0) {
@@ -1739,6 +1782,18 @@ public final class VP8LEncoder {
     // ---------------------------------------------------------------------
     //  Value types
     // ---------------------------------------------------------------------
+
+    /**
+     * One reversible transform applied to one image, coded by every color-cache and
+     * meta-Huffman trial of it. A trial writes to a copy of {@code prefix} and only reads
+     * {@code bodyPixels}, so the trials share it.
+     *
+     * @param prefix the VP8L header and transform section, through the end-of-transforms bit
+     * @param bodyPixels the transformed pixels the main image body codes
+     * @param bodyWidth the width of {@code bodyPixels}, narrower than the image when a
+     *                  palette packs several indices into each pixel
+     */
+    private record Transformed(@NotNull BitWriter prefix, int @NotNull [] bodyPixels, int bodyWidth) { }
 
     /**
      * One prefix code for one VP8L alphabet. Either a simple-mode code (1 or 2 distinct

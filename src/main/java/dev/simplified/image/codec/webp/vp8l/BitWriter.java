@@ -2,6 +2,8 @@ package dev.simplified.image.codec.webp.vp8l;
 
 import org.jetbrains.annotations.NotNull;
 
+import java.util.Arrays;
+
 /**
  * LSB-first bitstream writer with growable buffer for VP8L encoding.
  * <p>
@@ -32,6 +34,20 @@ final class BitWriter {
      */
     BitWriter() {
         this(1024);
+    }
+
+    /**
+     * Creates a bit writer that continues from every bit {@code prefix} holds, leaving
+     * {@code prefix} unchanged.
+     *
+     * @param prefix the writer whose bits this one starts with
+     * @param initialCapacity the initial byte array capacity
+     */
+    BitWriter(@NotNull BitWriter prefix, int initialCapacity) {
+        this.data = Arrays.copyOf(prefix.data, Math.max(Math.max(16, initialCapacity), prefix.bytePos));
+        this.bytePos = prefix.bytePos;
+        this.buffer = prefix.buffer;
+        this.bitsInBuffer = prefix.bitsInBuffer;
     }
 
     /**
